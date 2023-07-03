@@ -1,0 +1,13 @@
+#/bin/bash
+
+DIABLO="$(cd `dirname $0`/../..; pwd -P)"
+
+if [ -z ${SPARK_HOME} ]; then
+   SPARK_HOME=~/spark-3.2.1-bin-hadoop3.2
+fi
+
+export HADOOP_CONF_DIR=
+
+jar cf test.jar -C classes .
+
+${SPARK_HOME}/bin/spark-submit --jars ${DIABLO}/lib/diablo.jar --class $1 --driver-memory 8g --executor-memory 8g --conf spark.logLineage=true --conf "spark.executor.extraJavaOptions='-Xss512m'" --driver-java-options "-Xss512m" --master local[*] test.jar $2 $3 $4 $5 $6 $7
