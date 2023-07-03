@@ -259,7 +259,7 @@ object PilotPlanGenerator {
       val res = e.cached
       e.count -= 1
       if (e.count <= 0) {
-        println(" "*tabs*3+"* "+"discard collect the cached value of "+e.id)
+        println(" "*tabs*3+"* "+"discard collect the cached value of "+e)
         e.cached = null
       }
       return res
