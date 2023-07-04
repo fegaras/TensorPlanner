@@ -17,10 +17,13 @@ package edu.uta.diablo
 
 import AST._
 import Typechecker._
-import java.io._
 
-
-sealed abstract class Lineage ( id: Int, var node: Int = -1, var cached: Any = null, var count: Int = 0 )
+sealed abstract class Lineage ( id: Int,
+                                var node: Int = -1,        // worker node
+                                var cached: Any = null,    // cached result block(s)
+                                var count: Int = 0 ) {     // number of parents
+  def ID: Int = id
+}
 case class StoreLineage[T] ( id: Int, index: Any, block: () => T )
      extends Lineage(id)
 case class TupleLineage ( id: Int, x: Lineage, y: Lineage )
@@ -32,9 +35,10 @@ case class ReduceLineage[-T,S] ( id: Int, x: Lineage, y: Lineage, op: ((T,T)) =>
 
 
 object PilotPlanGenerator {
-  val newid = Call("newid",Nil)
+  val trace = false
+  val newid: Expr = Call("newid",Nil)
 
-  val lineage_type = BasicType("edu.uta.diablo.Lineage")
+  val lineage_type: Type = BasicType("edu.uta.diablo.Lineage")
 
   def isRDD ( e: Expr ): Boolean
     = e match {
@@ -108,7 +112,7 @@ object PilotPlanGenerator {
     }
   }
 
-  def makePlan ( e: Expr, reduce: Boolean ): Expr = {
+  def makePlan ( e: Expr ): Expr = {
     def keySize ( x: Expr ): Int
       = elemType(typecheck(x)) match {
           case TupleType(List(BasicType(_),_)) => 1
@@ -134,7 +138,7 @@ object PilotPlanGenerator {
                                               TuplePat(List(VarPat(dp),VarPat(sp),VarPat(gl))))),
                                           e)))
         case Nth(Var(v),_)
-          // bound to a tensorplan
+          // bound to a tensor plan
           => e
         case Call(f,x::y::_)
           if List("diablo_join","diablo_cogroup").contains(f)
@@ -145,8 +149,8 @@ object PilotPlanGenerator {
              val yvp = tuple(ys.map(VarPat))
              val xl = newvar
              val yl = newvar
-             val xp = makePlan(x,false)
-             val yp = makePlan(y,false)
+             val xp = makePlan(x)
+             val yp = makePlan(y)
              val preds = (xs zip ys).map { case (i,j) =>
                                 Predicate(MethodCall(Var(i),"==",List(Var(j)))) }
              Comprehension(Tuple(List(toExpr(xvp),
@@ -155,36 +159,21 @@ object PilotPlanGenerator {
                            ::Generator(TuplePat(List(yvp,VarPat(yl))),yp)
                            ::preds)
         case flatMap(f@Lambda(p,b),x)
-          if !reduce && getLineage(p).isDefined && findKey(b).isDefined
+          if getLineage(p).isDefined && findKey(b).isDefined
           => val k = newvar
              val xl = newvar
              val dp = newvar
              val sp = newvar
-             val xp = makePlan(x,false)
+             val xp = makePlan(x)
              val Some(gl) = getLineage(p)
              val Some(key) = findKey(b)
              Comprehension(Tuple(List(Var(k),
                                       Tuple(List(Var(dp),Var(sp),
                                                  Call("applyLineage",List(newid,gl,f)))))),
                            List(Generator(p,xp),
-                                Generator(TuplePat(List(VarPat(k),TuplePat(List(VarPat(dp),VarPat(sp))))),
-                                          key)))
-        case flatMap(f@Lambda(p,b),x)
-          if reduce && getLineage(p).isDefined
-          => val k = newvar
-             val xl = newvar
-             val dp = newvar
-             val sp = newvar
-             val Some(gl) = getLineage(p)
-             val xp = makePlan(x,false)
-             Comprehension(Tuple(List(Var(k),
-                                      Tuple(List(Var(dp),Var(sp),
-                                                 Call("applyLineage",List(newid,gl,f)))))),
-                           List(Generator(p,xp),
                                 Generator(TuplePat(List(VarPat(k),
-                                                        TuplePat(List(VarPat(dp),VarPat(sp),
-                                                                      VarPat(xl))))),
-                                          b)))
+                                                        TuplePat(List(VarPat(dp),VarPat(sp))))),
+                                          key)))
         case flatMap(Lambda(p,b),MethodCall(_,"parallelize",x::_))
           => val k = newvar
              val i = newvar
@@ -212,7 +201,7 @@ object PilotPlanGenerator {
              val yl = newvar
              val ydp = newvar
              val ysp = newvar
-             val xp = makePlan(x,true)
+             val xp = makePlan(x)
              Call("reduceByKey",
                   List(xp,Lambda(TuplePat(List(TuplePat(List(VarPat(xdp),VarPat(xsp),
                                                              VarPat(xl))),
@@ -229,7 +218,7 @@ object PilotPlanGenerator {
 
   def makePlanExpr ( e: Expr ): Expr
     = if (isRDD(e))
-        makePlan(e,false)
+        makePlan(e)
       else e match {
              case VarDecl(v,tp,x)
                => VarDecl(v,makeType(tp),makePlanExpr(x))
@@ -241,6 +230,8 @@ object PilotPlanGenerator {
 
   def setCounts ( e: Lineage ) {
     e.count += 1
+    if (e.count > 1)
+      return
     e match {
       case ApplyLineage(_,x,_)
         => setCounts(x)
@@ -254,22 +245,29 @@ object PilotPlanGenerator {
     }
   }
 
+  var cached_blocks: Int = 0
+  var max_cached_blocks: Int = 0
+
   def evalMem ( e: Lineage, tabs: Int ): Any = {
     if (e.cached != null) {
+      // retrieve result block(s) from cache
       val res = e.cached
       e.count -= 1
       if (e.count <= 0) {
-        println(" "*tabs*3+"* "+"discard collect the cached value of "+e)
+        if (trace)
+          println(" "*tabs*3+"* "+"discard the cached value of "+e.ID)
+        cached_blocks -= 1
         e.cached = null
       }
       return res
     }
-    println(" "*3*tabs+"*** "+tabs+": "+e)
+    if (trace)
+      println(" "*3*tabs+"*** "+tabs+": "+e)
     val res = e match {
         case StoreLineage(_,_,b:(()=>Any))
           => b()
         case ApplyLineage(_,x,f:(Any=>List[Any]))
-          => f(evalMem(x,tabs+1))(0)
+          => f(evalMem(x,tabs+1)).head
         case TupleLineage(_,x,y)
           => def f ( lg: Lineage ): (Any,Any)
                = lg match {
@@ -284,19 +282,30 @@ object PilotPlanGenerator {
              val (_,yv) = evalMem(y,tabs+1).asInstanceOf[(Any,Any)]
              (iv,op((xv,yv)))
       }
-    println(" "*3*tabs+"*-> "+tabs+": "+res)
+    if (trace)
+      println(" "*3*tabs+"*-> "+tabs+": "+res)
     e.count -= 1
-    if (e.count > 0)
+    if (e.count > 0 && e.cached == null) {
       e.cached = res
+      if (trace)
+        println(" "*tabs*3+"* "+"cache the value of "+e.ID)
+      cached_blocks += 1
+      max_cached_blocks = Math.max(max_cached_blocks,cached_blocks)
+    }
     res
   }
 
   def eval[T,S] ( e: (T,S,List[(T,(T,S,Lineage))]) ): (T,S,List[Any])
     = e match {
         case (dp,sp,s)
-          => (dp,sp,s.map{ case (i,(ds,ss,lg))
-                             => setCounts(lg)
-                                evalMem(lg,1)
-                         })
+          => cached_blocks = 0
+             s.map{ case (i,(_,_,lg)) => setCounts(lg) }
+             val res = (dp,sp,
+                        s.map{ case (i,(ds,ss,lg))
+                                 => evalMem(lg,1)
+                             })
+             println("Max cached blocks: "+max_cached_blocks)
+             println("Final cached blocks: "+cached_blocks)
+             res
       }
 }

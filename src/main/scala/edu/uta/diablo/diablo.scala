@@ -138,22 +138,22 @@ package object diablo extends diablo.ArrayFunctions {
     Typechecker.clean(ce)
     Typechecker.typecheck(ce)
     val to = opt(ComprehensionTranslator.translate(ce,Nil))
-    val pc = if ( false && parallel) ComprehensionTranslator.parallelize(to) else to
-    if (trace) println("Compiled comprehension:\n"+Pretty.print(pc))
+    if (trace) println("Compiled comprehension:\n"+Pretty.print(to))
     if (cxx_generation) {
-      Typechecker.clean(pc)
-      Typechecker.typecheck(pc)
+      Typechecker.clean(to)
+      Typechecker.typecheck(to)
       val writer = new PrintWriter(new File("cxxgen_"+writer_count+".cpp"))
       writer_count += 1
       writer.println("#include \"tensor.h\"\n")
-      CXXCodeGenerator.makeSparkCode(pc,writer)
+      CXXCodeGenerator.makeSparkCode(to,writer)
       writer.println("\nint main () { return 0; }")
       writer.close()
       context.Expr[Any](q"()")
     } else if (asynchronous) {
-      Typechecker.clean(pc)
-      Typechecker.typecheck(pc)
-      val pp = PilotPlanGenerator.makePilotPlan(pc)
+      Typechecker.clean(to)
+      Typechecker.typecheck(to)
+      val pc = if (parallel) ComprehensionTranslator.parallelize(to) else to
+      val pp = PilotPlanGenerator.makePilotPlan(to)
       if (trace) println("Pilot plan:\n"+Pretty.print(pp))
       val ppp = opt(ComprehensionTranslator.translate(pp,Nil))
       if (trace) println("Optimized pilot plan:\n"+Pretty.print(ppp))
@@ -163,6 +163,7 @@ package object diablo extends diablo.ArrayFunctions {
       if (trace) println("Scala type: "+tc)
       context.Expr[Any](ec)
     } else {
+      val pc = if (parallel) ComprehensionTranslator.parallelize(to) else to
       val ec = cg.codeGen(pc,env)
       if (trace) println("Scala code:\n"+showCode(ec))
       if (trace) print("Spark plan:\n"+spark_plan(pc,0,false))

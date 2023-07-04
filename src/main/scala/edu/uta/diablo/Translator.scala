@@ -496,7 +496,7 @@ object Translator {
           case ForS(v,e1,e2,e3,b)
             if !indexed_access(v,b)    // convert a for-loop to a sequential while-loop
             => translate(BlockS(List(VarDeclS(v,Some(intType),Some(e1)),
-                                     WhileS(MethodCall(Var(v),"<",List(e2)),
+                                     WhileS(MethodCall(Var(v),"<=",List(e2)),
                                             BlockS(List(b,AssignS(Var(v),MethodCall(Var(v),"+",List(e3)))))))),
                          quals,retVars,env,vars,fncs)
           case ForS(v,e1,e2,e3,b)
