@@ -152,16 +152,37 @@ package object diablo extends diablo.ArrayFunctions {
     } else if (asynchronous) {
       Typechecker.clean(to)
       Typechecker.typecheck(to)
-      val pc = if (parallel) ComprehensionTranslator.parallelize(to) else to
-      val pp = PilotPlanGenerator.makePilotPlan(to)
+      val pc = if (false && parallel) ComprehensionTranslator.parallelize(to) else to
+      val pp = Scheduler.makePlanExpr(pc)
       if (trace) println("Pilot plan:\n"+Pretty.print(pp))
       val ppp = opt(ComprehensionTranslator.translate(pp,Nil))
       if (trace) println("Optimized pilot plan:\n"+Pretty.print(ppp))
+      val fs = diablo.Assign(Var("function_code"),Seq(List(Call("Array",Scheduler.functions.toList))))
+      val ppf = ppp match {
+                  case diablo.Block(ec:+ret)
+                    => diablo.Block(ec++List(fs,ret))
+                  case _ => diablo.Block(List(fs,ppp))
+                }
+      val ec = cg.codeGen(ppf,env)
+      if (trace) println("Pilot plan code:\n"+showCode(ec))
+      val tc = cg.getType(ec,env)
+      if (trace) println("Scala type: "+tc)
+      context.Expr[Any](ec)
+/*
+      val writer = new PrintWriter(new File("cxxgen_"+writer_count+".cpp"))
+      writer_count += 1
+      writer.println("#include \"tensor.h\"\n")
+      CXXCodeGenerator.makeSparkCode(ppp,writer)
+      writer.println("\nint main () { return 0; }")
+      writer.close()
+      context.Expr[Any](q"()")
+
       val ec = cg.codeGen(ppp,env)
       if (trace) println("Pilot plan code:\n"+showCode(ec))
       val tc = cg.getType(ec,env)
       if (trace) println("Scala type: "+tc)
       context.Expr[Any](ec)
+*/
     } else {
       val pc = if (parallel) ComprehensionTranslator.parallelize(to) else to
       val ec = cg.codeGen(pc,env)

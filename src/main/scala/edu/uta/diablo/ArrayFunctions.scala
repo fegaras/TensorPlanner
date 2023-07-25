@@ -20,23 +20,13 @@ import scala.collection.immutable.{Range=>SRange}
 import scala.reflect.ClassTag
 import org.apache.spark.rdd.RDD
 import scala.collection.parallel.immutable.ParRange
+import Scheduler._
+
 // add for Scala 2.13
 //import scala.collection.parallel.CollectionConverters._
 
 
 trait ArrayFunctions {
-
-  def storeLineage[T] ( id: Int, index: Any, block: () => T ): Lineage
-    = StoreLineage(id,index,block)
-
-  def tupleLineage ( id: Int, x: Lineage, y: Lineage ): Lineage
-    = TupleLineage(id,x,y)
-
-  def applyLineage[T,S] ( id: Int, x: Lineage, fnc: T => S ): Lineage
-    = ApplyLineage(id,x,fnc)
-
-  def reduceLineage[T] ( id: Int, x: Lineage, y: Lineage, op: ((T,T)) => T ): Lineage
-    = ReduceLineage(id,x,y,op)
 
   final def join[K,T,S] ( x: List[(K,T)], y: List[(K,S)]  ): List[(K,(T,S))]
     = for { (k,t) <- x; (kk,s) <- y if kk == k } yield (k,(t,s))
@@ -44,8 +34,48 @@ trait ArrayFunctions {
   final def reduceByKey[K,T] ( x: List[(K,T)], op: (T,T) => T ): List[(K,T)]
     = x.groupBy(_._1).mapValues(x => x.map(_._2).reduce(op)).toList
 
-  def eval[T,S] ( e: (T,S,List[(T,(T,S,Lineage))]) ): (T,S,List[Any])
-    = PilotPlanGenerator.eval(e)
+  final def groupByKey[K,T] ( x: List[(K,T)] ): List[(K,List[T])]
+    = x.groupBy(_._1).mapValues(_.map(_._2)).toList
+
+  var function_code: Array[Nothing=>Any] = _
+
+  def print_plan () {
+    for ( i <- 0 until (operations.length) ) {
+      val x = operations(i)
+      println(i+")  "+x.node+"  "+x.consumers+"  "+x)
+    }
+  }
+
+  def loadOpr ( index: Any, block: () => Any ): OprID = {
+    operations += LoadOpr(index,block)
+    operations.length-1
+  }
+
+  def tupleOpr ( x: OprID, y: OprID ): OprID = {
+    operations += TupleOpr(x,y)
+    val loc = operations.length-1
+    operations(x).consumers = loc::operations(x).consumers
+    operations(y).consumers = loc::operations(y).consumers
+    loc
+  }
+
+  def applyOpr ( x: OprID, fnc: FunctionID ): OprID = {
+    operations += ApplyOpr(x,fnc)
+    val loc = operations.length-1
+    operations(x).consumers = loc::operations(x).consumers
+    loc
+  }
+
+  def reduceOpr[T,S] ( s: List[OprID], op: FunctionID ): OprID = {
+    operations += ReduceOpr(s,op)
+    val loc = operations.length-1
+    for ( x <- s )
+      operations(x).consumers = loc::operations(x).consumers
+    loc
+  }
+
+  def eval[T,S] ( e: (T,S,List[(T,(T,S,OprID))]) ): (T,S,List[Any])
+    = Scheduler.eval(e)
 
   // parRange doesn't work
   final def parRange ( n: Int, m: Int, s: Int ): ParRange

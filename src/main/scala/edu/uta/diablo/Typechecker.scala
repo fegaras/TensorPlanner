@@ -440,9 +440,6 @@ object Typechecker {
                        tp
                   case tp => tp
                }
-          case Call(f,_)
-            if List("cachedLineage","tupleLineage","applyLineage","reduceLineage").contains(f)
-            => PilotPlanGenerator.lineage_type
           case Call(f,args)
             if getTypeMap(f).isDefined
             => val Some(TypeMapS(_,tps,ps,at,st,lt,view,store)) = getTypeMap(f)

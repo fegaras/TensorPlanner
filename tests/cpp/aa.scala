@@ -9,8 +9,8 @@ object Test {
     parami(block_dim_size,10)
     param(asynchronous,true)
 
-    val plan = q("""
 
+    val plan = q("""
       var N = 23;
       var M = N;
 
@@ -18,26 +18,28 @@ object Test {
       var Bz = Az;
       var Cz = Az;
 
-      //tensor*(N,M)[ ((i,j),a+1) | ((i,j),a) <- Az ];
+      tensor*(N,M)[ ((i,j),a+1) | ((i,j),a) <- Az ];
 
       //tensor*(N)[ (i,*/a) | ((i,j),a) <- Az, group by i ];
 
       //tensor*(N,M)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
+
+      //tensor*(N)(M)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
 
       //tensor*(N,M)[ ((i,j),m+n) | ((i,j),m) <= Az, ((ii,jj),n) <= Bz, ii==i, jj==j ];
 
       //tensor*(N,M)[ ((i,j),m+n+k) | ((i,j),m) <= Az, ((ii,jj),n) <= Bz, ((iii,jjj),k) <- Cz, ii==i, jj==j, iii==i, jjj==j ];
 
       //tensor*(N,M)[ ((i,j),+/v) | ((i,k),a) <= Az, ((kk,l),b) <= Bz, ((ll,j),c) <- Cz, kk==k, ll==l, let v = a*b*c, group by (i,j) ];
-
-      for i = 0, 10 do
+/*
+      for i = 0, 1 do
          Az = tensor*(N,M)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
       Az
-
+*/
       """)
     
-    //println("Plan:")
-    //println(Pretty.print(plan))
+    println("Plan:")
+    print_plan()
 
     println("Evaluation:")
     println(Pretty.print(eval(plan)))
