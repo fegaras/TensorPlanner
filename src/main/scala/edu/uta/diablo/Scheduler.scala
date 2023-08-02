@@ -17,7 +17,7 @@ package edu.uta.diablo
 
 import AST._
 import Typechecker._
-import scala.collection.mutable.{ArrayBuffer,Map}
+import scala.collection.mutable.{ArrayBuffer,ListBuffer}
 import java.io.Serializable
 
 object Scheduler {
@@ -27,20 +27,45 @@ object Scheduler {
   type WorkerID = Int
   type FunctionID = Int
 
-  sealed abstract class Opr ( var node: WorkerID = -1,        // worker node
-                              var cached: Any = null,    // cached result block(s)
+  // Operation tree (pilot plan)
+  sealed abstract class Opr ( var node: WorkerID = -1,     // worker node
+                              var size: Int = 0,           // num of blocks in output
+                              var static_blevel: Int = -1, // static b-level (bottom level)
+                              @transient
+                              var cached: Any = null,      // cached result block(s)
                               var consumers: List[OprID] = Nil,
-                              var count: Int = 0 )     // number of consumers
+                              var count: Int = 0 )         // number of consumers
                   extends Serializable
   case class LoadOpr ( index: Any, block: () => Any ) extends Opr
   case class TupleOpr ( x: OprID, y: OprID ) extends Opr
   case class ApplyOpr ( x: OprID, fnc: FunctionID ) extends Opr
   case class ReduceOpr ( s: List[OprID], op: FunctionID ) extends Opr
 
-  // Opr classes use OprID for Opr references
-  val operations: ArrayBuffer[Opr] = ArrayBuffer[Opr]()
+  // Opr uses OprID for Opr an reference
+  var operations: ArrayBuffer[Opr] = ArrayBuffer[Opr]()
   // functions used by ApplyOpr and ReduceOpr
   val functions: ArrayBuffer[Expr] = ArrayBuffer[Expr]()
+
+  def children ( e: Opr ): List[OprID]
+    = e match {
+        case TupleOpr(x,y)
+          => List(x,y)
+        case ApplyOpr(x,_)
+          => List(x)
+        case ReduceOpr(s,_)
+          => s
+        case _ => Nil
+      }
+
+  def print_plan[I,T,S] ( e: Plan[I,T,S] ) {
+    def pp ( opr_id: OprID, tabs: Int ) {
+      val x = operations(opr_id)
+      println(" "*tabs*3+tabs+")  node="+x.node+"  size="+x.size+"  blevel="
+              +x.static_blevel+"   consumers="+x.consumers+"  "+opr_id+" "+x)
+      children(x).foreach(c => pp(c,tabs+1))
+    }
+    e._3.foreach(x => pp(x._2._3,1))
+  }
 
   def isRDD ( e: Expr ): Boolean
     = e match {
@@ -211,10 +236,12 @@ object Scheduler {
              val xsp = newvar
              val k = newvar
              val s = newvar
+             val nv = newvar
              val xp = makePlan(x)
+             Let(VarPat(nv),xp,
              flatMap(Lambda(TuplePat(List(VarPat(k),VarPat(s))),
                   Let(TuplePat(List(VarPat(xdp),VarPat(xsp),VarPat(xl))),
-                      Nth(MethodCall(xp,"head",null),2),
+                      Nth(MethodCall(Var(nv),"head",null),2),
                       Seq(List(Tuple(List(Var(k),Tuple(List(Var(xdp),Var(xsp),
                                      Call("reduceOpr",
                                         List(flatMap(Lambda(TuplePat(List(VarPat(xdp),VarPat(xsp),
@@ -222,7 +249,7 @@ object Scheduler {
                                                             Seq(List(Var(xl)))),
                                                      Var(s)),
                                              function(op))))))))))),
-                     Call("groupByKey",List(xp)))
+                 Call("groupByKey",List(Var(nv)))))
         case flatMap(_,_)
           => throw new Error("Unrecognized flatMap: "+e)
         case _ => apply(e,makePlanExpr)
@@ -240,35 +267,89 @@ object Scheduler {
 
 /****************************************************************************************************/
 
-  var workers: Array[String] = Array[String]("localhost")
-  var number_of_workers = 1
-  var max_lineage = 3
+  var max_lineage_length = 3
 
+  // work done at each processor
   var work: Array[Int] = _
+  // # of tasks at each processor
+  var tasks: Array[Int] = _
+  // the pool of ready nodes
+  var ready_pool: ListBuffer[OprID] = _
 
-  def depends ( e: Opr ): List[OprID]
-    = e match {
-        case TupleOpr(x,y)
-          => depends(operations(x))++depends(operations(y))
-        case ApplyOpr(x,_)
-          => List(x)
-        case ReduceOpr(s,_)
-          => s
-        case _ => Nil
-      }
-
-  def best_node ( depends: List[WorkerID] ): WorkerID = {
-    0
+  def size ( e: Opr ): Int = {
+    children(e).map(x => size(operations(x)))
+    e.size = e match {
+               case TupleOpr(x,y)
+                 => operations(x).size + operations(y).size
+               case _ => 1
+             }
+    e.size
   }
 
-  def schedule ( id: OprID ) {
-    val x = operations(id)
-    val ds = depends(x).map(operations(_))
-    if (ds.forall(_.node >= 0)) {
-      x.node = best_node(ds.map(_.node))
-      x.consumers.map(schedule(_))
+  // calculate and store the static b_level of each node
+  def set_blevel ( x: Opr ): Int = {
+    if (x.static_blevel < 0) {
+      x.static_blevel = if (x.isInstanceOf[TupleOpr]) 0 else size(x)
+      if (x.consumers.nonEmpty)
+        x.static_blevel += x.consumers.map(c => set_blevel(operations(c))).reduce(Math.max)
+      children(x).foreach(c => set_blevel(operations(c)))
     }
+    x.static_blevel
   }
+
+  def cpu_cost ( opr: Opr ): Int
+    = children(opr).map{ c => val copr = operations(c)
+                              copr match {
+                                case LoadOpr(_,_) => 0
+                                case TupleOpr(_,_) => 0
+                                case _ => size(copr)
+                              } }.sum
+
+  def communication_cost ( opr: Opr, node: WorkerID ): Int
+    = children(opr).map{ c => val copr = operations(c)
+                              if (copr.node == node)
+                                0
+                              else size(copr) }.sum
+
+  def schedule[I,T,S] ( e: Plan[I,T,S] ) {
+    ready_pool = ListBuffer()
+    work = 0.until(Communication.num_of_workers).map(w => 0).toArray
+    tasks = 0.until(Communication.num_of_workers).map(w => 0).toArray
+    for ( opr <- operations )
+       set_blevel(opr)
+    for ( op <- 0.until(operations.length)
+          if operations(op).isInstanceOf[LoadOpr]
+          if operations(op).node < 0
+          if !ready_pool.contains(op) )
+       ready_pool += op
+    while (ready_pool.nonEmpty) {
+      // choose a worker that has done the least work
+      val w = work.zipWithIndex.minBy{ case (x,i) => (x,tasks(i)) }._2
+      // choose opr with the least communication cost; if many, choose one with the highest b_level
+      val c = ready_pool.minBy{ x => val opr = operations(x)
+                                     ( communication_cost(opr,w),
+                                       -opr.static_blevel ) }
+      val opr = operations(c)
+      // opr is allocated to worker w
+      opr.node = w
+      work(w) += cpu_cost(opr) + communication_cost(opr,w)
+      tasks(w) += 1
+      if (trace)
+        println("schedule opr "+c+" on node "+w+" (work = "+work(w)+" )")
+      ready_pool -= c
+      // add more ready nodes
+      for { c <- opr.consumers } {
+        val copr = operations(c)
+        if (copr.node < 0
+            && !ready_pool.contains(c)
+            && children(copr).forall(operations(_).node >= 0))
+          ready_pool += c
+      }
+    }
+    if (trace)
+      print_plan(e)
+  }
+
 
 /****************************************************************************************************
 * 
@@ -279,7 +360,7 @@ object Scheduler {
   var cached_blocks: Int = 0
   var max_cached_blocks: Int = 0
 
-  def evalMem ( id: OprID, tabs: Int ): Any = {
+  def eval_mem ( id: OprID, tabs: Int ): Any = {
     val e = operations(id)
     if (e.cached != null) {
       // retrieve result block(s) from cache
@@ -299,20 +380,20 @@ object Scheduler {
         case LoadOpr(_,b:(()=>Any))
           => b()
         case ApplyOpr(x,fid)
-          => val f = function_code(fid).asInstanceOf[Any=>List[Any]]
-             f(evalMem(x,tabs+1)).head
+          => val f = functions(fid).asInstanceOf[Any=>List[Any]]
+             f(eval_mem(x,tabs+1)).head
         case TupleOpr(x,y)
           => def f ( lg: OprID ): (Any,Any)
                = operations(lg) match {
                     case TupleOpr(x,y)
                       => (f(x),f(y))
-                  case _ => evalMem(lg,tabs+1).asInstanceOf[(Any,Any)]
+                  case _ => eval_mem(lg,tabs+1).asInstanceOf[(Any,Any)]
                  }
              val gx@(iv,_) = f(id)
              (iv,gx)
         case ReduceOpr(s,fid)
-          => val sv = s.map(evalMem(_,tabs+1).asInstanceOf[(Any,Any)])
-             val op = function_code(fid).asInstanceOf[((Any,Any))=>Any]
+          => val sv = s.map(eval_mem(_,tabs+1).asInstanceOf[(Any,Any)])
+             val op = functions(fid).asInstanceOf[((Any,Any))=>Any]
              (sv.head._1,sv.map(_._2).reduce{ (x:Any,y:Any) => op((x,y)) })
       }
     if (trace)
@@ -328,14 +409,14 @@ object Scheduler {
     res
   }
 
-  def eval[T,S] ( e: (T,S,List[(T,(T,S,OprID))]) ): (T,S,List[Any])
+  def evalMem[I,T,S] ( e: Plan[I,T,S] ): (T,S,List[Any])
     = e match {
         case (dp,sp,s)
           => cached_blocks = 0
              max_cached_blocks = 0
              operations.foreach(x => x.count = x.consumers.length)
              val res = s.map{ case (i,(ds,ss,lg))
-                                => evalMem(lg,0) }
+                                => eval_mem(lg,0) }
              println("Number of nodes: "+operations.length)
              println("Max num of cached blocks: "+max_cached_blocks)
              println("Final num of cached blocks: "+cached_blocks)

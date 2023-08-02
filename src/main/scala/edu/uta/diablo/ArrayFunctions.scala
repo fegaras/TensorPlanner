@@ -37,14 +37,32 @@ trait ArrayFunctions {
   final def groupByKey[K,T] ( x: List[(K,T)] ): List[(K,List[T])]
     = x.groupBy(_._1).mapValues(_.map(_._2)).toList
 
-  var function_code: Array[Nothing=>Any] = _
+  var functions: Array[Nothing=>Any] = _
 
-  def print_plan () {
-    for ( i <- 0 until (operations.length) ) {
-      val x = operations(i)
-      println(i+")  "+x.node+"  "+x.consumers+"  "+x)
-    }
+  type Plan[I,T,S] = (T,S,List[(I,(T,S,OprID))])
+
+  def schedule[I,T,S] ( e: Plan[I,T,S] ) {
+    Runtime.schedule(e)
   }
+
+  def eval[I,T,S] ( e: Plan[I,T,S] ): Plan[I,T,S]
+    = Runtime.eval(e)
+
+  def collect[I,T,S] ( e: Plan[I,T,S] ): List[Any]
+    = Runtime.collect(e)
+
+  def evalMem[I,T,S] ( e: Plan[I,T,S] ): (T,S,List[Any])
+    = Scheduler.evalMem(e)
+
+  def startup ( args: Array[String] ) {
+    Communication.mpi_startup(args)
+  }
+
+  def end () {
+    Communication.mpi_finalize()
+  }
+
+  def isMaster (): Boolean = Communication.myrank == 0
 
   def loadOpr ( index: Any, block: () => Any ): OprID = {
     operations += LoadOpr(index,block)
@@ -66,16 +84,13 @@ trait ArrayFunctions {
     loc
   }
 
-  def reduceOpr[T,S] ( s: List[OprID], op: FunctionID ): OprID = {
+  def reduceOpr ( s: List[OprID], op: FunctionID ): OprID = {
     operations += ReduceOpr(s,op)
     val loc = operations.length-1
     for ( x <- s )
       operations(x).consumers = loc::operations(x).consumers
     loc
   }
-
-  def eval[T,S] ( e: (T,S,List[(T,(T,S,OprID))]) ): (T,S,List[Any])
-    = Scheduler.eval(e)
 
   // parRange doesn't work
   final def parRange ( n: Int, m: Int, s: Int ): ParRange

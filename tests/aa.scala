@@ -1,7 +1,4 @@
 import edu.uta.diablo._
-import org.apache.spark._
-import org.apache.spark.rdd._
-import Math._
 
 object Test {
   def main ( args: Array[String] ) {
@@ -9,20 +6,21 @@ object Test {
     parami(block_dim_size,10)
     param(asynchronous,true)
 
+    startup(args)
 
     val plan = q("""
-      var N = 23;
+      var N = 230;
       var M = N;
 
       var Az = tensor*(N,M)[ ((i,j),2.3) | i <-0..(N-1), j<-0..(M-1) ];
       var Bz = Az;
       var Cz = Az;
 
-      tensor*(N,M)[ ((i,j),a+1) | ((i,j),a) <- Az ];
+      //tensor*(N,M)[ ((i,j),a+1) | ((i,j),a) <- Az ];
 
       //tensor*(N)[ (i,*/a) | ((i,j),a) <- Az, group by i ];
 
-      //tensor*(N,M)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
+      tensor*(N,M)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
 
       //tensor*(N)(M)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
 
@@ -32,17 +30,19 @@ object Test {
 
       //tensor*(N,M)[ ((i,j),+/v) | ((i,k),a) <= Az, ((kk,l),b) <= Bz, ((ll,j),c) <- Cz, kk==k, ll==l, let v = a*b*c, group by (i,j) ];
 /*
-      for i = 0, 1 do
-         Az = tensor*(N,M)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
+      for i = 0, 100 do
+         Az = tensor*(N,M)[ ((i,j),m+n) | ((i,j),m) <= Az, ((ii,jj),n) <= Bz, ii==i, jj==j ];
       Az
 */
       """)
     
-    println("Plan:")
-    print_plan()
+    schedule(plan)
 
-    println("Evaluation:")
-    println(Pretty.print(eval(plan)))
+    val res = collect(eval(plan))
+    if (isMaster())
+      res.foreach(println)
+
+    end()
 
   }
 }

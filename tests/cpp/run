@@ -1,6 +1,0 @@
-#/bin/bash
-
-DIABLO="$(cd `dirname $0`/../..; pwd -P)"
-
-# mpirun scala -classpath classes:${DIABLO}/lib/diablo.jar -J-Xmx4g -J-Xss100m $*
-scala -classpath classes:${DIABLO}/lib/diablo.jar -J-Xmx4g -J-Xss100m $*
