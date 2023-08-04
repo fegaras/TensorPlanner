@@ -37,6 +37,7 @@ trait ArrayFunctions {
   final def groupByKey[K,T] ( x: List[(K,T)] ): List[(K,List[T])]
     = x.groupBy(_._1).mapValues(_.map(_._2)).toList
 
+  @transient
   var functions: Array[Nothing=>Any] = _
 
   type Plan[I,T,S] = (T,S,List[(I,(T,S,OprID))])

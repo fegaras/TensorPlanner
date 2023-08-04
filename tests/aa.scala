@@ -9,7 +9,7 @@ object Test {
     startup(args)
 
     val plan = q("""
-      var N = 230;
+      var N = 23;
       var M = N;
 
       var Az = tensor*(N,M)[ ((i,j),2.3) | i <-0..(N-1), j<-0..(M-1) ];

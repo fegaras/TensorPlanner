@@ -28,6 +28,7 @@ object Scheduler {
   type FunctionID = Int
 
   // Operation tree (pilot plan)
+  @SerialVersionUID(123L)
   sealed abstract class Opr ( var node: WorkerID = -1,     // worker node
                               var size: Int = 0,           // num of blocks in output
                               var static_blevel: Int = -1, // static b-level (bottom level)

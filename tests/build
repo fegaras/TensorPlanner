@@ -6,7 +6,7 @@ if [ -z ${SPARK_HOME} ]; then
    SPARK_HOME=~/spark-3.2.1-bin-hadoop3.2
 fi
 
-JARS=.:${DIABLO_HOME}/lib/diablo.jar
+JARS=.:${DIABLO_HOME}/lib/diablo.jar:${DIABLO_HOME}/lib/mpi.jar
 for I in ${SPARK_HOME}/jars/*.jar; do
     JARS=${JARS}:$I
 done

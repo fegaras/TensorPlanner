@@ -58,52 +58,60 @@ class Executor ( myrank: Int ) {
         buffer.clear()
         // prepare for the first receive (non-blocking)
         receive_request = comm.iRecv(buffer,buffer.capacity(),BYTE,ANY_SOURCE,ANY_TAG)
-        0
       } catch { case ex: MPIException
-                  => mpi_error(ex); 0 }
-    else if (receive_request.test()) {
-        // deserialize and cache the incoming data
-        val len = buffer.getInt()
-        val bb = Array.ofDim[Byte](len)
-        buffer.get(bb)
-        val bs = new ByteArrayInputStream(bb,0,len)
-        val is = new ObjectInputStream(bs)
-        val opr_id = is.readInt()
-        val data = try { is.readObject()
-                       } catch { case ex: IOException
-                                   => serialization_error(ex); null }
-        is.close()
-        Runtime.operations(opr_id).cached = data
-        try {
-          receive_request.free()
-          buffer.clear()
-          // prepare for the next receive (non-blocking)
-          receive_request = comm.iRecv(buffer,buffer.capacity(),BYTE,ANY_SOURCE,ANY_TAG)
-        } catch { case ex: MPIException
-                    => mpi_error(ex) }
-        Runtime.enqueue_ready_operations(opr_id)
-        1
+                  => mpi_error(ex) }
+    if (receive_request.test()) {
+      // deserialize and cache the incoming data
+      val len = buffer.getInt()
+      val bb = Array.ofDim[Byte](len)
+      buffer.get(bb)
+      val bs = new ByteArrayInputStream(bb,0,len)
+      val is = new ObjectInputStream(bs)
+      val opr_id = is.readInt()
+      val data = try { is.readObject()
+                     } catch { case ex: IOException
+                                 => serialization_error(ex); null }
+      if (trace)
+        println("    received "+(len+4)+" bytes from "+Runtime.operations(opr_id).node
+                +" to "+myrank+" (opr "+opr_id+")")
+      is.close()
+      Runtime.operations(opr_id).cached = data
+      try {
+        receive_request.free()
+        buffer.clear()
+        // prepare for the next receive (non-blocking)
+        receive_request = comm.iRecv(buffer,buffer.capacity(),BYTE,ANY_SOURCE,ANY_TAG)
+      } catch { case ex: MPIException
+                  => mpi_error(ex) }
+      Runtime.enqueue_ready_operations(opr_id)
+      1
     } else 0
   }
 
   def send_data ( rank: Int, data: Any, oper_id: OprID ) {
-    // serialize data into a byte array
-    val bs = new ByteArrayOutputStream(1000000)
-    val os = new ObjectOutputStream(bs)
-    try {
-      os.writeInt(oper_id)
-      os.writeObject(data)
-      os.flush()
-      os.close()
-    } catch { case ex: IOException
-                => serialization_error(ex) }
-    val ba = bs.toByteArray()
-    val bb = newByteBuffer(ba.length+4)
-    bb.putInt(ba.length).put(ba)
-    try {
-      comm.send(bb,ba.length+4,BYTE,rank,myrank)
-    } catch { case ex: MPIException
+    class SendProcess extends Thread {
+      // serialize data into a byte array
+      val bs = new ByteArrayOutputStream(1000000)
+      val os = new ObjectOutputStream(bs)
+      try {
+        os.writeInt(oper_id)
+        os.writeObject(data)
+        os.flush()
+        os.close()
+      } catch { case ex: IOException
+                  => serialization_error(ex) }
+      val ba = bs.toByteArray()
+      val bb = newByteBuffer(ba.length+4)
+      bb.putInt(ba.length).put(ba)
+      if (trace)
+        println("    sending "+(ba.length+4)+" bytes from "+myrank+" to "
+                +rank+" (opr "+oper_id+")")
+      try {
+        comm.send(bb,ba.length+4,BYTE,rank,myrank)
+      } catch { case ex: MPIException
                 => mpi_error(ex) }
+    }
+    new SendProcess().run()
   }
 
   def receive_data ( rank: Int ) {
