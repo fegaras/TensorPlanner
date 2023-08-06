@@ -37,7 +37,7 @@ object Scheduler {
                               var consumers: List[OprID] = Nil,
                               var count: Int = 0 )         // number of consumers
                   extends Serializable
-  case class LoadOpr ( index: Any, block: () => Any ) extends Opr
+  case class LoadOpr ( index: Any, block: Any ) extends Opr
   case class TupleOpr ( x: OprID, y: OprID ) extends Opr
   case class ApplyOpr ( x: OprID, fnc: FunctionID ) extends Opr
   case class ReduceOpr ( s: List[OprID], op: FunctionID ) extends Opr
@@ -166,10 +166,9 @@ object Scheduler {
                               Tuple(List(Var(dp),Var(sp),
                                       Call("loadOpr",
                                            List(Var(i),
-                                                function(Lambda(TuplePat(Nil),
-                                                      Tuple(List(Var(i),
-                                                                 Tuple(List(Var(dp),Var(sp),
-                                                                            Var(gl))))))))))))),
+                                                Tuple(List(Var(i),
+                                                           Tuple(List(Var(dp),Var(sp),
+                                                                      Var(gl))))))))))),
                            List(Generator(TuplePat(List(VarPat(i),
                                               TuplePat(List(VarPat(dp),VarPat(sp),VarPat(gl))))),
                                           e)))
@@ -221,10 +220,9 @@ object Scheduler {
                                              Tuple(List(Var(dp),Var(sp),
                                                         Call("loadOpr",
                                                              List(Var(k),
-                                                                  Lambda(TuplePat(Nil),
-                                                                         Tuple(List(Var(k),
-                                                                                Tuple(List(Var(dp),Var(sp),
-                                                                                      Var(xl)))))))))))),
+                                                                  Tuple(List(Var(k),
+                                                                             Tuple(List(Var(dp),Var(sp),
+                                                                                        Var(xl))))))))))),
                              List(Generator(p,x),
                                   Generator(TuplePat(List(VarPat(k),
                                                   TuplePat(List(VarPat(dp),VarPat(sp),
@@ -350,77 +348,4 @@ object Scheduler {
     if (trace)
       print_plan(e)
   }
-
-
-/****************************************************************************************************
-* 
-* Single core in-memory evalution (for testing only)
-* 
-****************************************************************************************************/
-
-  var cached_blocks: Int = 0
-  var max_cached_blocks: Int = 0
-
-  def eval_mem ( id: OprID, tabs: Int ): Any = {
-    val e = operations(id)
-    if (e.cached != null) {
-      // retrieve result block(s) from cache
-      val res = e.cached
-      e.count -= 1
-      if (e.count <= 0) {
-        if (trace)
-          println(" "*tabs*3+"* "+"discard the cached value of "+id)
-        cached_blocks -= 1
-        e.cached = null
-      }
-      return res
-    }
-    if (trace)
-      println(" "*3*tabs+"*** "+tabs+": "+e)
-    val res = e match {
-        case LoadOpr(_,b:(()=>Any))
-          => b()
-        case ApplyOpr(x,fid)
-          => val f = functions(fid).asInstanceOf[Any=>List[Any]]
-             f(eval_mem(x,tabs+1)).head
-        case TupleOpr(x,y)
-          => def f ( lg: OprID ): (Any,Any)
-               = operations(lg) match {
-                    case TupleOpr(x,y)
-                      => (f(x),f(y))
-                  case _ => eval_mem(lg,tabs+1).asInstanceOf[(Any,Any)]
-                 }
-             val gx@(iv,_) = f(id)
-             (iv,gx)
-        case ReduceOpr(s,fid)
-          => val sv = s.map(eval_mem(_,tabs+1).asInstanceOf[(Any,Any)])
-             val op = functions(fid).asInstanceOf[((Any,Any))=>Any]
-             (sv.head._1,sv.map(_._2).reduce{ (x:Any,y:Any) => op((x,y)) })
-      }
-    if (trace)
-      println(" "*3*tabs+"*-> "+tabs+": "+res)
-    e.count -= 1
-    if (e.count > 0) {
-      e.cached = res
-      if (trace)
-        println(" "*tabs*3+"* "+"cache the value of "+id)
-      cached_blocks += 1
-      max_cached_blocks = Math.max(max_cached_blocks,cached_blocks)
-    }
-    res
-  }
-
-  def evalMem[I,T,S] ( e: Plan[I,T,S] ): (T,S,List[Any])
-    = e match {
-        case (dp,sp,s)
-          => cached_blocks = 0
-             max_cached_blocks = 0
-             operations.foreach(x => x.count = x.consumers.length)
-             val res = s.map{ case (i,(ds,ss,lg))
-                                => eval_mem(lg,0) }
-             println("Number of nodes: "+operations.length)
-             println("Max num of cached blocks: "+max_cached_blocks)
-             println("Final num of cached blocks: "+cached_blocks)
-             (dp,sp,res)
-      }
 }

@@ -49,11 +49,11 @@ trait ArrayFunctions {
   def eval[I,T,S] ( e: Plan[I,T,S] ): Plan[I,T,S]
     = Runtime.eval(e)
 
-  def collect[I,T,S] ( e: Plan[I,T,S] ): List[Any]
+  def collect[I,T,S] ( e: Plan[I,T,S] ): List[(I,Any)]
     = Runtime.collect(e)
 
-  def evalMem[I,T,S] ( e: Plan[I,T,S] ): (T,S,List[Any])
-    = Scheduler.evalMem(e)
+  def evalMem[I,T,S] ( e: Plan[I,T,S] ): (T,S,List[(I,Any)])
+    = Runtime.evalMem(e)
 
   def startup ( args: Array[String] ) {
     Communication.mpi_startup(args)
@@ -65,7 +65,7 @@ trait ArrayFunctions {
 
   def isMaster (): Boolean = Communication.myrank == 0
 
-  def loadOpr ( index: Any, block: () => Any ): OprID = {
+  def loadOpr ( index: Any, block: Any ): OprID = {
     operations += LoadOpr(index,block)
     operations.length-1
   }

@@ -13,8 +13,8 @@ object Test {
       var M = N;
 
       var Az = tensor*(N,M)[ ((i,j),2.3) | i <-0..(N-1), j<-0..(M-1) ];
-      var Bz = Az;
-      var Cz = Az;
+      var Bz = tensor*(N,M)[ ((i,j),3.4) | i <-0..(N-1), j<-0..(M-1) ];
+      var Cz = tensor*(N,M)[ ((i,j),4.5) | i <-0..(N-1), j<-0..(M-1) ];
 
       //tensor*(N,M)[ ((i,j),a+1) | ((i,j),a) <- Az ];
 
@@ -35,13 +35,14 @@ object Test {
       Az
 */
       """)
-    
-    schedule(plan)
 
+    if (isMaster()) evalMem(plan)
+/*
+    schedule(plan)
     val res = collect(eval(plan))
     if (isMaster())
       res.foreach(println)
-
+*/
     end()
 
   }

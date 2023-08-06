@@ -29,8 +29,8 @@ object Runtime {
     if (trace)
       println("*** computing operation "+opr_id+":"+operations(opr_id)+" on node "+myrank)
     val res = operations(opr_id) match {
-        case LoadOpr(_,b:(()=>Any))
-          => b()
+        case LoadOpr(_,b)
+          => b
         case ApplyOpr(x,fid)
           => val f = functions(fid).asInstanceOf[Any=>List[Any]]
              assert(operations(x).cached != null)
@@ -39,12 +39,15 @@ object Runtime {
           => def f ( lg: Opr ): (Any,Any)
                = lg match {
                     case TupleOpr(x,y)
-                      => (f(operations(x)),f(operations(y)))
-                  case _ => assert(lg.cached != null)
-                            lg.cached.asInstanceOf[(Any,Any)]
+                      => val gx@(iv,vx) = f(operations(x))
+                         val gy@(_,vy) = f(operations(y))
+                         val xx = if (operations(x).isInstanceOf[TupleOpr]) vx else gx
+                         val yy = if (operations(y).isInstanceOf[TupleOpr]) vy else gy
+                         (iv,(xx,yy))
+                    case _ => assert(lg.cached != null)
+                              lg.cached.asInstanceOf[(Any,Any)]
                  }
-             val gx@(iv,_) = f(opr)
-             (iv,gx)
+             f(opr)
         case ReduceOpr(s,fid)
           => val sv = s.map{ x => assert(operations(x).cached != null)
                                   operations(x).cached.asInstanceOf[(Any,Any)] }
@@ -114,8 +117,9 @@ object Runtime {
     executors(myrank).broadcast_plan()
   }
 
-  def eval[I,T,S] ( e: Plan[I,T,S] ): Plan[I,T,S] = {
-    exit_points = executors(myrank).broadcast_exit_points(e)
+  // distributed evaluation of a scheduled plan using MPI
+  def eval[I,T,S] ( plan: Plan[I,T,S] ): Plan[I,T,S] = {
+    exit_points = executors(myrank).broadcast_exit_points(plan)
     if (trace && myrank == 0)
       println("Exit points "+exit_points)
     executors(myrank).ready_queue.clear()
@@ -125,12 +129,13 @@ object Runtime {
     if (trace)
       println("Queue "+myrank+" "+executors(myrank).ready_queue)
     new Worker().run()
-    comm.barrier()
-    e
+    barrier()
+    plan
   }
 
-  def collect[I,T,S] ( e: Plan[I,T,S] ): List[Any] = {
-    exit_points = executors(myrank).broadcast_exit_points(e)
+  // collect the results of an evaluated plan at the master node
+  def collect[I,T,S] ( plan: Plan[I,T,S] ): List[(I,Any)] = {
+    exit_points = executors(myrank).broadcast_exit_points(plan)
     val count = exit_points.filter {
         opr_id => myrank == 0 && operations(opr_id).node != 0 }.length
     exit_points.foreach {
@@ -144,7 +149,96 @@ object Runtime {
     if (myrank == 0)
       while (c < count)
           c += executors(myrank).check_communication()
-    comm.barrier()
-    exit_points.map(x => operations(x).cached)
+    barrier()
+    exit_points.map(x => operations(x).cached.asInstanceOf[(I,Any)])
   }
+
+/****************************************************************************************************
+* 
+* Single core, in-memory evalution (for testing only)
+* 
+****************************************************************************************************/
+
+  var cached_blocks: Int = 0
+  var max_cached_blocks: Int = 0
+
+  def pe ( e: Any ): Any
+    = e match {
+        case x: (Any,Any)
+          => x._2 match {
+               case z: (Any,Any,Array[Double]) @unchecked
+                 => z._3.toList
+               case z: (Any,Any)
+                 => (pe((x._1,z._1)),pe((x._1,z._2)))
+               case z => z
+             }
+        case x => x
+      }
+
+  def eval_mem ( id: OprID, tabs: Int ): Any = {
+    val e = operations(id)
+    if (e.cached != null) {
+      // retrieve result block(s) from cache
+      val res = e.cached
+      e.count -= 1
+      if (e.count <= 0) {
+        if (trace)
+          println(" "*tabs*3+"* "+"discard the cached value of "+id)
+        cached_blocks -= 1
+        e.cached = null
+      }
+      return res
+    }
+    if (trace)
+      println(" "*3*tabs+"*** "+tabs+": "+id+"/"+e)
+    val res = e match {
+        case LoadOpr(_,b)
+          => b
+        case ApplyOpr(x,fid)
+          => val f = functions(fid).asInstanceOf[Any=>List[Any]]
+             f(eval_mem(x,tabs+1)).head
+        case TupleOpr(x,y)
+          => def f ( lg: OprID ): (Any,Any)
+               = operations(lg) match {
+                    case TupleOpr(x,y)
+                      => val gx@(iv,vx) = f(x)
+                         val gy@(_,vy) = f(y)
+                         val xx = if (operations(x).isInstanceOf[TupleOpr]) vx else gx
+                         val yy = if (operations(y).isInstanceOf[TupleOpr]) vy else gy
+                         (iv,(xx,yy))
+                    case _ => eval_mem(lg,tabs+1).asInstanceOf[(Any,Any)]
+                 }
+             f(id)
+        case ReduceOpr(s,fid)
+          => val sv = s.map(eval_mem(_,tabs+1).asInstanceOf[(Any,Any)])
+             val op = functions(fid).asInstanceOf[((Any,Any))=>Any]
+             (sv.head._1,sv.map(_._2).reduce{ (x:Any,y:Any) => op((x,y)) })
+      }
+    if (trace)
+      println(" "*3*tabs+"*-> "+tabs+": "+res)   // pe(res)
+    e.count -= 1
+    if (e.count > 0) {
+      e.cached = res
+      if (trace)
+        println(" "*tabs*3+"* "+"cache the value of "+id)
+      cached_blocks += 1
+      max_cached_blocks = Math.max(max_cached_blocks,cached_blocks)
+    }
+    res
+  }
+
+  def evalMem[I,T,S] ( e: Plan[I,T,S] ): (T,S,List[(I,Any)])
+    = e match {
+        case (dp,sp,s)
+          => operations = Scheduler.operations.toArray
+             cached_blocks = 0
+             max_cached_blocks = 0
+             operations.foreach(x => x.count = x.consumers.length)
+             val res = s.map{ case (i,(ds,ss,lg))
+                                => eval_mem(lg,0).asInstanceOf[(I,Any)] }
+             println("Number of nodes: "+operations.length)
+             println("Max num of cached blocks: "+max_cached_blocks)
+             println("Final num of cached blocks: "+cached_blocks)
+             (dp,sp,res)
+      }
 }
