@@ -1,10 +1,11 @@
 #/bin/bash
 
 DIABLO="$(cd `dirname $0`/..; pwd -P)"
-OPENMPI_HOME=/opt/intel/oneapi/mpi/latest
+MPI_HOME=$HOME/.openmpi
 
-#source $OPENMPI_HOME/env/vars.sh
-export PATH="$OPENMPI_HOME/bin:$PATH"
-export LD_LIBRARY_PATH="$OPENMPI_HOME/lib/:$LD_LIBRARY_PATH"
+export PATH="$MPI_HOME/bin:$PATH"
+export LD_LIBRARY_PATH="$MPI_HOME/lib/:$LD_LIBRARY_PATH"
 
-mpirun -n 2 scala -classpath classes:${DIABLO}/lib/diablo.jar:${OPENMPI_HOME}/lib/mpi.jar -J-Xmx6g -J-Xss100m $*
+export OMP_NUM_THREADS=16
+
+mpirun --use-hwthread-cpus scala -classpath classes:${DIABLO}/lib/diablo.jar:${MPI_HOME}/lib/mpi.jar -J-Xmx12g -J-Xms12g -J-Xss100m $*

@@ -21,7 +21,7 @@ import scala.collection.mutable.{ArrayBuffer,ListBuffer}
 import java.io.Serializable
 
 object Scheduler {
-  val trace = false
+  val trace = true
 
   type OprID = Int
   type WorkerID = Int
@@ -30,12 +30,15 @@ object Scheduler {
   // Operation tree (pilot plan)
   @SerialVersionUID(123L)
   sealed abstract class Opr ( var node: WorkerID = -1,     // worker node
-                              var size: Int = 0,           // num of blocks in output
+                              var size: Int = -1,           // num of blocks in output
                               var static_blevel: Int = -1, // static b-level (bottom level)
                               @transient
                               var cached: Any = null,      // cached result block(s)
+                              var retained_nodes: List[OprID] = Nil,
+                              var retained_count: Int = 0,
+                              var visited: Boolean = false,// used in DFS traversal
                               var consumers: List[OprID] = Nil,
-                              var count: Int = 0 )         // number of consumers
+                              var count: Int = 0 )         // = number of local consumers
                   extends Serializable
   case class LoadOpr ( index: Any, block: Any ) extends Opr
   case class TupleOpr ( x: OprID, y: OprID ) extends Opr
@@ -58,14 +61,39 @@ object Scheduler {
         case _ => Nil
       }
 
-  def print_plan[I,T,S] ( e: Plan[I,T,S] ) {
-    def pp ( opr_id: OprID, tabs: Int ) {
-      val x = operations(opr_id)
-      println(" "*tabs*3+tabs+")  node="+x.node+"  size="+x.size+"  blevel="
-              +x.static_blevel+"   consumers="+x.consumers+"  "+opr_id+" "+x)
-      children(x).foreach(c => pp(c,tabs+1))
+  // visit each operation only once
+  def DFS ( s: List[OprID], f: OprID => Unit ) {
+    def dfs ( c: OprID ) {
+      val opr = operations(c)
+      if (!opr.visited) {
+        opr.visited = true
+        f(c)
+        opr match {
+          case TupleOpr(x,y)
+            => dfs(x)
+               dfs(y)
+          case ApplyOpr(x,_)
+            => dfs(x)
+          case ReduceOpr(s,_)
+            => s.foreach(dfs)
+          case _ => ;
+        }
+      }
     }
-    e._3.foreach(x => pp(x._2._3,1))
+    for { x <- operations }
+      x.visited = false
+    s.foreach(dfs)
+  }
+
+  def print_plan[I,T,S] ( e: Plan[I,T,S] ) {
+    val exit_points = e._3.map(x => x._2._3)
+    println("Exit points: "+exit_points)
+    println("Operations: "+operations.length)
+    for ( opr_id <- 0 until operations.length ) {
+      val opr = operations(opr_id)
+      println(""+opr_id+")  node="+opr.node+"  size="+opr.size+"  blevel="+opr.static_blevel
+              +"   consumers="+opr.consumers+"   retained = "+opr.retained_nodes+"  "+opr)
+    }
   }
 
   def isRDD ( e: Expr ): Boolean
@@ -275,25 +303,30 @@ object Scheduler {
   // the pool of ready nodes
   var ready_pool: ListBuffer[OprID] = _
 
+  // number of blocks returned by operation e
   def size ( e: Opr ): Int = {
-    children(e).map(x => size(operations(x)))
-    e.size = e match {
-               case TupleOpr(x,y)
-                 => operations(x).size + operations(y).size
-               case _ => 1
-             }
+    if (e.size <= 0)
+      e.size = e match {
+                  case TupleOpr(x,y)
+                    => size(operations(x)) + size(operations(y))
+                  case _ => 1
+               }
     e.size
   }
 
   // calculate and store the static b_level of each node
-  def set_blevel ( x: Opr ): Int = {
-    if (x.static_blevel < 0) {
-      x.static_blevel = if (x.isInstanceOf[TupleOpr]) 0 else size(x)
-      if (x.consumers.nonEmpty)
-        x.static_blevel += x.consumers.map(c => set_blevel(operations(c))).reduce(Math.max)
-      children(x).foreach(c => set_blevel(operations(c)))
+  def set_blevel[I,T,S] ( e: Plan[I,T,S] ) {
+    def set_blevel ( opr: Opr, blevel: Int ) {
+      if (blevel > opr.static_blevel) {
+        opr.static_blevel = blevel
+        children(opr).foreach{ c => set_blevel(operations(c),blevel+1) }
+      }
     }
-    x.static_blevel
+    val exit_points = e._3.map(x => x._2._3)
+    exit_points.foreach{ c => set_blevel(operations(c),0) }
+    for ( x <- operations )
+      if (x.isInstanceOf[TupleOpr])
+        x.static_blevel += size(x)
   }
 
   def cpu_cost ( opr: Opr ): Int
@@ -310,12 +343,12 @@ object Scheduler {
                                 0
                               else size(copr) }.sum
 
+  // assign every operation to an executor
   def schedule[I,T,S] ( e: Plan[I,T,S] ) {
+    set_blevel(e)
     ready_pool = ListBuffer()
-    work = 0.until(Communication.num_of_workers).map(w => 0).toArray
-    tasks = 0.until(Communication.num_of_workers).map(w => 0).toArray
-    for ( opr <- operations )
-       set_blevel(opr)
+    work = 0.until(Communication.num_of_masters).map(w => 0).toArray
+    tasks = 0.until(Communication.num_of_masters).map(w => 0).toArray
     for ( op <- 0.until(operations.length)
           if operations(op).isInstanceOf[LoadOpr]
           if operations(op).node < 0

@@ -1,6 +1,6 @@
 import edu.uta.diablo._
 import Math._
-import mpi.MPI.wTime
+import mpi.MPI.wtime
 
 object Multiply {
   def main ( args: Array[String] ) {
@@ -43,24 +43,28 @@ object Multiply {
 
       """)
 
-    //if (isMaster())
-      //validate(evalMem(plan)._3)
-
-    var t = wTime()
+    var t = wtime()
+/*
+    if (isMaster()) {
+      //validate
+      (evalMem(plan)._3)
+    }
+    if (isMaster())
+      println("in-memory time: "+(wtime()-t))
+*/
+    t = wtime()
     schedule(plan)
     if (isMaster())
-      println("schedule time: "+(wTime()-t))
+      println("schedule time: "+(wtime()-t))
 
-    t = wTime()
-
-    val res = collect(eval(plan))
+    t = wtime()
+    val res = eval(plan)
     if (isMaster()) {
-      println("eval time: "+(wTime()-t))
-      res.foreach(println)
+      println("eval time: "+(wtime()-t))
+      collect(res).foreach(println)
     }
     //validate(res)
 
     end()
-
   }
 }

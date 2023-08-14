@@ -7,18 +7,22 @@
 #SBATCH --ntasks-per-node=128
 #SBATCH --mem=249325M
 #SBATCH --export=ALL
-#SBATCH --time=10    # time limit in minutes
+#SBATCH --time=20    # time limit in minutes
 
 module purge
-module load slurm cpu/0.17.3b gcc/10.2.0 intel-mpi/2019.10.317
-mpivars.sh 
+module load slurm cpu/0.15.4 gcc/7.5.0 openjdk
 
 SW=/expanse/lustre/projects/uot166/fegaras
-DIABLO_HOME=/home/$USER/TensorPlanner-intel
+DIABLO_HOME=/home/$USER/TensorPlanner
 export SCALA_HOME=$SW/scala-2.12.3
 export SPARK_HOME=$SW/spark-3.1.2-bin-hadoop3.2
+# OPEN MPI was built using: --enable-mpi-threads --enable-mpi-java --with-slurm --without-ucx --without-hcol
+export OPENMPI_HOME=$SW/openmpi
 
-JARS=.:$DIABLO_HOME/lib/diablo.jar:$DIABLO_HOME/lib/mpi.jar
+export PATH="$OPENMPI_HOME/bin:$SCALA_HOME/bin:$PATH"
+export LD_LIBRARY_PATH="$OPENMPI_HOME/lib:$LD_LIBRARY_PATH"
+
+JARS=.:$DIABLO_HOME/lib/diablo.jar:$OPENMPI_HOME/lib/mpi.jar
 for I in `ls $SPARK_HOME/jars/*.jar -I *unsafe*`; do
     JARS=$JARS:$I
 done
@@ -32,5 +36,8 @@ for f in $scala_files; do
     scalac -d classes -cp classes:$JARS $f >/dev/null
 done
 
-# only one executor per node because it uses Scala's parallel collections for execution
-srun --mpi=pmi2 -n 2 scala -classpath classes:$DIABLO_HOME/lib/diablo.jar:$DIABLO_HOME/lib/mpi.jar -J-Xmx16g Multiply
+# number of cores per node
+export OMP_NUM_THREADS=128
+
+mpirun --mca btl_openib_allow_ib true --mca btl openib,tcp,self,vader --mca mpi_java_eager 100m \
+       scala -J-Xms16g -J-Xmx16g -classpath classes:$DIABLO_HOME/lib/diablo.jar:$OPENMPI_HOME/lib/mpi.jar Multiply 9456 9345

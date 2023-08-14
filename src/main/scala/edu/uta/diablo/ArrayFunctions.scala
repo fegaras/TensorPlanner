@@ -42,28 +42,36 @@ trait ArrayFunctions {
 
   type Plan[I,T,S] = (T,S,List[(I,(T,S,OprID))])
 
+  // assign every operation to an executor
   def schedule[I,T,S] ( e: Plan[I,T,S] ) {
     Runtime.schedule(e)
   }
 
+  // distributed evaluation of a scheduled plan using MPI
   def eval[I,T,S] ( e: Plan[I,T,S] ): Plan[I,T,S]
     = Runtime.eval(e)
 
+  // collect the results of an evaluated plan at the master node
   def collect[I,T,S] ( e: Plan[I,T,S] ): List[(I,Any)]
     = Runtime.collect(e)
 
+  // single-core, in-memory evaluation (for testing only)
   def evalMem[I,T,S] ( e: Plan[I,T,S] ): (T,S,List[(I,Any)])
-    = Runtime.evalMem(e)
+    = inMem.eval(e)
 
+  // start communication in MPI
   def startup ( args: Array[String] ) {
     Communication.mpi_startup(args)
   }
 
+  // finilize communication in MPI
   def end () {
     Communication.mpi_finalize()
   }
 
-  def isMaster (): Boolean = Communication.myrank == 0
+  def isMaster (): Boolean = Communication.isMaster()
+
+  def isCoordinator (): Boolean = Communication.isCoordinator()
 
   def loadOpr ( index: Any, block: Any ): OprID = {
     operations += LoadOpr(index,block)
