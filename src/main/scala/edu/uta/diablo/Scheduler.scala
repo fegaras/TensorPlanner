@@ -61,30 +61,6 @@ object Scheduler {
         case _ => Nil
       }
 
-  // visit each operation only once
-  def DFS ( s: List[OprID], f: OprID => Unit ) {
-    def dfs ( c: OprID ) {
-      val opr = operations(c)
-      if (!opr.visited) {
-        opr.visited = true
-        f(c)
-        opr match {
-          case TupleOpr(x,y)
-            => dfs(x)
-               dfs(y)
-          case ApplyOpr(x,_)
-            => dfs(x)
-          case ReduceOpr(s,_)
-            => s.foreach(dfs)
-          case _ => ;
-        }
-      }
-    }
-    for { x <- operations }
-      x.visited = false
-    s.foreach(dfs)
-  }
-
   def print_plan[I,T,S] ( e: Plan[I,T,S] ) {
     val exit_points = e._3.map(x => x._2._3)
     println("Exit points: "+exit_points)

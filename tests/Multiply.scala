@@ -1,13 +1,11 @@
 import edu.uta.diablo._
-import Math._
 import mpi.MPI.wtime
 
 object Multiply {
   def main ( args: Array[String] ) {
 
-    //parami(block_dim_size,10)
+    //parami(block_dim_size,100)
     param(asynchronous,true)
-    //param(parallel,false)
 
     val N = args(0).toInt
     val M = args(1).toInt
@@ -22,7 +20,6 @@ object Multiply {
           X(i*N+j) += A(i*M+k)*B(k*N+j)
       for ( ((ii,jj),b) <- e ) {
         val ((n,m),_,a) = b.asInstanceOf[((Int,Int),EmptyTuple,Array[Double])]
-        println("@@@ "+n+" "+m+" "+ii+" "+jj)
         for ( k <- 0 until a.length ) {
           val i = ii*block_dim_size+k/m
           val j = jj*block_dim_size+k%m
@@ -45,23 +42,22 @@ object Multiply {
 
     var t = wtime()
 /*
-    if (isMaster()) {
+    if (isCoordinator()) {
       //validate
-      (evalMem(plan)._3)
+          (evalMem(plan)._3)
+      println("in-memory time: %.3f secs".format(wtime()-t))
     }
-    if (isMaster())
-      println("in-memory time: "+(wtime()-t))
 */
     t = wtime()
     schedule(plan)
-    if (isMaster())
-      println("schedule time: "+(wtime()-t))
+    if (isCoordinator())
+      println("schedule time: %.3f secs".format(wtime()-t))
 
     t = wtime()
-    val res = eval(plan)
-    if (isMaster()) {
-      println("eval time: "+(wtime()-t))
-      collect(res).foreach(println)
+    val res = collect(eval(plan))
+    if (isCoordinator()) {
+      println("eval time: %.3f secs".format(wtime()-t))
+      res.foreach(println)
     }
     //validate(res)
 

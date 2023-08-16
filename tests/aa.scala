@@ -29,7 +29,6 @@ object Test {
       //tensor*(N,M)[ ((i,j),m+n+k) | ((i,j),m) <= Az, ((ii,jj),n) <= Bz, ((iii,jjj),k) <- Cz, ii==i, jj==j, iii==i, jjj==j ];
 
       //tensor*(N,M)[ ((i,j),+/v) | ((i,k),a) <= Az, ((kk,l),b) <= Bz, ((ll,j),c) <- Cz, kk==k, ll==l, let v = a*b*c, group by (i,j) ];
-
 /*
       for i = 0, 10 do
          Az = tensor*(N,M)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
@@ -37,12 +36,12 @@ object Test {
 */
       """)
 
-    if (isMaster()) 
+    if (isCoordinator())
       evalMem(plan)
 
     schedule(plan)
     val res = collect(eval(plan))
-    if (isMaster())
+    if (isCoordinator())
       res.foreach(println)
 
     end()

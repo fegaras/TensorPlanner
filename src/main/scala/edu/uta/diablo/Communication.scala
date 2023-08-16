@@ -19,7 +19,7 @@ import Scheduler.{operations=>_,_}
 import mpi._
 import mpi.MPI._
 import java.nio.ByteBuffer
-import scala.collection.mutable.Queue
+import scala.collection.mutable.SynchronizedQueue
 import java.io._
 
 
@@ -53,7 +53,7 @@ object Executor {
   val max_buffer_size = 100000000
   var buffer = newByteBuffer(max_buffer_size)
   // operations ready to be executed
-  var ready_queue: Queue[Int] = new Queue[Int]()
+  var ready_queue: SynchronizedQueue[Int] = new SynchronizedQueue[Int]()
   var receive_request: Request = null
   val stats: Statistics = new Statistics()
   var exit_points: List[Int] = Nil
@@ -228,10 +228,6 @@ object Executor {
         new Statistics(res(0),res(1),res(2),res(3))
       } catch { case ex: MPIException
                   => mpi_error(ex); stats }
-
-  def decrement_counts ( node: OprID, nodes: List[OprID] ) {
-
-  }
 }
 
 

@@ -24,10 +24,32 @@ import scala.annotation.tailrec
 
 object Runtime {
   val trace = true
-
   var operations: Array[Opr] = _
-
   var exit_points: List[Int] = Nil
+
+  // visit each operation only once
+  def DFS ( s: List[OprID], f: OprID => Unit ) {
+    def dfs ( c: OprID ) {
+      val opr = operations(c)
+      if (!opr.visited) {
+        opr.visited = true
+        f(c)
+        opr match {
+          case TupleOpr(x,y)
+            => dfs(x)
+               dfs(y)
+          case ApplyOpr(x,_)
+            => dfs(x)
+          case ReduceOpr(s,_)
+            => s.foreach(dfs)
+          case _ => ;
+        }
+      }
+    }
+    for { x <- operations }
+      x.visited = false
+    s.foreach(dfs)
+  }
 
   def schedule[I,T,S] ( e: Plan[I,T,S] ) {
     if (isCoordinator()) {
@@ -123,7 +145,8 @@ object Runtime {
       val copr = operations(c)
       if (copr.node == my_master_rank) {
         copr.count -= 1
-        if (copr.count == 0) {
+        if (copr.count == 0
+            && !copr.isInstanceOf[LoadOpr]) {   // TODO: fixit
           if (trace)
             println("    discard the cached block of "+c+" at node "+my_master_rank)
           stats.cached_blocks -= 1
@@ -133,11 +156,26 @@ object Runtime {
     }
   }
 
+  class ReceiverThread extends Thread {
+    override def run () {
+      if (receive_request != null) {
+        receive_request.cancel()
+        receive_request.free()
+        receive_request = null
+      }
+      while (true) {
+        check_communication()
+        Thread.sleep(10)
+      }
+    }
+  }
+
   def work () {
     var exit: Boolean = false
     var count: Int = 0
+    val receiver = new ReceiverThread()
+    receiver.start()
     while (!exit) {
-      check_communication()
       count = (count+1)%100   // check for exit every 100 iterations
       if (count == 0)
         exit = exit_poll()
@@ -151,17 +189,13 @@ object Runtime {
         ready_queue.dequeue
       }
     }
-    if (trace) {
-      val stats = collect_statistics()
-      if (isCoordinator())
-        stats.print()
-    }
+    receiver.stop()
   }
 
   def entry_points ( s: List[OprID] ): List[OprID] = {
     val b = ArrayBuffer[OprID]()
     DFS(s,
-        c => if (operations(c).isInstanceOf[LoadOpr])
+        c => if (operations(c).isInstanceOf[LoadOpr] && operations(c).node == my_master_rank)
                 if (!b.contains(c))
                   b.append(c))
     b.toList
@@ -175,33 +209,42 @@ object Runtime {
           println("Exit points: "+exit_points)
         ready_queue.clear()
         ready_queue ++= entry_points(exit_points)
-        if (trace && isCoordinator())
-          println("Entry points: "+ready_queue)
         if (trace)
-          println("Queue on "+my_master_rank+": "+ready_queue)
+          println("Queue on "+my_master_rank+": "+ready_queue.toList)
         work()
+        if (trace) {
+          val stats = collect_statistics()
+          if (isCoordinator()) {
+            println("Number of operations: "+operations.length)
+            stats.print()
+          }
+        }
+        barrier()
         plan
       } else plan
 
   // collect the results of an evaluated plan at the coordinator
   def collect[I,T,S] ( plan: Plan[I,T,S] ): List[(I,Any)]
     = if (isMaster()) {
-        exit_points = broadcast_exit_points(plan)
-        val count = exit_points.filter {
-                        opr_id => my_master_rank == 0 && operations(opr_id).node != 0 }.length
-        exit_points.foreach {
+        var receiver: ReceiverThread = null
+        if (isCoordinator()) {
+          receiver = new ReceiverThread()
+          receiver.start()
+        } else exit_points.foreach {
             opr_id => val opr = operations(opr_id)
-                      if (!isCoordinator() && opr.node == my_master_rank)
+                      if (opr.node == my_master_rank)
                         send_data(0,opr.cached,opr_id)
-                      else if (opr.node < 0)
-                             throw new Error("Unscheduled node: "+opr_id+" "+opr)
+          }
+        if (isCoordinator()) {
+          while (exit_points.filter {
+                        opr_id => operations(opr_id).cached == null }.length > 0)
+              {}
+          receiver.stop()
         }
-        var c: Int = 0
-        if (isCoordinator())
-          while (c < count)
-            c += check_communication()
         barrier()
-        exit_points.map(x => operations(x).cached.asInstanceOf[(I,Any)])
+        if (isCoordinator())
+          exit_points.map(x => operations(x).cached.asInstanceOf[(I,Any)])
+        else Nil
       } else Nil
 }
 

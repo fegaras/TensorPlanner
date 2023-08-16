@@ -1,3 +1,17 @@
+# TensorPlanner
+
+### Installation using Open MPI
+
+Download and install open-mpi from [https://www.open-mpi.org/software/](https://www.open-mpi.org/software/) using the configuration prameters:
+```bash
+./configure --enable-mpi-threads --enable-mpi-java --with-slurm --without-ucx --without-hcol --prefix="$HOME/openmpi"
+make all install
+```
+Copy `$HOME/openmpi/lib/mpi.jar` into `TensorPlaner/lib/` and compile TensorPlanner using:
+```bash
+sbt package
+```
+
 # DIABLO: a Data-Intensive Array-Based Loop Optimizer
 
 A compiler from array-based loops to distributed data parallel programs that can run on Apache Spark.
