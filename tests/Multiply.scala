@@ -4,7 +4,7 @@ import mpi.MPI.wtime
 object Multiply {
   def main ( args: Array[String] ) {
 
-    //parami(block_dim_size,100)
+    parami(block_dim_size,100)
     param(asynchronous,true)
 
     val N = args(0).toInt

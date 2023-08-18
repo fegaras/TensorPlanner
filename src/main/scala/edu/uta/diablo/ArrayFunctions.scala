@@ -64,7 +64,7 @@ trait ArrayFunctions {
     Communication.mpi_startup(args)
   }
 
-  // finilize communication in MPI
+  // finalize communication in MPI
   def end () {
     Communication.mpi_finalize()
   }
@@ -74,7 +74,8 @@ trait ArrayFunctions {
   def isCoordinator (): Boolean = Communication.isCoordinator()
 
   def loadOpr ( index: Any, block: Any ): OprID = {
-    operations += LoadOpr(index,block)
+    loadBlocks += block
+    operations += LoadOpr(index,loadBlocks.length-1)
     operations.length-1
   }
 
@@ -94,11 +95,15 @@ trait ArrayFunctions {
   }
 
   def reduceOpr ( s: List[OprID], op: FunctionID ): OprID = {
-    operations += ReduceOpr(s,op)
-    val loc = operations.length-1
-    for ( x <- s )
-      operations(x).consumers = loc::operations(x).consumers
-    loc
+    s match {
+      case List(x) => x
+      case _
+        => operations += ReduceOpr(s,op)
+           val loc = operations.length-1
+           for ( x <- s )
+              operations(x).consumers = loc::operations(x).consumers
+           loc
+    }
   }
 
   // parRange doesn't work

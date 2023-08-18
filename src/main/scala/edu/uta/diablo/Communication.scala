@@ -19,7 +19,7 @@ import Scheduler.{operations=>_,_}
 import mpi._
 import mpi.MPI._
 import java.nio.ByteBuffer
-import scala.collection.mutable.SynchronizedQueue
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.io._
 
 
@@ -51,9 +51,9 @@ object Executor {
   import Communication._
   // the buffer must fit few blocks (one block of doubles is 8MBs)
   val max_buffer_size = 100000000
-  var buffer = newByteBuffer(max_buffer_size)
+  val buffer = newByteBuffer(max_buffer_size)
   // operations ready to be executed
-  var ready_queue: SynchronizedQueue[Int] = new SynchronizedQueue[Int]()
+  var ready_queue = new ConcurrentLinkedQueue[Int]()
   var receive_request: Request = null
   val stats: Statistics = new Statistics()
   var exit_points: List[Int] = Nil
@@ -121,26 +121,49 @@ object Executor {
 
   // send the result of an operation (array blocks) to another node
   def send_data ( rank: Int, data: Any, oper_id: OprID ) {
-      // serialize data into a byte array
-      val bs = new ByteArrayOutputStream(max_buffer_size)
-      val os = new ObjectOutputStream(bs)
-      try {
-        os.writeInt(oper_id)
-        os.writeObject(data)
-        os.flush()
-	os.close()
-      } catch { case ex: IOException
-                  => serialization_error(ex) }
-      val ba = bs.toByteArray()
-      val bb = newByteBuffer(ba.length+4)
-      bb.putInt(ba.length).put(ba)
-      if (trace)
-	println("    sending "+(ba.length+4)+" bytes from "+my_master_rank+" to "
-                +rank+" (opr "+oper_id+")")
-      try {
-        master_comm.send(bb,ba.length+4,BYTE,rank,my_master_rank)
-      } catch { case ex: MPIException
+    // serialize data into a byte array
+    val bs = new ByteArrayOutputStream(max_buffer_size)
+    val os = new ObjectOutputStream(bs)
+    try {
+      os.writeInt(oper_id)
+      os.writeObject(data)
+      os.close()
+    } catch { case ex: IOException
+                => serialization_error(ex) }
+    val ba = bs.toByteArray()
+    val bb = newByteBuffer(ba.length+4)
+    bb.putInt(ba.length).put(ba)
+    if (trace)
+      println("    sending "+(ba.length+4)+" bytes from "+my_master_rank
+              +" to "+rank+" (opr "+oper_id+")")
+    try {
+      master_comm.send(bb,ba.length+4,BYTE,rank,my_master_rank)
+    } catch { case ex: MPIException
                 => mpi_error(ex) }
+  }
+
+  // receive the result of an operation (array blocks) from another node
+  def receive_data ( rank: Int ): Any = {
+    buffer.clear()
+    try {
+      master_comm.recv(buffer,buffer.capacity(),BYTE,ANY_SOURCE,ANY_TAG)
+    } catch { case ex: MPIException
+                => mpi_error(ex) }
+    val len = buffer.getInt()
+    val bb = Array.ofDim[Byte](len)
+    buffer.get(bb)
+    val bs = new ByteArrayInputStream(bb,0,len)
+    val is = new ObjectInputStream(bs)
+    val opr_id = is.readInt()
+    val data = try { is.readObject()
+                   } catch { case ex: IOException
+                               => serialization_error(ex); null }
+    if (trace)
+      println("    received "+(len+4)+" bytes from "+rank
+              +" to "+my_master_rank+" (opr "+opr_id+")")
+    is.close()
+    Runtime.operations(opr_id).cached = data
+    data
   }
 
   def broadcast_plan () {
@@ -148,13 +171,22 @@ object Executor {
       if (Communication.isCoordinator()) {
         val bs = new ByteArrayOutputStream(10000)
         val os = new ObjectOutputStream(bs)
+        os.writeInt(Runtime.loadBlocks.length)
         os.writeObject(Runtime.operations)
         os.writeObject(functions)
-        os.flush()
         os.close()
         val a = bs.toByteArray()
         master_comm.bcast(Array(a.length),1,INT,0)
         master_comm.bcast(a,a.length,BYTE,0)
+        for ( opr_id <- 0 until Runtime.operations.length ) {
+          val x = Runtime.operations(opr_id)
+          x match {
+            case LoadOpr(_,b)
+              if x.node != 0
+              => send_data(x.node,Runtime.loadBlocks(b),opr_id)
+            case _ => ;
+          }
+        }
       } else {
         val len = Array(0)
         master_comm.bcast(len,1,INT,0)
@@ -162,9 +194,18 @@ object Executor {
         master_comm.bcast(plan_buffer,len(0),BYTE,0)
         val bs = new ByteArrayInputStream(plan_buffer,0,plan_buffer.size)
         val is = new ObjectInputStream(bs)
+        val lb_len = is.readInt()
+        Runtime.loadBlocks = Array.ofDim[Any](lb_len)
         Runtime.operations = is.readObject().asInstanceOf[Array[Opr]]
         functions = is.readObject().asInstanceOf[Array[Nothing=>Any]]
         is.close()
+        for ( x <- Runtime.operations )
+          x match {
+            case LoadOpr(_,b)
+              if x.node == my_master_rank
+              => Runtime.loadBlocks(b) = receive_data(0)
+            case _ => ;
+          }
       }
       master_comm.barrier()
     } catch { case ex: MPIException

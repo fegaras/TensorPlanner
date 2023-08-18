@@ -25,6 +25,7 @@ import scala.annotation.tailrec
 object Runtime {
   val trace = true
   var operations: Array[Opr] = _
+  var loadBlocks: Array[Any] = _
   var exit_points: List[Int] = Nil
 
   // visit each operation only once
@@ -55,9 +56,14 @@ object Runtime {
     if (isCoordinator()) {
       Scheduler.schedule(e)
       operations = Scheduler.operations.toArray
+      loadBlocks = Scheduler.loadBlocks.toArray
     }
-    if (isMaster())
+    if (isMaster()) {
       broadcast_plan()
+      // initial count is the number of local consumers
+      for ( x <- operations )
+        x.count = x.consumers.filter( c => operations(c).node == my_master_rank ).length
+    }
   }
 
   def cache_data ( opr: Opr, data: Any ): Any = {
@@ -73,7 +79,7 @@ object Runtime {
       println("*** computing operation "+opr_id+":"+opr+" on node "+my_master_rank)
     val res = opr match {
         case LoadOpr(_,b)
-          => cache_data(opr,b)
+          => cache_data(opr,loadBlocks(b))
         case ApplyOpr(x,fid)
           => val f = functions(fid).asInstanceOf[Any=>List[Any]]
              assert(operations(x).cached != null)
@@ -116,22 +122,12 @@ object Runtime {
       if (opr.node == my_master_rank && copr.node != my_master_rank) {
         if (!nodes_to_send_data.contains(copr.node))
           nodes_to_send_data = copr.node::nodes_to_send_data
-      } else if (copr.cached == null
+      } else if (copr.node == my_master_rank
+                 && copr.cached == null
                  && children(copr).map(operations(_)).forall(_.cached != null)
                  && !ready_queue.contains(c))
-               ready_queue += c
+               this.synchronized { ready_queue.offer(c) }
     }
-/*
-    for ( n <- opr.retained_nodes ) {
-       val nopr = operations(n)
-       nopr.retained_count -= 1
-       if (nopr.retained_count == 0) {
-         nopr.cached = null   // garbage-collect nopr block
-         val ns = n::nopr.consumers.filter(operations(_).node != opr.node)
-         decrement_counts(n,ns)
-       }
-    }
-*/
     for ( n <- nodes_to_send_data )
       send_data(n,opr.cached,opr_id)
   }
@@ -139,15 +135,12 @@ object Runtime {
   // after the operation is computed, check if we can release the cache of its children
   def check_caches ( opr_id: OprID ) {
     val e = operations(opr_id)
-    // initial count is the number of local consumers
-    e.count = e.consumers.filter( c => operations(c).node == my_master_rank ).length
     for ( c <- children(e) ) {
       val copr = operations(c)
-      if (copr.node == my_master_rank) {
+      if (copr.node == e.node) {
         copr.count -= 1
-        if (copr.count == 0
-            && !copr.isInstanceOf[LoadOpr]) {   // TODO: fixit
-          if (trace)
+        if (copr.count == 0) {
+          if (false && trace)
             println("    discard the cached block of "+c+" at node "+my_master_rank)
           stats.cached_blocks -= 1
           copr.cached = null   // garbage-collect the c block
@@ -179,14 +172,11 @@ object Runtime {
       count = (count+1)%100   // check for exit every 100 iterations
       if (count == 0)
         exit = exit_poll()
-      if (ready_queue.nonEmpty) {
-        val opr_id = ready_queue.head
-        if (operations(opr_id).cached == null) {
-          compute(opr_id)
-          enqueue_ready_operations(opr_id)
-          check_caches(opr_id)
-        }
-        ready_queue.dequeue
+      if (!ready_queue.isEmpty) {
+        val opr_id = ready_queue.poll()
+        compute(opr_id)
+        enqueue_ready_operations(opr_id)
+        check_caches(opr_id)
       }
     }
     receiver.stop()
@@ -208,9 +198,10 @@ object Runtime {
         if (trace && isCoordinator())
           println("Exit points: "+exit_points)
         ready_queue.clear()
-        ready_queue ++= entry_points(exit_points)
+        for ( x <- entry_points(exit_points) )
+          ready_queue.offer(x)
         if (trace)
-          println("Queue on "+my_master_rank+": "+ready_queue.toList)
+          println("Queue on "+my_master_rank+": "+ready_queue)
         work()
         if (trace) {
           val stats = collect_statistics()
@@ -290,7 +281,7 @@ object inMem {
       println(" "*3*tabs+"*** "+tabs+": "+id+"/"+e)
     val res = e match {
         case LoadOpr(_,b)
-          => b
+          => loadBlocks(b)
         case ApplyOpr(x,fid)
           => val f = functions(fid).asInstanceOf[Any=>List[Any]]
              stats.apply_operations += 1

@@ -26,6 +26,7 @@ object Scheduler {
   type OprID = Int
   type WorkerID = Int
   type FunctionID = Int
+  type BlockID = Int
 
   // Operation tree (pilot plan)
   @SerialVersionUID(123L)
@@ -40,7 +41,7 @@ object Scheduler {
                               var consumers: List[OprID] = Nil,
                               var count: Int = 0 )         // = number of local consumers
                   extends Serializable
-  case class LoadOpr ( index: Any, block: Any ) extends Opr
+  case class LoadOpr ( index: Any, block: BlockID ) extends Opr
   case class TupleOpr ( x: OprID, y: OprID ) extends Opr
   case class ApplyOpr ( x: OprID, fnc: FunctionID ) extends Opr
   case class ReduceOpr ( s: List[OprID], op: FunctionID ) extends Opr
@@ -49,6 +50,8 @@ object Scheduler {
   var operations: ArrayBuffer[Opr] = ArrayBuffer[Opr]()
   // functions used by ApplyOpr and ReduceOpr
   val functions: ArrayBuffer[Expr] = ArrayBuffer[Expr]()
+  // blocks used by LoadOpr
+  val loadBlocks: ArrayBuffer[Any] = ArrayBuffer[Any]()
 
   def children ( e: Opr ): List[OprID]
     = e match {
@@ -290,6 +293,11 @@ object Scheduler {
     e.size
   }
 
+  def set_sizes () {
+    for ( x <- operations )
+      size(x)
+  }
+
   // calculate and store the static b_level of each node
   def set_blevel[I,T,S] ( e: Plan[I,T,S] ) {
     def set_blevel ( opr: Opr, blevel: Int ) {
@@ -321,6 +329,7 @@ object Scheduler {
 
   // assign every operation to an executor
   def schedule[I,T,S] ( e: Plan[I,T,S] ) {
+    set_sizes()
     set_blevel(e)
     ready_pool = ListBuffer()
     work = 0.until(Communication.num_of_masters).map(w => 0).toArray
