@@ -36,7 +36,7 @@ object Test {
 */
       """)
 
-    if (isCoordinator())
+    if (false && isCoordinator())
       evalMem(plan)
 
     schedule(plan)

@@ -98,6 +98,7 @@ object Executor {
       val bs = new ByteArrayInputStream(bb,0,len)
       val is = new ObjectInputStream(bs)
       val opr_id = is.readInt()
+      val tag = is.readByte()
       val data = try { is.readObject()
                      } catch { case ex: IOException
                                  => serialization_error(ex); null }
@@ -105,7 +106,6 @@ object Executor {
         println("    received "+(len+4)+" bytes from "+Runtime.operations(opr_id).node
                 +" to "+my_master_rank+" (opr "+opr_id+")")
       is.close()
-      Runtime.operations(opr_id).cached = data
       try {
         receive_request.free()
         buffer.clear()
@@ -113,19 +113,53 @@ object Executor {
         receive_request = master_comm.iRecv(buffer,buffer.capacity(),BYTE,ANY_SOURCE,ANY_TAG)
       } catch { case ex: MPIException
                   => mpi_error(ex) }
-      Runtime.enqueue_ready_operations(opr_id)
-      Runtime.check_caches(opr_id)
+      val opr = Runtime.operations(opr_id)
+      if (tag == 0) {
+        if (opr.cached == null)
+          stats.cached_blocks += 1
+        opr.cached = data
+        opr.completed = true
+        Runtime.enqueue_ready_operations(opr_id)
+        Runtime.check_caches(opr_id)
+      } else if (tag == 2) {
+        opr.cached = data
+        opr.completed = true
+      } else if (tag == 1) {
+        opr match {
+          case ReduceOpr(s,fid)  // partial reduce
+            => val op = functions(fid).asInstanceOf[((Any,Any))=>Any]
+               // partial reduce copr ReduceOpr
+               if (opr.cached == null) {
+                 stats.cached_blocks += 1
+                 opr.cached = data
+               } else { val x = opr.cached.asInstanceOf[(Any,Any)]
+                        val y = data.asInstanceOf[(Any,Any)]
+                        opr.cached = (x._1,op((x._2,y._2)))
+                      }
+               opr.reduced_count -= 1
+               if (opr.reduced_count == 0) {
+                 // completed ReduceOpr
+                 stats.reduce_operations += 1
+                 opr.completed = true
+                 Runtime.enqueue_ready_operations(opr_id)
+                 Runtime.check_caches(opr_id)
+               }
+          case _ => ;
+        }
+      }
       1
     } else 0
   }
 
   // send the result of an operation (array blocks) to another node
-  def send_data ( rank: Int, data: Any, oper_id: OprID ) {
+  def send_data ( rank: Int, data: Any, oper_id: OprID, tag: Int = 0 ) {
+    assert(data != null)
     // serialize data into a byte array
     val bs = new ByteArrayOutputStream(max_buffer_size)
     val os = new ObjectOutputStream(bs)
     try {
       os.writeInt(oper_id)
+      os.writeByte(tag)
       os.writeObject(data)
       os.close()
     } catch { case ex: IOException
@@ -137,7 +171,7 @@ object Executor {
       println("    sending "+(ba.length+4)+" bytes from "+my_master_rank
               +" to "+rank+" (opr "+oper_id+")")
     try {
-      master_comm.send(bb,ba.length+4,BYTE,rank,my_master_rank)
+      master_comm.send(bb,ba.length+4,BYTE,rank,tag)
     } catch { case ex: MPIException
                 => mpi_error(ex) }
   }
@@ -155,6 +189,7 @@ object Executor {
     val bs = new ByteArrayInputStream(bb,0,len)
     val is = new ObjectInputStream(bs)
     val opr_id = is.readInt()
+    val tag = is.readByte()
     val data = try { is.readObject()
                    } catch { case ex: IOException
                                => serialization_error(ex); null }
@@ -163,6 +198,7 @@ object Executor {
               +" to "+my_master_rank+" (opr "+opr_id+")")
     is.close()
     Runtime.operations(opr_id).cached = data
+    Runtime.operations(opr_id).completed = true
     data
   }
 
@@ -183,7 +219,7 @@ object Executor {
           x match {
             case LoadOpr(_,b)
               if x.node != 0
-              => send_data(x.node,Runtime.loadBlocks(b),opr_id)
+              => send_data(x.node,Runtime.loadBlocks(b),opr_id,0)
             case _ => ;
           }
         }
@@ -249,7 +285,7 @@ object Executor {
     try {
       val b = (ready_queue.isEmpty
                && exit_points.forall{ x => val opr = Runtime.operations(x)
-                                           opr.node != my_master_rank || opr.cached != null })
+                                           opr.node != my_master_rank || opr.completed })
       val in = Array[Byte](if (b) 0 else 1)
       val ret = Array[Byte](0)
       master_comm.allReduce(in,ret,1,BYTE,LOR)
@@ -302,7 +338,8 @@ object Communication {
         num_of_masters = master_comm.getSize()
         val available_threads = System.getenv("OMPI_COMM_WORLD_LOCAL_SIZE")
         println("Using master "+my_master_rank+": "+getProcessorName()+"/"+my_world_rank
-                +" with "+available_threads+" threads")
+                +" with "+available_threads+" threads and "
+                +(java.lang.Runtime.getRuntime.totalMemory()/1024/1024/1024)+" GBs")
       }
     } catch { case ex: MPIException
                 => System.err.println("MPI error: "+ex.getMessage())

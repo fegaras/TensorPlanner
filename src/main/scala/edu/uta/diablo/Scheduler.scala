@@ -30,16 +30,18 @@ object Scheduler {
 
   // Operation tree (pilot plan)
   @SerialVersionUID(123L)
-  sealed abstract class Opr ( var node: WorkerID = -1,     // worker node
-                              var size: Int = -1,           // num of blocks in output
-                              var static_blevel: Int = -1, // static b-level (bottom level)
+  sealed abstract class Opr ( var node: WorkerID = -1,        // worker node
+                              var size: Int = -1,             // num of blocks in output
+                              var static_blevel: Int = -1,    // static b-level (bottom level)
+                              var completed: Boolean = false, // true when computed
                               @transient
-                              var cached: Any = null,      // cached result block(s)
+                              var cached: Any = null,         // cached result block(s)
                               var retained_nodes: List[OprID] = Nil,
                               var retained_count: Int = 0,
-                              var visited: Boolean = false,// used in DFS traversal
+                              var visited: Boolean = false,   // used in DFS traversal
                               var consumers: List[OprID] = Nil,
-                              var count: Int = 0 )         // = number of local consumers
+                              var count: Int = 0,              // = number of local consumers
+                              var reduced_count: Int = 0 )     // # of reduced inputs so far
                   extends Serializable
   case class LoadOpr ( index: Any, block: BlockID ) extends Opr
   case class TupleOpr ( x: OprID, y: OprID ) extends Opr
@@ -71,7 +73,7 @@ object Scheduler {
     for ( opr_id <- 0 until operations.length ) {
       val opr = operations(opr_id)
       println(""+opr_id+")  node="+opr.node+"  size="+opr.size+"  blevel="+opr.static_blevel
-              +"   consumers="+opr.consumers+"   retained = "+opr.retained_nodes+"  "+opr)
+              +"   consumers="+opr.consumers+"   "+opr)
     }
   }
 

@@ -61,15 +61,26 @@ object Runtime {
     if (isMaster()) {
       broadcast_plan()
       // initial count is the number of local consumers
-      for ( x <- operations )
+      for ( x <- operations ) {
         x.count = x.consumers.filter( c => operations(c).node == my_master_rank ).length
+        x match {
+          case r@ReduceOpr(s,op)   // used for partial reduction
+            => r.reduced_count = s.filter( c => operations(c).node == my_master_rank ).length
+               if (x.node == my_master_rank)
+                 r.reduced_count += s.filter( c => operations(c).node != my_master_rank )
+                                     .map(operations(_).node).distinct.length
+          case _ => ;
+        }
+      }
     }
   }
 
   def cache_data ( opr: Opr, data: Any ): Any = {
-    stats.cached_blocks += 1
+    if (opr.cached == null)
+      stats.cached_blocks += 1
     stats.max_cached_blocks = Math.max(stats.max_cached_blocks,stats.cached_blocks)
     opr.cached = data
+    opr.completed = true
     data
   }
 
@@ -82,28 +93,31 @@ object Runtime {
           => cache_data(opr,loadBlocks(b))
         case ApplyOpr(x,fid)
           => val f = functions(fid).asInstanceOf[Any=>List[Any]]
-             assert(operations(x).cached != null)
+             assert(operations(x).completed)
              stats.apply_operations += 1
              cache_data(opr,f(operations(x).cached).head)
-        case opr@TupleOpr(x,y)
-          => def f ( lg: Opr ): (Any,Any)
-               = if (lg.cached != null)
-                   lg.cached.asInstanceOf[(Any,Any)]
-                 else lg match {
+        case TupleOpr(x,y)
+          => def f ( lg_id: OprID ): (Any,Any) = {
+                val lg = operations(lg_id)
+                if (lg.completed) {
+                  assert(lg.cached != null)
+                  lg.cached.asInstanceOf[(Any,Any)]
+                } else lg match {
                     case TupleOpr(x,y)
-                      => val gx@(iv,vx) = f(operations(x))
-                         val gy@(_,vy) = f(operations(y))
+                      => val gx@(iv,vx) = f(x)
+                         val gy@(_,vy) = f(y)
                          val xx = if (operations(x).isInstanceOf[TupleOpr]) vx else gx
                          val yy = if (operations(y).isInstanceOf[TupleOpr]) vy else gy
                          val data = (iv,(xx,yy))
                          cache_data(lg,data)
                          data
-                    case _ => assert(lg.cached != null)
+                    case _ => assert(lg.completed)
                               lg.cached.asInstanceOf[(Any,Any)]
-                 }
-             f(opr)
+                }
+             }
+             f(opr_id)
         case ReduceOpr(s,fid)
-          => val sv = s.map{ x => assert(operations(x).cached != null)
+          => val sv = s.map{ x => assert(operations(x).completed)
                                   operations(x).cached.asInstanceOf[(Any,Any)] }
              val op = functions(fid).asInstanceOf[((Any,Any))=>Any]
              stats.reduce_operations += 1
@@ -114,39 +128,75 @@ object Runtime {
     res
   }
 
+  // garbage-collect the opr block
+  def gc ( opr_id: OprID ) {
+    val opr = operations(opr_id)
+    if (opr.cached != null) {
+      if (trace)
+        println("    discard the cached block of "+opr_id+" at node "+my_master_rank)
+      stats.cached_blocks -= 1
+      opr.completed = false
+      opr.cached = null   // make the cached block available to the garbage collector
+    }
+  }
+
+  // after opr_id is finished, check if we can release the cache of its children
+  def check_caches ( opr_id: OprID ) {
+    val e = operations(opr_id)
+    for ( c <- children(e) ) {
+      val copr = operations(c)
+      copr.count -= 1
+      if (copr.count <= 0)
+        gc(c)
+    }
+  }
+
+  // after opr_id is finished, check its consumers to see if anyone is ready to compute
   def enqueue_ready_operations ( opr_id: OprID ) {
     val opr = operations(opr_id)
     var nodes_to_send_data: List[Int] = Nil
     for ( c <- opr.consumers ) {
       val copr = operations(c)
-      if (opr.node == my_master_rank && copr.node != my_master_rank) {
-        if (!nodes_to_send_data.contains(copr.node))
-          nodes_to_send_data = copr.node::nodes_to_send_data
-      } else if (copr.node == my_master_rank
-                 && copr.cached == null
-                 && children(copr).map(operations(_)).forall(_.cached != null)
-                 && !ready_queue.contains(c))
-               this.synchronized { ready_queue.offer(c) }
-    }
-    for ( n <- nodes_to_send_data )
-      send_data(n,opr.cached,opr_id)
-  }
-
-  // after the operation is computed, check if we can release the cache of its children
-  def check_caches ( opr_id: OprID ) {
-    val e = operations(opr_id)
-    for ( c <- children(e) ) {
-      val copr = operations(c)
-      if (copr.node == e.node) {
-        copr.count -= 1
-        if (copr.count == 0) {
-          if (false && trace)
-            println("    discard the cached block of "+c+" at node "+my_master_rank)
-          stats.cached_blocks -= 1
-          copr.cached = null   // garbage-collect the c block
-        }
+      copr match {
+        case ReduceOpr(s,fid)  // partial reduce
+          => val op = functions(fid).asInstanceOf[((Any,Any))=>Any]
+             // partial reduce opr inside the copr ReduceOpr
+             if (copr.cached == null) {
+               stats.cached_blocks += 1
+               copr.cached = opr.cached
+             } else { val x = copr.cached.asInstanceOf[(Any,Any)]
+                      val y = opr.cached.asInstanceOf[(Any,Any)]
+                      copr.cached = (x._1,op((x._2,y._2)))
+                    }
+             copr.reduced_count -= 1
+             if (copr.reduced_count == 0) {
+               if (copr.node == my_master_rank) {
+                 // completed ReduceOpr
+                 stats.reduce_operations += 1
+                 copr.completed = true
+                 enqueue_ready_operations(c)
+               } else {
+                 // completed local reduce
+                 send_data(copr.node,copr.cached,c,1)
+                 gc(opr_id)
+               }
+             }
+             check_caches(c)
+        case _
+          => if (opr.node == my_master_rank && copr.node != my_master_rank) {
+               if (!nodes_to_send_data.contains(copr.node))
+                 nodes_to_send_data = copr.node::nodes_to_send_data
+             } else if (copr.node == my_master_rank
+                        && !copr.completed
+                        && children(copr).map(operations(_)).forall(_.completed)
+                        && !ready_queue.contains(c))
+                   this.synchronized { ready_queue.offer(c) }
       }
     }
+    for ( n <- nodes_to_send_data )
+      send_data(n,opr.cached,opr_id,0)
+    if (opr.node == my_master_rank && opr.count <= 0 && !exit_points.contains(opr_id))
+      gc(opr_id)
   }
 
   class ReceiverThread extends Thread {
@@ -211,6 +261,10 @@ object Runtime {
           }
         }
         barrier()
+        if (trace)
+          println("Cached blocks at "+my_master_rank+": "
+                  +(0 until operations.length).filter(x => operations(x).cached != null).toList
+                  .map(x => (x,operations(x).completed,operations(x).count)))
         plan
       } else plan
 
@@ -224,12 +278,11 @@ object Runtime {
         } else exit_points.foreach {
             opr_id => val opr = operations(opr_id)
                       if (opr.node == my_master_rank)
-                        send_data(0,opr.cached,opr_id)
+                        send_data(0,opr.cached,opr_id,2)
           }
         if (isCoordinator()) {
-          while (exit_points.filter {
-                        opr_id => operations(opr_id).cached == null }.length > 0)
-              {}
+          while (exit_points.exists{opr_id => !operations(opr_id).completed })
+              Thread.sleep(100)
           receiver.stop()
         }
         barrier()
@@ -265,17 +318,9 @@ object inMem {
 
   def eval ( id: OprID, tabs: Int ): Any = {
     val e = operations(id)
-    if (e.cached != null) {
+    if (e.completed) {
       // retrieve result block(s) from cache
-      val res = e.cached
-      e.count -= 1
-      if (e.count <= 0) {
-        if (trace)
-          println(" "*tabs*3+"* "+"discard the cached value of "+id)
-        stats.cached_blocks -= 1
-        e.cached = null
-      }
-      return res
+      return e.cached
     }
     if (trace)
       println(" "*3*tabs+"*** "+tabs+": "+id+"/"+e)
@@ -306,14 +351,8 @@ object inMem {
       }
     if (trace)
       println(" "*3*tabs+"*-> "+tabs+": "+res)   // pe(res)
-    e.count -= 1
-    if (e.count > 0) {
-      e.cached = res
-      if (trace)
-        println(" "*tabs*3+"* "+"cache the value of "+id)
-      stats.cached_blocks += 1
-      stats.max_cached_blocks = Math.max(stats.max_cached_blocks,stats.cached_blocks)
-    }
+    e.cached = res
+    e.completed = true
     res
   }
 
@@ -326,7 +365,6 @@ object inMem {
              val res = s.map{ case (i,(ds,ss,lg))
                                 => eval(lg,0).asInstanceOf[(I,Any)] }
              println("Number of nodes: "+operations.length)
-             stats.print()
              (dp,sp,res)
       }
 }
