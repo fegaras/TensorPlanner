@@ -15,20 +15,19 @@
  */
 package edu.uta.diablo
 
+import PlanGenerator._
 import Scheduler._
 import Executor._
 import Communication._
 import scala.collection.mutable.ArrayBuffer
-import scala.annotation.tailrec
 
 
 object Runtime {
-  val trace = true
   var operations: Array[Opr] = _
   var loadBlocks: Array[Any] = _
   var exit_points: List[Int] = Nil
 
-  // visit each operation only once
+  // depth-first-search: visit each operation only once starting from s
   def DFS ( s: List[OprID], f: OprID => Unit ) {
     def dfs ( c: OprID ) {
       val opr = operations(c)
@@ -55,17 +54,17 @@ object Runtime {
   def schedule[I,T,S] ( e: Plan[I,T,S] ) {
     if (isCoordinator()) {
       Scheduler.schedule(e)
-      operations = Scheduler.operations.toArray
-      loadBlocks = Scheduler.loadBlocks.toArray
+      operations = PlanGenerator.operations.toArray
+      loadBlocks = PlanGenerator.loadBlocks.toArray
     }
     if (isMaster()) {
       broadcast_plan()
-      // initial count is the number of local consumers
       for ( x <- operations ) {
-        x.count = x.consumers.filter( c => operations(c).node == my_master_rank ).length
+        // initial count is the number of local consumers
+        x.count = x.consumers.count(c => operations(c).node == my_master_rank)
         x match {
           case r@ReduceOpr(s,op)   // used for partial reduction
-            => r.reduced_count = s.filter( c => operations(c).node == my_master_rank ).length
+            => r.reduced_count = s.count(c => operations(c).node == my_master_rank)
                if (x.node == my_master_rank)
                  r.reduced_count += s.filter( c => operations(c).node != my_master_rank )
                                      .map(operations(_).node).distinct.length
@@ -76,9 +75,10 @@ object Runtime {
   }
 
   def cache_data ( opr: Opr, data: Any ): Any = {
-    if (opr.cached == null)
+    if (opr.cached == null) {
       stats.cached_blocks += 1
-    stats.max_cached_blocks = Math.max(stats.max_cached_blocks,stats.cached_blocks)
+      stats.max_cached_blocks = Math.max(stats.max_cached_blocks,stats.cached_blocks)
+    }
     opr.cached = data
     opr.completed = true
     data
@@ -86,21 +86,22 @@ object Runtime {
 
   def compute ( opr_id: OprID ): Any = {
     val opr = operations(opr_id)
-    if (trace)
-      println("*** computing operation "+opr_id+":"+opr+" on node "+my_master_rank)
+    info("*** computing operation "+opr_id+":"+opr+" on node "+my_master_rank)
     val res = opr match {
         case LoadOpr(_,b)
           => cache_data(opr,loadBlocks(b))
         case ApplyOpr(x,fid)
           => val f = functions(fid).asInstanceOf[Any=>List[Any]]
-             assert(operations(x).completed)
+             if (!operations(x).completed)
+               error("missing input in Apply: "+opr_id+" at "+my_master_rank)
              stats.apply_operations += 1
              cache_data(opr,f(operations(x).cached).head)
         case TupleOpr(x,y)
           => def f ( lg_id: OprID ): (Any,Any) = {
                 val lg = operations(lg_id)
                 if (lg.completed) {
-                  assert(lg.cached != null)
+                  if (lg.cached == null)
+                    error("missing input: "+lg_id+" at "+my_master_rank)
                   lg.cached.asInstanceOf[(Any,Any)]
                 } else lg match {
                     case TupleOpr(x,y)
@@ -111,20 +112,21 @@ object Runtime {
                          val data = (iv,(xx,yy))
                          cache_data(lg,data)
                          data
-                    case _ => assert(lg.completed)
+                    case _ => if (!lg.completed)
+                                error("missing input in Load: "+lg_id+" at "+my_master_rank)
                               lg.cached.asInstanceOf[(Any,Any)]
                 }
              }
              f(opr_id)
         case ReduceOpr(s,fid)
-          => val sv = s.map{ x => assert(operations(x).completed)
+          => val sv = s.map{ x => if (!operations(x).completed)
+                                    error("missing input in Reduce: "+opr_id+" at "+my_master_rank)
                                   operations(x).cached.asInstanceOf[(Any,Any)] }
              val op = functions(fid).asInstanceOf[((Any,Any))=>Any]
              stats.reduce_operations += 1
              cache_data(opr,(sv.head._1,sv.map(_._2).reduce{ (x:Any,y:Any) => op((x,y)) }))
       }
-    if (trace)
-      println("*-> result of operation "+opr_id+":"+opr+" on node "+my_master_rank+" is "+res)
+    info("*-> result of operation "+opr_id+":"+opr+" on node "+my_master_rank+" is "+res)
     res
   }
 
@@ -132,8 +134,7 @@ object Runtime {
   def gc ( opr_id: OprID ) {
     val opr = operations(opr_id)
     if (opr.cached != null) {
-      if (trace)
-        println("    discard the cached block of "+opr_id+" at node "+my_master_rank)
+      info("    discard the cached block of "+opr_id+" at node "+my_master_rank)
       stats.cached_blocks -= 1
       opr.completed = false
       opr.cached = null   // make the cached block available to the garbage collector
@@ -151,10 +152,19 @@ object Runtime {
     }
   }
 
-  // after opr_id is finished, check its consumers to see if anyone is ready to compute
+  // After opr is completed, check its consumers to see if anyone is ready to enqueue
   def enqueue_ready_operations ( opr_id: OprID ) {
     val opr = operations(opr_id)
-    var nodes_to_send_data: List[Int] = Nil
+    if (opr.node == my_master_rank) {
+      // send the opr cached result to the non-local consumers (must be done first)
+      val nodes_to_send_data: List[Int]
+          = opr.consumers.map(operations(_)).filter {
+                copr => (copr.node != my_master_rank
+                         && !copr.isInstanceOf[ReduceOpr])
+            }.map(_.node).distinct
+      for ( n <- nodes_to_send_data )
+        send_data(n,opr.cached,opr_id,0)
+    }
     for ( c <- opr.consumers ) {
       val copr = operations(c)
       copr match {
@@ -163,6 +173,7 @@ object Runtime {
              // partial reduce opr inside the copr ReduceOpr
              if (copr.cached == null) {
                stats.cached_blocks += 1
+               stats.max_cached_blocks = Math.max(stats.max_cached_blocks,stats.cached_blocks)
                copr.cached = opr.cached
              } else { val x = copr.cached.asInstanceOf[(Any,Any)]
                       val y = opr.cached.asInstanceOf[(Any,Any)]
@@ -172,31 +183,28 @@ object Runtime {
              if (copr.reduced_count == 0) {
                if (copr.node == my_master_rank) {
                  // completed ReduceOpr
+                 info("    completed reduce of opr "+opr_id+" at "+my_master_rank)
                  stats.reduce_operations += 1
                  copr.completed = true
                  enqueue_ready_operations(c)
                } else {
-                 // completed local reduce
+                 // completed local reduce => send it to the reduce owner
+                 info("    sending partial reduce result of opr "+opr_id+" from "
+                      +my_master_rank+" to "+copr.node)
                  send_data(copr.node,copr.cached,c,1)
                  gc(opr_id)
                }
              }
              check_caches(c)
         case _
-          => if (opr.node == my_master_rank && copr.node != my_master_rank) {
-               if (!nodes_to_send_data.contains(copr.node))
-                 nodes_to_send_data = copr.node::nodes_to_send_data
-             } else if (copr.node == my_master_rank
-                        && !copr.completed
-                        && children(copr).map(operations(_)).forall(_.completed)
-                        && !ready_queue.contains(c))
-                   this.synchronized { ready_queue.offer(c) }
+          => // enqueue the local consumers that are ready
+             if (copr.node == my_master_rank
+                 && !copr.completed
+                 && children(copr).map(operations(_)).forall(_.completed)
+                 && !ready_queue.contains(c))
+               this.synchronized { ready_queue.offer(c) }
       }
     }
-    for ( n <- nodes_to_send_data )
-      send_data(n,opr.cached,opr_id,0)
-    if (opr.node == my_master_rank && opr.count <= 0 && !exit_points.contains(opr_id))
-      gc(opr_id)
   }
 
   class ReceiverThread extends Thread {
@@ -219,7 +227,8 @@ object Runtime {
     val receiver = new ReceiverThread()
     receiver.start()
     while (!exit) {
-      count = (count+1)%100   // check for exit every 100 iterations
+      // check for exit every 100 iterations
+      count = (count+1)%100
       if (count == 0)
         exit = exit_poll()
       if (!ready_queue.isEmpty) {
@@ -245,26 +254,27 @@ object Runtime {
   def eval[I,T,S] ( plan: Plan[I,T,S] ): Plan[I,T,S]
     = if (isMaster()) {
         exit_points = broadcast_exit_points(plan)
-        if (trace && isCoordinator())
-          println("Exit points: "+exit_points)
+        if (isCoordinator())
+          info("Exit points: "+exit_points)
         ready_queue.clear()
+        stats.clear()
         for ( x <- entry_points(exit_points) )
           ready_queue.offer(x)
-        if (trace)
-          println("Queue on "+my_master_rank+": "+ready_queue)
+        info("Queue on "+my_master_rank+": "+ready_queue)
+        stats.cached_blocks = ready_queue.size()
+        stats.max_cached_blocks = stats.cached_blocks
         work()
         if (trace) {
           val stats = collect_statistics()
           if (isCoordinator()) {
-            println("Number of operations: "+operations.length)
+            info("Number of operations: "+operations.length)
             stats.print()
           }
         }
         barrier()
-        if (trace)
-          println("Cached blocks at "+my_master_rank+": "
-                  +(0 until operations.length).filter(x => operations(x).cached != null).toList
-                  .map(x => (x,operations(x).completed,operations(x).count)))
+        info("Cached blocks at "+my_master_rank+": "
+             +operations.indices.filter(x => operations(x).cached != null).toList
+             .map(x => (x,operations(x).completed,operations(x).count)))
         plan
       } else plan
 
@@ -322,8 +332,7 @@ object inMem {
       // retrieve result block(s) from cache
       return e.cached
     }
-    if (trace)
-      println(" "*3*tabs+"*** "+tabs+": "+id+"/"+e)
+    info(" "*3*tabs+"*** "+tabs+": "+id+"/"+e)
     val res = e match {
         case LoadOpr(_,b)
           => loadBlocks(b)
@@ -349,8 +358,7 @@ object inMem {
              stats.reduce_operations += 1
              (sv.head._1,sv.map(_._2).reduce{ (x:Any,y:Any) => op((x,y)) })
       }
-    if (trace)
-      println(" "*3*tabs+"*-> "+tabs+": "+res)   // pe(res)
+    info(" "*3*tabs+"*-> "+tabs+": "+res)   // pe(res)
     e.cached = res
     e.completed = true
     res
@@ -359,12 +367,12 @@ object inMem {
   def eval[I,T,S] ( e: Plan[I,T,S] ): (T,S,List[(I,Any)])
     = e match {
         case (dp,sp,s)
-          => operations = Scheduler.operations.toArray
+          => operations = PlanGenerator.operations.toArray
              stats.clear()
              operations.foreach(x => x.count = x.consumers.length)
              val res = s.map{ case (i,(ds,ss,lg))
                                 => eval(lg,0).asInstanceOf[(I,Any)] }
-             println("Number of nodes: "+operations.length)
+             info("Number of nodes: "+operations.length)
              (dp,sp,res)
       }
 }

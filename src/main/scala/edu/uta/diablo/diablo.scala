@@ -153,11 +153,11 @@ package object diablo extends diablo.ArrayFunctions {
       Typechecker.clean(to)
       Typechecker.typecheck(to)
       val pc = if (parallel) ComprehensionTranslator.parallelize(to) else to
-      val pp = Scheduler.makePlanExpr(pc)
+      val pp = PlanGenerator.makePlanExpr(pc)
       if (trace) println("Pilot plan:\n"+Pretty.print(pp))
       val ppp = opt(ComprehensionTranslator.translate(pp,Nil))
       if (trace) println("Optimized pilot plan:\n"+Pretty.print(ppp))
-      val fs = diablo.Assign(Var("functions"),Seq(List(Call("Array",Scheduler.functions.toList))))
+      val fs = diablo.Assign(Var("functions"),Seq(List(Call("Array",PlanGenerator.functions.toList))))
       val ppf = ppp match {
                   case diablo.Block(ec:+ret)
                     => diablo.Block(ec++List(fs,ret))
@@ -182,7 +182,7 @@ package object diablo extends diablo.ArrayFunctions {
   /** translate an array comprehension to Scala code */
   def q ( query: String ): Any = macro q_impl
 
-  def parami_impl( c: whitebox.Context )(x: c.Expr[Int], b: c.Expr[Int] ): c.Expr[Unit] = {
+  def parami_impl( c: whitebox.Context )( x: c.Expr[Int], b: c.Expr[Int] ): c.Expr[Unit] = {
     import c.universe._
     val Literal(Constant(bv:Int)) = b.tree
     val s = x.tree.toString.split('.').last
@@ -203,7 +203,9 @@ package object diablo extends diablo.ArrayFunctions {
     val Literal(Constant(bv:Boolean)) = b.tree
     val s = x.tree.toString.split('.').last 
     s match {
-       case "trace" => trace = bv
+       case "trace"
+        => trace = bv
+           PlanGenerator.trace = bv
        case "groupByJoin" => groupByJoin = bv
        case "parallel" => parallel = bv
        case "mapPreserve" => mapPreserve = bv

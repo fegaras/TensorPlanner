@@ -20,7 +20,7 @@ import scala.collection.immutable.{Range=>SRange}
 import scala.reflect.ClassTag
 import org.apache.spark.rdd.RDD
 import scala.collection.parallel.immutable.ParRange
-import Scheduler._
+import PlanGenerator._
 
 // add for Scala 2.13
 //import scala.collection.parallel.CollectionConverters._

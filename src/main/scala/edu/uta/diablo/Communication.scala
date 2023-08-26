@@ -15,7 +15,7 @@
  */
 package edu.uta.diablo
 
-import Scheduler.{operations=>_,_}
+import PlanGenerator.{operations=>_,_}
 import mpi._
 import mpi.MPI._
 import java.nio.ByteBuffer
@@ -48,35 +48,40 @@ class Statistics (
 @transient
 // MPI communicator using openMPI (one executor per node)
 object Executor {
-  import Communication._
+  import Communication.my_master_rank
   // the buffer must fit few blocks (one block of doubles is 8MBs)
   val max_buffer_size = 100000000
-  val buffer = newByteBuffer(max_buffer_size)
+  val buffer: ByteBuffer = newByteBuffer(max_buffer_size)
   // operations ready to be executed
   var ready_queue = new ConcurrentLinkedQueue[Int]()
-  var receive_request: Request = null
+  var receive_request: Request = _
   val stats: Statistics = new Statistics()
   var exit_points: List[Int] = Nil
-  val comm = MPI.COMM_WORLD
+  val comm: Intracomm = MPI.COMM_WORLD
   var master_comm: mpi.Comm = comm
 
   def mpi_error ( ex: MPIException ) {
-    System.err.println("MPI error: "+ex.getMessage())
-    System.err.println("  Error class: "+ex.getErrorClass())
+    System.err.println("MPI error: "+ex.getMessage)
+    System.err.println("  Error class: "+ex.getErrorClass)
     ex.printStackTrace()
     comm.abort(-1)
   }
 
   def serialization_error ( ex: IOException ) {
-    System.err.println("Serialization error: "+ex.getMessage())
+    System.err.println("Serialization error: "+ex.getMessage)
     ex.printStackTrace()
     comm.abort(-1)
   }
 
   def comm_error ( status: Status ) {
     val node = status.getSource
-    System.err.println("*** "+status.getError())
+    System.err.println("*** "+status.getError)
     // TODO: needs recovery instead of abort
+    comm.abort(-1)
+  }
+
+  def error ( msg: String ) {
+    System.err.print("*** "+msg+"\n")
     comm.abort(-1)
   }
 
@@ -102,9 +107,6 @@ object Executor {
       val data = try { is.readObject()
                      } catch { case ex: IOException
                                  => serialization_error(ex); null }
-      if (trace)
-        println("    received "+(len+4)+" bytes from "+Runtime.operations(opr_id).node
-                +" to "+my_master_rank+" (opr "+opr_id+")")
       is.close()
       try {
         receive_request.free()
@@ -115,22 +117,22 @@ object Executor {
                   => mpi_error(ex) }
       val opr = Runtime.operations(opr_id)
       if (tag == 0) {
-        if (opr.cached == null)
-          stats.cached_blocks += 1
-        opr.cached = data
-        opr.completed = true
+        info("    received "+(len+4)+" bytes at "+my_master_rank+" (opr "+opr_id+")")
+        Runtime.cache_data(opr,data)
         Runtime.enqueue_ready_operations(opr_id)
-        Runtime.check_caches(opr_id)
       } else if (tag == 2) {
-        opr.cached = data
-        opr.completed = true
+        info("    received "+(len+4)+" bytes at "+my_master_rank)
+        Runtime.cache_data(opr,data)
       } else if (tag == 1) {
         opr match {
           case ReduceOpr(s,fid)  // partial reduce
-            => val op = functions(fid).asInstanceOf[((Any,Any))=>Any]
-               // partial reduce copr ReduceOpr
+            => // partial reduce copr ReduceOpr
+               info("    received partial reduce result of "+(len+4)+" bytes at "
+                    +my_master_rank+" (opr "+opr_id+")")
+               val op = functions(fid).asInstanceOf[((Any,Any))=>Any]
                if (opr.cached == null) {
                  stats.cached_blocks += 1
+                 stats.max_cached_blocks = Math.max(stats.max_cached_blocks,stats.cached_blocks)
                  opr.cached = data
                } else { val x = opr.cached.asInstanceOf[(Any,Any)]
                         val y = data.asInstanceOf[(Any,Any)]
@@ -139,10 +141,10 @@ object Executor {
                opr.reduced_count -= 1
                if (opr.reduced_count == 0) {
                  // completed ReduceOpr
+                 info("    completed reduce of opr "+opr_id+" at "+my_master_rank)
                  stats.reduce_operations += 1
                  opr.completed = true
                  Runtime.enqueue_ready_operations(opr_id)
-                 Runtime.check_caches(opr_id)
                }
           case _ => ;
         }
@@ -153,7 +155,8 @@ object Executor {
 
   // send the result of an operation (array blocks) to another node
   def send_data ( rank: Int, data: Any, oper_id: OprID, tag: Int = 0 ) {
-    assert(data != null)
+    if (data == null)
+      error("null data sent for "+oper_id+" to "+rank+" from "+my_master_rank)
     // serialize data into a byte array
     val bs = new ByteArrayOutputStream(max_buffer_size)
     val os = new ObjectOutputStream(bs)
@@ -164,12 +167,11 @@ object Executor {
       os.close()
     } catch { case ex: IOException
                 => serialization_error(ex) }
-    val ba = bs.toByteArray()
+    val ba = bs.toByteArray
     val bb = newByteBuffer(ba.length+4)
     bb.putInt(ba.length).put(ba)
-    if (trace)
-      println("    sending "+(ba.length+4)+" bytes from "+my_master_rank
-              +" to "+rank+" (opr "+oper_id+")")
+    info("    sending "+(ba.length+4)+" bytes from "+my_master_rank
+         +" to "+rank+" (opr "+oper_id+")")
     try {
       master_comm.send(bb,ba.length+4,BYTE,rank,tag)
     } catch { case ex: MPIException
@@ -193,9 +195,8 @@ object Executor {
     val data = try { is.readObject()
                    } catch { case ex: IOException
                                => serialization_error(ex); null }
-    if (trace)
-      println("    received "+(len+4)+" bytes from "+rank
-              +" to "+my_master_rank+" (opr "+opr_id+")")
+    info("    received "+(len+4)+" bytes at "+my_master_rank
+         +" from "+rank+" (opr "+opr_id+")")
     is.close()
     Runtime.operations(opr_id).cached = data
     Runtime.operations(opr_id).completed = true
@@ -211,10 +212,10 @@ object Executor {
         os.writeObject(Runtime.operations)
         os.writeObject(functions)
         os.close()
-        val a = bs.toByteArray()
+        val a = bs.toByteArray
         master_comm.bcast(Array(a.length),1,INT,0)
         master_comm.bcast(a,a.length,BYTE,0)
-        for ( opr_id <- 0 until Runtime.operations.length ) {
+        for ( opr_id <- Runtime.operations.indices ) {
           val x = Runtime.operations(opr_id)
           x match {
             case LoadOpr(_,b)
@@ -228,7 +229,7 @@ object Executor {
         master_comm.bcast(len,1,INT,0)
         val plan_buffer = Array.fill[Byte](len(0))(0)
         master_comm.bcast(plan_buffer,len(0),BYTE,0)
-        val bs = new ByteArrayInputStream(plan_buffer,0,plan_buffer.size)
+        val bs = new ByteArrayInputStream(plan_buffer,0,plan_buffer.length)
         val is = new ObjectInputStream(bs)
         val lb_len = is.readInt()
         Runtime.loadBlocks = Array.ofDim[Any](lb_len)
@@ -259,7 +260,7 @@ object Executor {
         os.writeObject(exit_points)
         os.flush()
         os.close()
-        val a = bs.toByteArray()
+        val a = bs.toByteArray
         master_comm.bcast(Array(a.length),1,INT,0)
         master_comm.bcast(a,a.length,BYTE,0)
       } else {
@@ -267,7 +268,7 @@ object Executor {
         master_comm.bcast(len,1,INT,0)
         val plan_buffer = Array.fill[Byte](len(0))(0)
         master_comm.bcast(plan_buffer,len(0),BYTE,0)
-        val bs = new ByteArrayInputStream(plan_buffer,0,plan_buffer.size)
+        val bs = new ByteArrayInputStream(plan_buffer,0,plan_buffer.length)
         val is = new ObjectInputStream(bs)
         exit_points = is.readObject().asInstanceOf[List[Int]]
         is.close()
@@ -298,11 +299,13 @@ object Executor {
     = try {
         val in = Array[Int](stats.apply_operations,
                             stats.reduce_operations,
-                            stats.cached_blocks,
-                            stats.max_cached_blocks)
-        val res = Array.fill[Int](in.size)(0)
-        master_comm.reduce(in,res,in.size,INT,SUM,0)
-        new Statistics(res(0),res(1),res(2),res(3))
+                            stats.cached_blocks)
+        val res = Array.fill[Int](in.length)(0)
+        master_comm.reduce(in,res,in.length,INT,SUM,0)
+        val max_in = Array(stats.max_cached_blocks)
+        val max = Array(0)
+        master_comm.reduce(max_in,max,1,INT,MAX,0)
+        new Statistics(res(0),res(1),res(2),max(0))
       } catch { case ex: MPIException
                   => mpi_error(ex); stats }
 }
@@ -314,6 +317,7 @@ object Communication {
   var i_am_master: Boolean = false
   var my_master_rank: Int = -1
   var num_of_masters: Int = 0
+  val num_of_executors_per_node: Int = 2 /* for testing only - must be 1 on cluster */
 
   def barrier () { master_comm.barrier() }
 
@@ -329,20 +333,21 @@ object Communication {
       InitThread(args,THREAD_FUNNELED)
       // don't abort on MPI errors
       //comm.setErrhandler(ERRORS_RETURN)
-      my_world_rank = comm.getRank()
-      i_am_master = (System.getenv("OMPI_COMM_WORLD_LOCAL_RANK") == "0")
+      my_world_rank = comm.getRank
+      //i_am_master = (System.getenv("OMPI_COMM_WORLD_LOCAL_RANK") == "0")
+      i_am_master = my_world_rank < num_of_executors_per_node  // for testing only
       // allow only masters to communicate via MPI
       master_comm = comm.split(if (isMaster()) 1 else UNDEFINED,my_world_rank)
       if (isMaster()) {
-        my_master_rank = master_comm.getRank()
-        num_of_masters = master_comm.getSize()
+        my_master_rank = master_comm.getRank
+        num_of_masters = master_comm.getSize
         val available_threads = System.getenv("OMPI_COMM_WORLD_LOCAL_SIZE")
-        println("Using master "+my_master_rank+": "+getProcessorName()+"/"+my_world_rank
+        info("Using master "+my_master_rank+": "+getProcessorName+"/"+my_world_rank
                 +" with "+available_threads+" threads and "
                 +(java.lang.Runtime.getRuntime.totalMemory()/1024/1024/1024)+" GBs")
       }
     } catch { case ex: MPIException
-                => System.err.println("MPI error: "+ex.getMessage())
+                => System.err.println("MPI error: "+ex.getMessage)
                    ex.printStackTrace()
                    comm.abort(-1)
             }
