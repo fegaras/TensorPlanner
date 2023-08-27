@@ -4,8 +4,12 @@ import mpi.MPI.wtime
 object Multiply {
   def main ( args: Array[String] ) {
 
-    //parami(block_dim_size,100)
+    parami(block_dim_size,100)
     param(asynchronous,true)
+    PlanGenerator.trace = true
+
+    // multiple executors per node (must be 1 for cluster)
+    Communication. num_of_executors_per_node = 2
 
     val N = args(0).toInt
     val M = args(1).toInt
@@ -41,13 +45,13 @@ object Multiply {
       """)
 
     var t = wtime()
-/*
-    if (isCoordinator()) {
+
+    if (false && isCoordinator()) {
       //validate
           (evalMem(plan)._3)
       println("in-memory time: %.3f secs".format(wtime()-t))
     }
-*/
+
     t = wtime()
     schedule(plan)
     if (isCoordinator())

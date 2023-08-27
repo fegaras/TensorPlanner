@@ -22,7 +22,7 @@ export OPENMPI_HOME=$SW/openmpi
 export PATH="$OPENMPI_HOME/bin:$SCALA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$OPENMPI_HOME/lib:$LD_LIBRARY_PATH"
 
-JARS=.:$DIABLO_HOME/lib/diablo.jar:$OPENMPI_HOME/lib/mpi.jar
+JARS=classes:$DIABLO_HOME/lib/diablo.jar:$OPENMPI_HOME/lib/mpi.jar
 for I in `ls $SPARK_HOME/jars/*.jar -I *unsafe*`; do
     JARS=$JARS:$I
 done
@@ -33,11 +33,11 @@ mkdir -p classes
 scala_files="Multiply.scala"
 for f in $scala_files; do
     echo compiling $f ...
-    scalac -d classes -cp classes:$JARS $f >/dev/null
+    scalac -d classes -cp $JARS $f >/dev/null
 done
 
 # number of cores per node
 export OMP_NUM_THREADS=128
 
 mpirun --mca btl_openib_allow_ib true --mca btl openib,tcp,self,vader --mca mpi_java_eager 100m \
-       scala -J-Xms16g -J-Xmx16g -classpath classes:$DIABLO_HOME/lib/diablo.jar:$OPENMPI_HOME/lib/mpi.jar Multiply 9456 9345
+       scala -J-Xms4g -J-Xmx4g -classpath classes:$DIABLO_HOME/lib/diablo.jar:$OPENMPI_HOME/lib/mpi.jar Multiply 7456 8345

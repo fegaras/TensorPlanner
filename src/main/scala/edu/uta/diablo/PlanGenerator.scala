@@ -23,7 +23,7 @@ import java.io.Serializable
 
 // Converts a diablo AST to an asynchronous plan
 object PlanGenerator {
-  var trace = true
+  var trace = false
 
   type OprID = Int
   type WorkerID = Int
@@ -47,8 +47,8 @@ object PlanGenerator {
                               var retained_count: Int = 0,
                               var visited: Boolean = false,   // used in DFS traversal
                               var consumers: List[OprID] = Nil,
-                              var count: Int = 0,              // = number of local consumers
-                              var reduced_count: Int = 0 )     // # of reduced inputs so far
+                              var count: Int = 0,             // = number of local consumers
+                              var reduced_count: Int = 0 )    // # of reduced inputs so far
                   extends Serializable
   case class LoadOpr ( index: Any, block: BlockID ) extends Opr
   case class TupleOpr ( x: OprID, y: OprID ) extends Opr

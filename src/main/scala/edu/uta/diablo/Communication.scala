@@ -19,10 +19,12 @@ import PlanGenerator.{operations=>_,_}
 import mpi._
 import mpi.MPI._
 import java.nio.ByteBuffer
-import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.Comparator
+import java.util.concurrent.PriorityBlockingQueue
 import java.io._
 
 
+@transient
 class Statistics (
       var apply_operations: Int = 0,
       var reduce_operations: Int = 0,
@@ -39,11 +41,23 @@ class Statistics (
   def print () {
     println("Number of apply operations: "+apply_operations)
     println("Number of reduce operations: "+reduce_operations)
-    println("Max num of cached blocks: "+max_cached_blocks)
+    println("Max num of cached blocks per node: "+max_cached_blocks)
     println("Final num of cached blocks: "+cached_blocks)
   }
 }
 
+@transient
+object operator_comparator extends Comparator[Int] {
+  def priority ( opr_id: Int ): Int
+    = Runtime.operations(opr_id) match {
+        case TupleOpr(_,_) => 4
+        case ReduceOpr(_,_) => 3
+        case LoadOpr(_,_) => 2
+        case _ => 1
+      }
+  override def compare ( x: Int, y: Int ): Int
+    = priority(x) - priority(y)
+}
 
 @transient
 // MPI communicator using openMPI (one executor per node)
@@ -53,7 +67,7 @@ object Executor {
   val max_buffer_size = 100000000
   val buffer: ByteBuffer = newByteBuffer(max_buffer_size)
   // operations ready to be executed
-  var ready_queue = new ConcurrentLinkedQueue[Int]()
+  var ready_queue = new PriorityBlockingQueue(1000,operator_comparator)
   var receive_request: Request = _
   val stats: Statistics = new Statistics()
   var exit_points: List[Int] = Nil
@@ -81,7 +95,7 @@ object Executor {
   }
 
   def error ( msg: String ) {
-    System.err.print("*** "+msg+"\n")
+    System.err.println("*** "+msg)
     comm.abort(-1)
   }
 
@@ -236,13 +250,14 @@ object Executor {
         Runtime.operations = is.readObject().asInstanceOf[Array[Opr]]
         functions = is.readObject().asInstanceOf[Array[Nothing=>Any]]
         is.close()
-        for ( x <- Runtime.operations )
+        for ( x <- Runtime.operations ) {
           x match {
             case LoadOpr(_,b)
               if x.node == my_master_rank
               => Runtime.loadBlocks(b) = receive_data(0)
             case _ => ;
           }
+        }
       }
       master_comm.barrier()
     } catch { case ex: MPIException
@@ -317,7 +332,7 @@ object Communication {
   var i_am_master: Boolean = false
   var my_master_rank: Int = -1
   var num_of_masters: Int = 0
-  val num_of_executors_per_node: Int = 2 /* for testing only - must be 1 on cluster */
+  var num_of_executors_per_node: Int = 1 /* must be 1 on cluster */
 
   def barrier () { master_comm.barrier() }
 
@@ -330,12 +345,14 @@ object Communication {
   def mpi_startup ( args: Array[String] ) {
     try {
       // Need one MPI thread per worker node (the Master)
-      InitThread(args,THREAD_FUNNELED)
+      //InitThread(args,THREAD_FUNNELED)
+      Init(args)
       // don't abort on MPI errors
       //comm.setErrhandler(ERRORS_RETURN)
       my_world_rank = comm.getRank
-      //i_am_master = (System.getenv("OMPI_COMM_WORLD_LOCAL_RANK") == "0")
-      i_am_master = my_world_rank < num_of_executors_per_node  // for testing only
+      if (num_of_executors_per_node == 1)
+        i_am_master = (System.getenv("OMPI_COMM_WORLD_LOCAL_RANK") == "0")
+      else i_am_master = (my_world_rank < num_of_executors_per_node)  // for testing only
       // allow only masters to communicate via MPI
       master_comm = comm.split(if (isMaster()) 1 else UNDEFINED,my_world_rank)
       if (isMaster()) {

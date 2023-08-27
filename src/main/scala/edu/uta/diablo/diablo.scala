@@ -203,9 +203,7 @@ package object diablo extends diablo.ArrayFunctions {
     val Literal(Constant(bv:Boolean)) = b.tree
     val s = x.tree.toString.split('.').last 
     s match {
-       case "trace"
-        => trace = bv
-           PlanGenerator.trace = bv
+       case "trace" => trace = bv
        case "groupByJoin" => groupByJoin = bv
        case "parallel" => parallel = bv
        case "mapPreserve" => mapPreserve = bv

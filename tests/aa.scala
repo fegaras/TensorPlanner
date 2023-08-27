@@ -5,6 +5,11 @@ object Test {
 
     parami(block_dim_size,10)
     param(asynchronous,true)
+    PlanGenerator.trace = true
+    //param(parallel,false)
+
+    // multiple executors per node (must be 1 for cluster)
+    Communication. num_of_executors_per_node = 2
 
     startup(args)
 
@@ -20,7 +25,7 @@ object Test {
 
       //tensor*(N)[ (i,*/a) | ((i,j),a) <- Az, group by i ];
 
-      //tensor*(N,M)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
+      tensor*(N,M)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
 
       //tensor*(N)(M)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
 
@@ -30,10 +35,12 @@ object Test {
 
       //tensor*(N,M)[ ((i,j),+/v) | ((i,k),a) <= Az, ((kk,l),b) <= Bz, ((ll,j),c) <- Cz, kk==k, ll==l, let v = a*b*c, group by (i,j) ];
 
+/*
       for i = 0, 20 do
          Az = tensor*(N,M)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
 
       Az
+*/
 
       """)
 

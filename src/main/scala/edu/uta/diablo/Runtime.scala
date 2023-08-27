@@ -19,9 +19,9 @@ import PlanGenerator._
 import Scheduler._
 import Executor._
 import Communication._
-import scala.collection.mutable.ArrayBuffer
 
 
+@transient
 object Runtime {
   var operations: Array[Opr] = _
   var loadBlocks: Array[Any] = _
@@ -60,6 +60,8 @@ object Runtime {
     if (isMaster()) {
       broadcast_plan()
       for ( x <- operations ) {
+        x.completed = false
+        x.cached = null
         // initial count is the number of local consumers
         x.count = x.consumers.count(c => operations(c).node == my_master_rank)
         x match {
@@ -242,11 +244,11 @@ object Runtime {
   }
 
   def entry_points ( s: List[OprID] ): List[OprID] = {
-    val b = ArrayBuffer[OprID]()
+    val b = scala.collection.mutable.ArrayBuffer[OprID]()
     DFS(s,
         c => if (operations(c).isInstanceOf[LoadOpr] && operations(c).node == my_master_rank)
-                if (!b.contains(c))
-                  b.append(c))
+               if (!b.contains(c))
+                 b.append(c))
     b.toList
   }
 
@@ -261,10 +263,8 @@ object Runtime {
         for ( x <- entry_points(exit_points) )
           ready_queue.offer(x)
         info("Queue on "+my_master_rank+": "+ready_queue)
-        stats.cached_blocks = ready_queue.size()
-        stats.max_cached_blocks = stats.cached_blocks
         work()
-        if (trace) {
+        if (PlanGenerator.trace) {
           val stats = collect_statistics()
           if (isCoordinator()) {
             info("Number of operations: "+operations.length)
@@ -272,9 +272,10 @@ object Runtime {
           }
         }
         barrier()
-        info("Cached blocks at "+my_master_rank+": "
-             +operations.indices.filter(x => operations(x).cached != null).toList
-             .map(x => (x,operations(x).completed,operations(x).count)))
+        if (PlanGenerator.trace) {
+          val cbs = operations.indices.filter(x => operations(x).cached != null)
+          info("Cached blocks at "+my_master_rank+": ("+cbs.length+") "+cbs)
+        }
         plan
       } else plan
 
@@ -291,7 +292,7 @@ object Runtime {
                         send_data(0,opr.cached,opr_id,2)
           }
         if (isCoordinator()) {
-          while (exit_points.exists{opr_id => !operations(opr_id).completed })
+          while (exit_points.exists{ opr_id => !operations(opr_id).completed })
               Thread.sleep(100)
           receiver.stop()
         }
