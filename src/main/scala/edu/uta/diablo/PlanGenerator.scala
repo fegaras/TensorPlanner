@@ -37,7 +37,8 @@ object PlanGenerator {
       val hh = now.get(Calendar.HOUR)
       val mm = now.get(Calendar.MINUTE)
       val ss = now.get(Calendar.SECOND)
-      printf("%02d:%02d:%02d:   %s\n",hh,mm,ss,s)
+      val ms = now.get(Calendar.SECOND)
+      printf("[%02d:%02d:%02d:%03d]   %s\n",hh,mm,ss,ms,s)
     }
   }
 

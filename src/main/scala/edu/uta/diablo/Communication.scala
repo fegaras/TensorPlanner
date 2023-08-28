@@ -50,10 +50,10 @@ class Statistics (
 object operator_comparator extends Comparator[Int] {
   def priority ( opr_id: Int ): Int
     = Runtime.operations(opr_id) match {
-        case TupleOpr(_,_) => 4
-        case ReduceOpr(_,_) => 3
-        case LoadOpr(_,_) => 2
-        case _ => 1
+        case ReduceOpr(_,_) => 1
+        case TupleOpr(_,_) => 2
+        case LoadOpr(_,_) => 3
+        case _ => 4
       }
   override def compare ( x: Int, y: Int ): Int
     = priority(x) - priority(y)

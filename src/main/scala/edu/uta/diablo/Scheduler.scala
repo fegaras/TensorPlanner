@@ -97,7 +97,7 @@ object Scheduler {
       opr.node = w
       work(w) += cpu_cost(opr) + communication_cost(opr,w)
       tasks(w) += 1
-      info("schedule opr "+c+" on node "+w+" (work = "+work(w)+" )")
+      info("schedule opr "+c+" on node "+w+" (work = "+work(w)+")")
       ready_pool -= c
       // add more ready nodes
       for { c <- opr.consumers } {
