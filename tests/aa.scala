@@ -9,7 +9,7 @@ object Test {
     //param(parallel,false)
 
     // multiple executors per node (must be 1 for cluster)
-    Communication. num_of_executors_per_node = 2
+    Communication.num_of_executors_per_node = 2
 
     startup(args)
 

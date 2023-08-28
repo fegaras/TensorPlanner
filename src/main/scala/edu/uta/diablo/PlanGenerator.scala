@@ -19,6 +19,7 @@ import AST._
 import Typechecker._
 import scala.collection.mutable.{ArrayBuffer,ListBuffer}
 import java.io.Serializable
+import java.util.Calendar
 
 
 // Converts a diablo AST to an asynchronous plan
@@ -31,8 +32,13 @@ object PlanGenerator {
   type BlockID = Int
 
   def info ( s: String ) {
-    if (trace)
-      print(s+"\n")
+    if (trace) {
+      val now = Calendar.getInstance()
+      val hh = now.get(Calendar.HOUR)
+      val mm = now.get(Calendar.MINUTE)
+      val ss = now.get(Calendar.SECOND)
+      printf("%02d:%02d:%02d:   %s\n",hh,mm,ss,s)
+    }
   }
 
   // Operation tree (pilot plan)

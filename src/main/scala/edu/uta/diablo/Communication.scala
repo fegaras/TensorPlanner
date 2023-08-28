@@ -39,10 +39,10 @@ class Statistics (
   }
 
   def print () {
-    println("Number of apply operations: "+apply_operations)
-    println("Number of reduce operations: "+reduce_operations)
-    println("Max num of cached blocks per node: "+max_cached_blocks)
-    println("Final num of cached blocks: "+cached_blocks)
+    info("Number of apply operations: "+apply_operations)
+    info("Number of reduce operations: "+reduce_operations)
+    info("Max num of cached blocks per node: "+max_cached_blocks)
+    info("Final num of cached blocks: "+cached_blocks)
   }
 }
 
@@ -345,8 +345,8 @@ object Communication {
   def mpi_startup ( args: Array[String] ) {
     try {
       // Need one MPI thread per worker node (the Master)
-      //InitThread(args,THREAD_FUNNELED)
-      Init(args)
+      InitThread(args,THREAD_FUNNELED)
+      //Init(args)
       // don't abort on MPI errors
       //comm.setErrhandler(ERRORS_RETURN)
       my_world_rank = comm.getRank

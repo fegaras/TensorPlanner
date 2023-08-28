@@ -8,4 +8,4 @@ export LD_LIBRARY_PATH="$MPI_HOME/lib/:$LD_LIBRARY_PATH"
 
 #mpirun --host localhost:16,milos:4 --use-hwthread-cpus scala -classpath classes:${DIABLO}/lib/diablo.jar:${MPI_HOME}/lib/mpi.jar -J-Xmx2g -J-Xms2g -J-Xss100m $*
 
-mpirun --use-hwthread-cpus scala -classpath classes:${DIABLO}/lib/diablo.jar:${MPI_HOME}/lib/mpi.jar -J-Xmx2g -J-Xms2g -J-Xss100m $*
+mpirun --use-hwthread-cpus scala -classpath classes:${DIABLO_HOME}/lib/diablo.jar:${MPI_HOME}/lib/mpi.jar -J-Xmx2g -J-Xms2g -J-Xss100m $*

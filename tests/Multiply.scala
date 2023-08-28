@@ -9,7 +9,7 @@ object Multiply {
     PlanGenerator.trace = true
 
     // multiple executors per node (must be 1 for cluster)
-    Communication. num_of_executors_per_node = 2
+    Communication.num_of_executors_per_node = 2
 
     val N = args(0).toInt
     val M = args(1).toInt
