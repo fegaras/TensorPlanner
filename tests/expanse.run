@@ -7,7 +7,7 @@
 #SBATCH --ntasks-per-node=128
 #SBATCH --mem=249325M
 #SBATCH --export=ALL
-#SBATCH --time=20    # time limit in minutes
+#SBATCH --time=30    # time limit in minutes
 
 module purge
 module load slurm cpu/0.15.4 gcc/7.5.0 openjdk
@@ -36,8 +36,10 @@ for f in $scala_files; do
     scalac -d classes -cp $JARS $f >/dev/null
 done
 
+ulimit -m unlimited
+
 # number of cores per node
 export OMP_NUM_THREADS=128
 
 mpirun --mca btl_openib_allow_ib true --mca btl openib,tcp,self,vader --mca mpi_java_eager 100m \
-       scala -J-Xms4g -J-Xmx4g -classpath classes:$DIABLO_HOME/lib/diablo.jar:$OPENMPI_HOME/lib/mpi.jar Multiply 7456 8345
+       scala -J-Xms32g -J-Xmx32g -classpath classes:$DIABLO_HOME/lib/diablo.jar:$OPENMPI_HOME/lib/mpi.jar Multiply 10456 10345
