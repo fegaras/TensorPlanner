@@ -4,7 +4,7 @@ import mpi.MPI.wtime
 object Multiply {
   def main ( args: Array[String] ) {
 
-    parami(block_dim_size,100)
+    //parami(block_dim_size,100)
     param(asynchronous,true)
     PlanGenerator.trace = true
 
@@ -13,6 +13,11 @@ object Multiply {
 
     val N = args(0).toInt
     val M = args(1).toInt
+
+    def pr ( x: (Any,Any) ) {
+      val z = x._2.asInstanceOf[(Any,Any,Array[Double])]
+      println(x+"   "+z._3.map(w => "%.1f".format(w)).toList)
+    }
 
     def validate ( e: List[((Int,Int),Any)] ) {
       val A = Array.tabulate[Double] (N*M) { i => (i/M * (i%M) * 1.0) }
@@ -58,12 +63,13 @@ object Multiply {
       println("schedule time: %.3f secs".format(wtime()-t))
 
     t = wtime()
-    val res = collect(eval(plan))
-    if (isCoordinator()) {
+    val res = eval(plan)
+    if (isCoordinator())
       println("eval time: %.3f secs".format(wtime()-t))
-      res.foreach(println)
-    }
-    //validate(res)
+    val s = collect(res)
+    if (isCoordinator())
+      s.foreach(println)   // s.foreach(pr)
+    //validate(s)
 
     end()
   }

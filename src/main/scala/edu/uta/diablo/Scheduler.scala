@@ -73,6 +73,15 @@ object Scheduler {
                                 0
                               else size(copr) }.sum
 
+  def entry_points ( s: List[OprID] ): List[OprID] = {
+    val b = scala.collection.mutable.ArrayBuffer[OprID]()
+    Runtime.DFS(s,
+        c => if (operations(c).isInstanceOf[LoadOpr])
+               if (!b.contains(c))
+                 b.append(c))
+    b.toList
+  }
+
   // assign every operation to an executor
   def schedule[I,T,S] ( e: Plan[I,T,S] ) {
     set_sizes()
@@ -80,8 +89,10 @@ object Scheduler {
     ready_pool = ListBuffer()
     work = 0.until(Communication.num_of_masters).map(w => 0).toArray
     tasks = 0.until(Communication.num_of_masters).map(w => 0).toArray
-    for ( op <- operations.indices
-          if operations(op).isInstanceOf[LoadOpr]
+    val ep = entry_points(e._3.map(x => x._2._3))
+    if (isCoordinator())
+      info("Entry points: "+ep)
+    for ( op <- ep
           if operations(op).node < 0
           if !ready_pool.contains(op) )
        ready_pool += op
@@ -94,10 +105,15 @@ object Scheduler {
                                        -opr.static_blevel ) }
       val opr = operations(c)
       // opr is allocated to worker w
-      opr.node = w
+      opr match {
+        case ReduceOpr(_,true,_)  // total aggregation
+          => opr.node = 0
+        case _ => opr.node = w
+      }
       work(w) += cpu_cost(opr) + communication_cost(opr,w)
       tasks(w) += 1
-      info("schedule opr "+c+" on node "+w+" (work = "+work(w)+")")
+      if (isCoordinator())
+        info("schedule opr "+c+" on node "+w+" (work = "+work(w)+")")
       ready_pool -= c
       // add more ready nodes
       for { c <- opr.consumers } {
@@ -108,7 +124,7 @@ object Scheduler {
           ready_pool += c
       }
     }
-    if (trace)
+    if (trace && isCoordinator())
       print_plan(e)
   }
 }

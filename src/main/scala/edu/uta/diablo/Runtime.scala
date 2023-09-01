@@ -40,7 +40,7 @@ object Runtime {
                dfs(y)
           case ApplyOpr(x,_)
             => dfs(x)
-          case ReduceOpr(s,_)
+          case ReduceOpr(s,_,_)
             => s.foreach(dfs)
           case _ => ;
         }
@@ -52,12 +52,15 @@ object Runtime {
   }
 
   def schedule[I,T,S] ( e: Plan[I,T,S] ) {
-    if (isCoordinator()) {
-      Scheduler.schedule(e)
+    if (isMaster()) {
+      if (receive_request != null) {
+        receive_request.cancel()
+        receive_request.free()
+        receive_request = null
+      }
       operations = PlanGenerator.operations.toArray
       loadBlocks = PlanGenerator.loadBlocks.toArray
-    }
-    if (isMaster()) {
+      Scheduler.schedule(e)
       broadcast_plan()
       for ( x <- operations ) {
         x.completed = false
@@ -65,7 +68,7 @@ object Runtime {
         // initial count is the number of local consumers
         x.count = x.consumers.count(c => operations(c).node == my_master_rank)
         x match {
-          case r@ReduceOpr(s,op)   // used for partial reduction
+          case r@ReduceOpr(s,_,op)   // used for partial reduction
             => r.reduced_count = s.count(c => operations(c).node == my_master_rank)
                if (x.node == my_master_rank)
                  r.reduced_count += s.filter( c => operations(c).node != my_master_rank )
@@ -120,13 +123,14 @@ object Runtime {
                 }
              }
              f(opr_id)
-        case ReduceOpr(s,fid)
+        case ReduceOpr(s,valuep,fid)
           => val sv = s.map{ x => if (!operations(x).completed)
                                     error("missing input in Reduce: "+opr_id+" at "+my_master_rank)
                                   operations(x).cached.asInstanceOf[(Any,Any)] }
              val op = functions(fid).asInstanceOf[((Any,Any))=>Any]
              stats.reduce_operations += 1
-             cache_data(opr,(sv.head._1,sv.map(_._2).reduce{ (x:Any,y:Any) => op((x,y)) }))
+             val in = if (valuep) sv else sv.map(_._2)
+             cache_data(opr,(sv.head._1,in.reduce{ (x:Any,y:Any) => op((x,y)) }))
       }
     info("*-> result of operation "+opr_id+":"+opr+" on node "+my_master_rank+" is "+res)
     res
@@ -162,6 +166,7 @@ object Runtime {
       val nodes_to_send_data: List[Int]
           = opr.consumers.map(operations(_)).filter {
                 copr => (copr.node != my_master_rank
+                         && copr.node >= 0
                          && !copr.isInstanceOf[ReduceOpr])
             }.map(_.node).distinct
       for ( n <- nodes_to_send_data )
@@ -169,15 +174,18 @@ object Runtime {
     }
     for ( c <- opr.consumers ) {
       val copr = operations(c)
+      if (copr.node >= 0)
       copr match {
-        case ReduceOpr(s,fid)  // partial reduce
+        case ReduceOpr(s,valuep,fid)  // partial reduce
           => val op = functions(fid).asInstanceOf[((Any,Any))=>Any]
              // partial reduce opr inside the copr ReduceOpr
              if (copr.cached == null) {
                stats.cached_blocks += 1
                stats.max_cached_blocks = Math.max(stats.max_cached_blocks,stats.cached_blocks)
                copr.cached = opr.cached
-             } else { val x = copr.cached.asInstanceOf[(Any,Any)]
+             } else if (valuep)
+                      copr.cached = op((copr.cached,opr.cached))
+               else { val x = copr.cached.asInstanceOf[(Any,Any)]
                       val y = opr.cached.asInstanceOf[(Any,Any)]
                       copr.cached = (x._1,op((x._2,y._2)))
                     }
@@ -279,6 +287,19 @@ object Runtime {
         plan
       } else plan
 
+  // eager evaluation of a single operation
+  def evalOpr ( opr_id: OprID ): Any = {
+    if (isMaster()) {
+      val plan = (1,(),List((0,(1,(),opr_id))))
+      operations = PlanGenerator.operations.toArray
+      loadBlocks = PlanGenerator.loadBlocks.toArray
+      schedule(plan)
+      eval(plan)
+      cache_data(operations(opr_id),broadcast(opr_id,operations(opr_id).cached))
+      operations(opr_id).cached.asInstanceOf[(Any,Any)]._2
+    } else null
+  }
+
   // collect the results of an evaluated plan at the coordinator
   def collect[I,T,S] ( plan: Plan[I,T,S] ): List[(I,Any)]
     = if (isMaster()) {
@@ -353,7 +374,12 @@ object inMem {
                     case _ => eval(lg,tabs+1).asInstanceOf[(Any,Any)]
                  }
              f(id)
-        case ReduceOpr(s,fid)
+        case ReduceOpr(s,true,fid)
+          => val sv = s.map(eval(_,tabs+1))
+             val op = functions(fid).asInstanceOf[((Any,Any))=>Any]
+             stats.reduce_operations += 1
+             sv.reduce{ (x:Any,y:Any) => op((x,y)) }
+        case ReduceOpr(s,false,fid)
           => val sv = s.map(eval(_,tabs+1).asInstanceOf[(Any,Any)])
              val op = functions(fid).asInstanceOf[((Any,Any))=>Any]
              stats.reduce_operations += 1

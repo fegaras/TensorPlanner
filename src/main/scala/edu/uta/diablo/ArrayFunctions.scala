@@ -51,6 +51,10 @@ trait ArrayFunctions {
   def eval[I,T,S] ( e: Plan[I,T,S] ): Plan[I,T,S]
     = Runtime.eval(e)
 
+  // eager evaluation of a single operation
+  def evalOpr ( opr_id: OprID ): Any
+    = Runtime.evalOpr(opr_id)
+
   // collect the results of an evaluated plan at the master node
   def collect[I,T,S] ( e: Plan[I,T,S] ): List[(I,Any)]
     = Runtime.collect(e)
@@ -94,11 +98,11 @@ trait ArrayFunctions {
     loc
   }
 
-  def reduceOpr ( s: List[OprID], op: FunctionID ): OprID = {
+  def reduceOpr ( s: List[OprID], valuep: Boolean, op: FunctionID ): OprID = {
     s match {
       case List(x) => x
       case _
-        => operations += ReduceOpr(s,op)
+        => operations += ReduceOpr(s,valuep,op)
            val loc = operations.length-1
            for ( x <- s )
               operations(x).consumers = loc::operations(x).consumers

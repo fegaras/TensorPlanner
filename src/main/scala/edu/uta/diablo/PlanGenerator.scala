@@ -37,7 +37,7 @@ object PlanGenerator {
       val hh = now.get(Calendar.HOUR)
       val mm = now.get(Calendar.MINUTE)
       val ss = now.get(Calendar.SECOND)
-      val ms = now.get(Calendar.SECOND)
+      val ms = now.get(Calendar.MILLISECOND)
       printf("[%02d:%02d:%02d:%03d]   %s\n",hh,mm,ss,ms,s)
     }
   }
@@ -50,8 +50,8 @@ object PlanGenerator {
                               var completed: Boolean = false, // true when computed
                               @transient
                               var cached: Any = null,         // cached result block(s)
-                              var retained_nodes: List[OprID] = Nil,
-                              var retained_count: Int = 0,
+                              //var retained_nodes: List[OprID] = Nil,
+                              //var retained_count: Int = 0,
                               var visited: Boolean = false,   // used in DFS traversal
                               var consumers: List[OprID] = Nil,
                               var count: Int = 0,             // = number of local consumers
@@ -60,7 +60,7 @@ object PlanGenerator {
   case class LoadOpr ( index: Any, block: BlockID ) extends Opr
   case class TupleOpr ( x: OprID, y: OprID ) extends Opr
   case class ApplyOpr ( x: OprID, fnc: FunctionID ) extends Opr
-  case class ReduceOpr ( s: List[OprID], op: FunctionID ) extends Opr
+  case class ReduceOpr ( s: List[OprID], valuep: Boolean, op: FunctionID ) extends Opr
 
   // Opr uses OprID for Opr references
   var operations: ArrayBuffer[Opr] = ArrayBuffer[Opr]()
@@ -75,7 +75,7 @@ object PlanGenerator {
           => List(x,y)
         case ApplyOpr(x,_)
           => List(x)
-        case ReduceOpr(s,_)
+        case ReduceOpr(s,_,_)
           => s
         case _ => Nil
       }
@@ -270,10 +270,21 @@ object PlanGenerator {
                                                                           VarPat(xl))),
                                                             Seq(List(Var(xl)))),
                                                      Var(s)),
-                                             function(op))))))))))),
+                                             BoolConst(false),function(op))))))))))),
                  Call("groupByKey",List(Var(nv)))))
-        case flatMap(_,_)
-          => throw new Error("Unrecognized flatMap: "+e)
+        case flatMap(f@Lambda(p,b),x)
+          => val k = newvar
+             val xl = newvar
+             val dp = newvar
+             val sp = newvar
+             val gl = newvar
+             val xp = makePlan(x)
+             Comprehension(Call("applyOpr",
+                                List(Var(gl),function(f))),
+                           List(Generator(TuplePat(List(VarPat(k),
+                                                        TuplePat(List(VarPat(dp),VarPat(sp),
+                                                                      VarPat(gl))))),
+                                          xp)))
         case _ => apply(e,makePlanExpr)
       }
   }
@@ -284,6 +295,11 @@ object PlanGenerator {
       else e match {
              case VarDecl(v,tp,x)
                => VarDecl(v,makeType(tp),makePlanExpr(x))
+             case MethodCall(x,"reduce",op::_)
+               if isRDD(x)
+               => // a total aggregation must be evaluated during the planning stage (eager)
+                  Coerce(Call("evalOpr",List(Call("reduceOpr",List(makePlan(x),BoolConst(true),function(op))))),
+                         elemType(typecheck(x)))
              case _ => apply(e,makePlanExpr)
            }
 }

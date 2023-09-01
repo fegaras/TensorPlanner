@@ -50,7 +50,7 @@ class Statistics (
 object operator_comparator extends Comparator[Int] {
   def priority ( opr_id: Int ): Int
     = Runtime.operations(opr_id) match {
-        case ReduceOpr(_,_) => 1
+        case ReduceOpr(_,_,_) => 1
         case TupleOpr(_,_) => 2
         case LoadOpr(_,_) => 3
         case _ => 4
@@ -139,7 +139,7 @@ object Executor {
         Runtime.cache_data(opr,data)
       } else if (tag == 1) {
         opr match {
-          case ReduceOpr(s,fid)  // partial reduce
+          case ReduceOpr(s,valuep,fid)  // partial reduce
             => // partial reduce copr ReduceOpr
                info("    received partial reduce result of "+(len+4)+" bytes at "
                     +my_master_rank+" (opr "+opr_id+")")
@@ -148,7 +148,9 @@ object Executor {
                  stats.cached_blocks += 1
                  stats.max_cached_blocks = Math.max(stats.max_cached_blocks,stats.cached_blocks)
                  opr.cached = data
-               } else { val x = opr.cached.asInstanceOf[(Any,Any)]
+               } else if (valuep)
+                        opr.cached = op((opr.cached,data))
+                 else { val x = opr.cached.asInstanceOf[(Any,Any)]
                         val y = data.asInstanceOf[(Any,Any)]
                         opr.cached = (x._1,op((x._2,y._2)))
                       }
@@ -233,7 +235,7 @@ object Executor {
           val x = Runtime.operations(opr_id)
           x match {
             case LoadOpr(_,b)
-              if x.node != 0
+              if x.node > 0
               => send_data(x.node,Runtime.loadBlocks(b),opr_id,0)
             case _ => ;
           }
@@ -266,13 +268,13 @@ object Executor {
                 => serialization_error(ex) }
   }
 
-  def broadcast_exit_points[I,T,S] ( e: Plan[I,T,S] ): List[Int] = {
+  def broadcast ( value: Any ): Any = {
+    var result = value
     try {
       if (Communication.isCoordinator()) {
-        exit_points = e._3.map(x => x._2._3)
         val bs = new ByteArrayOutputStream(10000)
         val os = new ObjectOutputStream(bs)
-        os.writeObject(exit_points)
+        os.writeObject(value)
         os.flush()
         os.close()
         val a = bs.toByteArray
@@ -281,11 +283,11 @@ object Executor {
       } else {
         val len = Array(0)
         master_comm.bcast(len,1,INT,0)
-        val plan_buffer = Array.fill[Byte](len(0))(0)
-        master_comm.bcast(plan_buffer,len(0),BYTE,0)
-        val bs = new ByteArrayInputStream(plan_buffer,0,plan_buffer.length)
+        val buffer = Array.fill[Byte](len(0))(0)
+        master_comm.bcast(buffer,len(0),BYTE,0)
+        val bs = new ByteArrayInputStream(buffer,0,buffer.length)
         val is = new ObjectInputStream(bs)
-        exit_points = is.readObject().asInstanceOf[List[Int]]
+        result = is.readObject()
         is.close()
       }
       master_comm.barrier()
@@ -293,6 +295,13 @@ object Executor {
                 => mpi_error(ex)
               case ex: IOException
                 => serialization_error(ex) }
+    result
+  }
+
+  def broadcast_exit_points[I,T,S] ( e: Plan[I,T,S] ): List[Int] = {
+    exit_points = broadcast(if (Communication.isCoordinator())
+                              e._3.map(x => x._2._3)
+                            else null).asInstanceOf[List[Int]]
     exit_points
   }
 
@@ -331,6 +340,7 @@ object Communication {
   var my_world_rank: Int = 0
   var i_am_master: Boolean = false
   var my_master_rank: Int = -1
+  var my_local_rank: Int = -1
   var num_of_masters: Int = 0
   var num_of_executors_per_node: Int = 1 /* must be 1 on cluster */
 
@@ -344,15 +354,15 @@ object Communication {
 
   def mpi_startup ( args: Array[String] ) {
     try {
-      // Need one MPI thread per worker node (the Master)
       InitThread(args,THREAD_FUNNELED)
       //Init(args)
       // don't abort on MPI errors
       //comm.setErrhandler(ERRORS_RETURN)
       my_world_rank = comm.getRank
-      if (num_of_executors_per_node == 1)
-        i_am_master = (System.getenv("OMPI_COMM_WORLD_LOCAL_RANK") == "0")
-      else i_am_master = (my_world_rank < num_of_executors_per_node)  // for testing only
+      my_local_rank = System.getenv("OMPI_COMM_WORLD_LOCAL_RANK").toInt
+      assert(num_of_executors_per_node > 0 && my_local_rank >= 0)
+      // normally, a master has local rank 0 (one master per node)
+      i_am_master = (my_local_rank < num_of_executors_per_node)
       // allow only masters to communicate via MPI
       master_comm = comm.split(if (isMaster()) 1 else UNDEFINED,my_world_rank)
       if (isMaster()) {
@@ -360,8 +370,8 @@ object Communication {
         num_of_masters = master_comm.getSize
         val available_threads = System.getenv("OMPI_COMM_WORLD_LOCAL_SIZE")
         info("Using master "+my_master_rank+": "+getProcessorName+"/"+my_world_rank
-                +" with "+available_threads+" threads and "
-                +(java.lang.Runtime.getRuntime.totalMemory()/1024/1024/1024)+" GBs")
+             +" with "+available_threads+" threads and "
+             +(java.lang.Runtime.getRuntime.totalMemory()/1024/1024/1024)+" GBs")
       }
     } catch { case ex: MPIException
                 => System.err.println("MPI error: "+ex.getMessage)

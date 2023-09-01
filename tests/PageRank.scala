@@ -19,6 +19,9 @@ object PageRank {
               .map( line => { val a = line.split(" ").toList
                               (a(0).toInt,a(1).toInt) } ).cache
 
+    q("tensor*(N)[ (i,j.length) | (i,j) <- G, group by i ];")
+
+/*
     def testPageRankDiabloLoop(): Double = {
       val t = System.currentTimeMillis()
       var X = q("""
@@ -44,13 +47,13 @@ object PageRank {
       X
       (System.currentTimeMillis()-t)/1000.0
     }
-	
+
     def testPageRankDiablo(): Double = {
       val t = System.currentTimeMillis()
       val graph = G
       var X = q("""
 		// count outgoing neighbors
-		var C = rdd[ (i,j.length) | (i,j) <- graph, group by i ];
+                var C = tensor*(N)[ (i,j.length) | (i,j) <- G, group by i ];
 		// graph matrix is sparse
 		var E = tensor*(N)(N)[ ((i,j),1.0/c) | (i,j) <- graph, (ii,c) <- C, ii == i ];
 		// pagerank
@@ -66,7 +69,7 @@ object PageRank {
       X
       (System.currentTimeMillis()-t)/1000.0
     }
-
+*/
     def test ( name: String, f: => Double ) {
       val cores = Runtime.getRuntime().availableProcessors()
       var i = 0
@@ -86,7 +89,7 @@ object PageRank {
       println("tries=%d %.3f secs".format(i,s))
     }
     
-    test("Diablo loop PageRank",testPageRankDiabloLoop)
-    test("Diablo PageRank",testPageRankDiablo)
+//    test("Diablo loop PageRank",testPageRankDiabloLoop)
+//    test("Diablo PageRank",testPageRankDiablo)
   }
 }

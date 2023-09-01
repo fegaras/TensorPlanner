@@ -158,16 +158,13 @@ package object diablo extends diablo.ArrayFunctions {
       val ppp = opt(ComprehensionTranslator.translate(pp,Nil))
       if (trace) println("Optimized pilot plan:\n"+Pretty.print(ppp))
       val fs = diablo.Assign(Var("functions"),Seq(List(Call("Array",PlanGenerator.functions.toList))))
-      val ppf = ppp match {
-                  case diablo.Block(ec:+ret)
-                    => diablo.Block(ec++List(fs,ret))
-                  case _ => diablo.Block(List(fs,ppp))
-                }
+      val ppf = diablo.Block(List(fs,ppp))
       val ec = cg.codeGen(ppf,env)
       if (trace) println("Pilot plan code:\n"+showCode(ec))
       val tc = cg.getType(ec,env)
       if (trace) println("Scala type: "+tc)
-      context.Expr[Any](q"if (isCoordinator()) $ec else null")
+      //context.Expr[Any](q"if (isCoordinator()) $ec else null")
+      context.Expr[Any](q"if (isMaster()) $ec else null")
     } else {
       val pc = if (parallel) ComprehensionTranslator.parallelize(to) else to
       val ec = cg.codeGen(pc,env)
