@@ -54,7 +54,7 @@ object Test {
         for i = 0, N-1 do
             for j = 0, M-1 do
                Cz[i,j] = Az[i,j]+Bz[i,j];
-*/
+
          for i = 0, N-1 do
             for j = 0, M-1 do {
                Cz[i,j] = 0.0;
@@ -64,12 +64,14 @@ object Test {
 
           Cz
 
-/*
       for i = 0, 20 do
          Az = tensor*(N,M)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
 
       Az
 */
+
+     tensor*(100)[ (k,+/z) | (i,s) <- textFile("graph.txt"), let x = s.split(",").toList,
+                             let z = x.tail.head.toInt, group by k: x.head.toInt ];
 
       """)
 
@@ -79,7 +81,7 @@ object Test {
     schedule(plan)
     val res = collect(eval(plan))
     if (isCoordinator())
-      res.foreach(pr)
+      res.foreach(println)
 
     end()
 

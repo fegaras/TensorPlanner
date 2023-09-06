@@ -25,7 +25,7 @@ import Communication._
 object Runtime {
   var operations: Array[Opr] = _
   var loadBlocks: Array[Any] = _
-  var exit_points: List[Int] = Nil
+  var exit_points: List[OprID] = Nil
 
   // depth-first-search: visit each operation only once starting from s
   def DFS ( s: List[OprID], f: OprID => Unit ) {
@@ -163,14 +163,14 @@ object Runtime {
     val opr = operations(opr_id)
     if (opr.node == my_master_rank) {
       // send the opr cached result to the non-local consumers (must be done first)
-      val nodes_to_send_data: List[Int]
+      val nodes_to_send_data
           = opr.consumers.map(operations(_)).filter {
                 copr => (copr.node != my_master_rank
                          && copr.node >= 0
                          && !copr.isInstanceOf[ReduceOpr])
             }.map(_.node).distinct
-      for ( n <- nodes_to_send_data )
-        send_data(n,opr.cached,opr_id,0)
+      if (nodes_to_send_data.nonEmpty)
+        send_data(nodes_to_send_data,opr.cached,opr_id,0)
     }
     for ( c <- opr.consumers ) {
       val copr = operations(c)
@@ -201,7 +201,7 @@ object Runtime {
                  // completed local reduce => send it to the reduce owner
                  info("    sending partial reduce result of opr "+opr_id+" from "
                       +my_master_rank+" to "+copr.node)
-                 send_data(copr.node,copr.cached,c,1)
+                 send_data(List(copr.node),copr.cached,c,1)
                  gc(opr_id)
                }
              }
@@ -242,11 +242,11 @@ object Runtime {
       if (count == 0)
         exit = exit_poll()
       if (!ready_queue.isEmpty) {
-        val opr_id = ready_queue.poll()
-        compute(opr_id)
-        enqueue_ready_operations(opr_id)
-        check_caches(opr_id)
-      }
+          val opr_id = ready_queue.poll()
+          compute(opr_id)
+          enqueue_ready_operations(opr_id)
+          check_caches(opr_id)
+        }
     }
     receiver.stop()
   }
@@ -301,7 +301,7 @@ object Runtime {
   }
 
   // collect the results of an evaluated plan at the coordinator
-  def collect[I,T,S] ( plan: Plan[I,T,S] ): List[(I,Any)]
+  def collect[I,T,S] ( plan: Plan[I,T,S] ): List[Any]
     = if (isMaster()) {
         var receiver: ReceiverThread = null
         if (isCoordinator()) {
@@ -310,7 +310,7 @@ object Runtime {
         } else exit_points.foreach {
             opr_id => val opr = operations(opr_id)
                       if (opr.node == my_master_rank)
-                        send_data(0,opr.cached,opr_id,2)
+                        send_data(List(0),opr.cached,opr_id,2)
           }
         if (isCoordinator()) {
           while (exit_points.exists{ opr_id => !operations(opr_id).completed })
@@ -319,7 +319,7 @@ object Runtime {
         }
         barrier()
         if (isCoordinator())
-          exit_points.map(x => operations(x).cached.asInstanceOf[(I,Any)])
+          exit_points.map(x => operations(x).cached)//.asInstanceOf[(I,Any)])
         else Nil
       } else Nil
 }

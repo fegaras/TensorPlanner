@@ -15,11 +15,11 @@ object PageRank {
     var b = 0.85
     val numIter = 10
 
-    val G = spark_context.textFile(args(2))
-              .map( line => { val a = line.split(" ").toList
-                              (a(0).toInt,a(1).toInt) } ).cache
 
-    q("tensor*(N)[ (i,j.length) | (i,j) <- G, group by i ];")
+    q("""
+      var G = spark_context.textFile(args(2));
+      tensor*(N)[ (i,j.length) | line <- G, (i,j) <- line.split(" "), group by i ];
+      """)
 
 /*
     def testPageRankDiabloLoop(): Double = {

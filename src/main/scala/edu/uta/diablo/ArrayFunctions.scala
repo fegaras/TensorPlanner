@@ -56,7 +56,7 @@ trait ArrayFunctions {
     = Runtime.evalOpr(opr_id)
 
   // collect the results of an evaluated plan at the master node
-  def collect[I,T,S] ( e: Plan[I,T,S] ): List[(I,Any)]
+  def collect[I,T,S] ( e: Plan[I,T,S] ): List[Any]//List[(I,Any)]
     = Runtime.collect(e)
 
   // single-core, in-memory evaluation (for testing only)
@@ -108,6 +108,17 @@ trait ArrayFunctions {
               operations(x).consumers = loc::operations(x).consumers
            loc
     }
+  }
+
+  def textFile ( filename: String ): List[(Int,String)] = {
+    import scala.io.Source.fromFile
+    val b = mutable.ArrayBuffer[String]()
+    var count: Int = 0
+    for ( line <- fromFile(filename).getLines ) {
+      b += line
+      count += 1
+    }
+    b.zipWithIndex.map{ case (s,i) => (i,s) }.toList
   }
 
   // parRange doesn't work

@@ -15,7 +15,8 @@
  */
 package edu.uta.diablo
 
-import PlanGenerator.{operations=>_,_}
+import PlanGenerator.{operations=>_,loadBlocks=>_,_}
+import Runtime._
 import mpi._
 import mpi.MPI._
 import java.nio.ByteBuffer
@@ -47,15 +48,15 @@ class Statistics (
 }
 
 @transient
-object operator_comparator extends Comparator[Int] {
-  def priority ( opr_id: Int ): Int
-    = Runtime.operations(opr_id) match {
+object operator_comparator extends Comparator[OprID] {
+  def priority ( opr_id: OprID ): Int
+    = operations(opr_id) match {
         case ReduceOpr(_,_,_) => 1
         case TupleOpr(_,_) => 2
         case LoadOpr(_,_) => 3
         case _ => 4
       }
-  override def compare ( x: Int, y: Int ): Int
+  override def compare ( x: OprID, y: OprID ): Int
     = priority(x) - priority(y)
 }
 
@@ -67,10 +68,10 @@ object Executor {
   val max_buffer_size = 100000000
   val buffer: ByteBuffer = newByteBuffer(max_buffer_size)
   // operations ready to be executed
-  var ready_queue = new PriorityBlockingQueue(1000,operator_comparator)
+  var ready_queue = new PriorityBlockingQueue[OprID](1000,operator_comparator)
   var receive_request: Request = _
   val stats: Statistics = new Statistics()
-  var exit_points: List[Int] = Nil
+  var exit_points: List[OprID] = Nil
   val comm: Intracomm = MPI.COMM_WORLD
   var master_comm: mpi.Comm = comm
 
@@ -129,14 +130,14 @@ object Executor {
         receive_request = master_comm.iRecv(buffer,buffer.capacity(),BYTE,ANY_SOURCE,ANY_TAG)
       } catch { case ex: MPIException
                   => mpi_error(ex) }
-      val opr = Runtime.operations(opr_id)
+      val opr = operations(opr_id)
       if (tag == 0) {
         info("    received "+(len+4)+" bytes at "+my_master_rank+" (opr "+opr_id+")")
-        Runtime.cache_data(opr,data)
-        Runtime.enqueue_ready_operations(opr_id)
+        cache_data(opr,data)
+        enqueue_ready_operations(opr_id)
       } else if (tag == 2) {
         info("    received "+(len+4)+" bytes at "+my_master_rank)
-        Runtime.cache_data(opr,data)
+        cache_data(opr,data)
       } else if (tag == 1) {
         opr match {
           case ReduceOpr(s,valuep,fid)  // partial reduce
@@ -160,7 +161,7 @@ object Executor {
                  info("    completed reduce of opr "+opr_id+" at "+my_master_rank)
                  stats.reduce_operations += 1
                  opr.completed = true
-                 Runtime.enqueue_ready_operations(opr_id)
+                 enqueue_ready_operations(opr_id)
                }
           case _ => ;
         }
@@ -169,15 +170,15 @@ object Executor {
     } else 0
   }
 
-  // send the result of an operation (array blocks) to another node
-  def send_data ( rank: Int, data: Any, oper_id: OprID, tag: Int = 0 ) {
+  // send the result of an operation (array blocks) to other nodes
+  def send_data ( ranks: List[WorkerID], data: Any, opr_id: OprID, tag: Int ) {
     if (data == null)
-      error("null data sent for "+oper_id+" to "+rank+" from "+my_master_rank)
+      error("null data sent for "+opr_id+" to "+ranks.mkString(",")+" from "+my_master_rank)
     // serialize data into a byte array
     val bs = new ByteArrayOutputStream(max_buffer_size)
     val os = new ObjectOutputStream(bs)
     try {
-      os.writeInt(oper_id)
+      os.writeInt(opr_id)
       os.writeByte(tag)
       os.writeObject(data)
       os.close()
@@ -187,15 +188,16 @@ object Executor {
     val bb = newByteBuffer(ba.length+4)
     bb.putInt(ba.length).put(ba)
     info("    sending "+(ba.length+4)+" bytes from "+my_master_rank
-         +" to "+rank+" (opr "+oper_id+")")
+         +" to "+ranks.mkString(",")+" (opr "+opr_id+")")
     try {
-      master_comm.send(bb,ba.length+4,BYTE,rank,tag)
+      for ( rank <- ranks )
+        master_comm.send(bb,ba.length+4,BYTE,rank,tag)
     } catch { case ex: MPIException
                 => mpi_error(ex) }
   }
 
   // receive the result of an operation (array blocks) from another node
-  def receive_data ( rank: Int ): Any = {
+  def receive_data ( rank: WorkerID ): Any = {
     buffer.clear()
     try {
       master_comm.recv(buffer,buffer.capacity(),BYTE,ANY_SOURCE,ANY_TAG)
@@ -214,8 +216,8 @@ object Executor {
     info("    received "+(len+4)+" bytes at "+my_master_rank
          +" from "+rank+" (opr "+opr_id+")")
     is.close()
-    Runtime.operations(opr_id).cached = data
-    Runtime.operations(opr_id).completed = true
+    operations(opr_id).cached = data
+    operations(opr_id).completed = true
     data
   }
 
@@ -224,19 +226,19 @@ object Executor {
       if (Communication.isCoordinator()) {
         val bs = new ByteArrayOutputStream(10000)
         val os = new ObjectOutputStream(bs)
-        os.writeInt(Runtime.loadBlocks.length)
-        os.writeObject(Runtime.operations)
+        os.writeInt(loadBlocks.length)
+        os.writeObject(operations)
         os.writeObject(functions)
         os.close()
         val a = bs.toByteArray
         master_comm.bcast(Array(a.length),1,INT,0)
         master_comm.bcast(a,a.length,BYTE,0)
-        for ( opr_id <- Runtime.operations.indices ) {
-          val x = Runtime.operations(opr_id)
+        for ( opr_id <- operations.indices ) {
+          val x = operations(opr_id)
           x match {
             case LoadOpr(_,b)
               if x.node > 0
-              => send_data(x.node,Runtime.loadBlocks(b),opr_id,0)
+              => send_data(List(x.node),loadBlocks(b),opr_id,0)
             case _ => ;
           }
         }
@@ -248,15 +250,15 @@ object Executor {
         val bs = new ByteArrayInputStream(plan_buffer,0,plan_buffer.length)
         val is = new ObjectInputStream(bs)
         val lb_len = is.readInt()
-        Runtime.loadBlocks = Array.ofDim[Any](lb_len)
-        Runtime.operations = is.readObject().asInstanceOf[Array[Opr]]
+        loadBlocks = Array.ofDim[Any](lb_len)
+        operations = is.readObject().asInstanceOf[Array[Opr]]
         functions = is.readObject().asInstanceOf[Array[Nothing=>Any]]
         is.close()
-        for ( x <- Runtime.operations ) {
+        for ( x <- operations ) {
           x match {
             case LoadOpr(_,b)
               if x.node == my_master_rank
-              => Runtime.loadBlocks(b) = receive_data(0)
+              => loadBlocks(b) = receive_data(0)
             case _ => ;
           }
         }
@@ -298,10 +300,10 @@ object Executor {
     result
   }
 
-  def broadcast_exit_points[I,T,S] ( e: Plan[I,T,S] ): List[Int] = {
+  def broadcast_exit_points[I,T,S] ( e: Plan[I,T,S] ): List[OprID] = {
     exit_points = broadcast(if (Communication.isCoordinator())
                               e._3.map(x => x._2._3)
-                            else null).asInstanceOf[List[Int]]
+                            else null).asInstanceOf[List[OprID]]
     exit_points
   }
 
@@ -309,7 +311,7 @@ object Executor {
   def exit_poll (): Boolean = {
     try {
       val b = (ready_queue.isEmpty
-               && exit_points.forall{ x => val opr = Runtime.operations(x)
+               && exit_points.forall{ x => val opr = operations(x)
                                            opr.node != my_master_rank || opr.completed })
       val in = Array[Byte](if (b) 0 else 1)
       val ret = Array[Byte](0)
@@ -337,10 +339,10 @@ object Executor {
 
 object Communication {
   import Executor._
-  var my_world_rank: Int = 0
+  var my_world_rank: WorkerID = 0
   var i_am_master: Boolean = false
-  var my_master_rank: Int = -1
-  var my_local_rank: Int = -1
+  var my_master_rank: WorkerID = -1
+  var my_local_rank: WorkerID = -1
   var num_of_masters: Int = 0
   var num_of_executors_per_node: Int = 1 /* must be 1 on cluster */
 
@@ -355,7 +357,6 @@ object Communication {
   def mpi_startup ( args: Array[String] ) {
     try {
       InitThread(args,THREAD_FUNNELED)
-      //Init(args)
       // don't abort on MPI errors
       //comm.setErrhandler(ERRORS_RETURN)
       my_world_rank = comm.getRank

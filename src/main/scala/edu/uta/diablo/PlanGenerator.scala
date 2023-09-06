@@ -216,23 +216,6 @@ object PlanGenerator {
                            Generator(TuplePat(List(xvp,VarPat(xl))),xp)
                            ::Generator(TuplePat(List(yvp,VarPat(yl))),yp)
                            ::preds)
-        case flatMap(f@Lambda(p,b),x)
-          if getOpr(p).isDefined && findKey(b).isDefined
-          => val k = newvar
-             val xl = newvar
-             val dp = newvar
-             val sp = newvar
-             val xp = makePlan(x)
-             val Some(gl) = getOpr(p)
-             val Some(key) = findKey(b)
-             Comprehension(Tuple(List(Var(k),
-                                      Tuple(List(Var(dp),Var(sp),
-                                                 Call("applyOpr",
-                                                      List(gl,function(f))))))),
-                           List(Generator(p,xp),
-                                Generator(TuplePat(List(VarPat(k),
-                                               TuplePat(List(VarPat(dp),VarPat(sp))))),
-                                          key)))
         case flatMap(Lambda(p,b),MethodCall(_,"parallelize",x::_))
           => val k = newvar
              val i = newvar
@@ -252,6 +235,23 @@ object PlanGenerator {
                                                                 VarPat(xl))))),
                                             b))),
                         "toList",null)
+        case flatMap(f@Lambda(p,b),x)
+          if getOpr(p).isDefined && findKey(b).isDefined
+          => val k = newvar
+             val xl = newvar
+             val dp = newvar
+             val sp = newvar
+             val xp = makePlan(x)
+             val Some(gl) = getOpr(p)
+             val Some(key) = findKey(b)
+             Comprehension(Tuple(List(Var(k),
+                                      Tuple(List(Var(dp),Var(sp),
+                                                 Call("applyOpr",
+                                                      List(gl,function(f))))))),
+                           List(Generator(p,xp),
+                                Generator(TuplePat(List(VarPat(k),
+                                               TuplePat(List(VarPat(dp),VarPat(sp))))),
+                                          key)))
         case MethodCall(x,"reduceByKey",List(op,_))
           => val xl = newvar
              val xdp = newvar
