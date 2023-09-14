@@ -6,10 +6,6 @@ object Test {
     parami(block_dim_size,10)
     param(asynchronous,true)
     PlanGenerator.trace = true
-    //param(parallel,false)
-
-    // multiple executors per node (must be 1 for cluster)
-    Communication.num_of_executors_per_node = 2
 
     startup(args)
 
@@ -31,7 +27,7 @@ object Test {
 
       //tensor*(N)[ (i,*/a) | ((i,j),a) <- Az, group by i ];
 
-      //tensor*(N,M)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
+      tensor*(N,M)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
 
       //tensor*(N)(M)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
 
@@ -46,9 +42,6 @@ object Test {
       //var n = +/[ a | ((i,j),a) <- Az ];
       //println(n);
 
-      //Bz = tensor*(N,M)[ ((i,j),m+n) | ((i,j),m) <= Az, ((ii,jj),n) <= Bz, ii==i, jj==j ];
-
-      //tensor*(N,M)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
 
 /*
         for i = 0, N-1 do
@@ -68,11 +61,10 @@ object Test {
          Az = tensor*(N,M)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
 
       Az
-*/
 
      tensor*(100)[ (k,+/z) | (i,s) <- textFile("graph.txt"), let x = s.split(",").toList,
                              let z = x.tail.head.toInt, group by k: x.head.toInt ];
-
+*/
       """)
 
     if (false && isCoordinator())

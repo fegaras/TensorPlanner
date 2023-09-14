@@ -38,8 +38,7 @@ done
 
 ulimit -m unlimited
 
-# number of cores per node
-export OMP_NUM_THREADS=128
+# for each expanse node: 2 sockets, 1 executor per socket, 64 Java threads per executor
+mpirun -N 2 --bind-to socket --mca btl_openib_allow_ib true --mca btl openib,tcp,self,vader \
+       scala -J-Xms64g -J-Xmx64g -classpath classes:$DIABLO_HOME/lib/diablo.jar:$OPENMPI_HOME/lib/mpi.jar Multiply 14456 13345
 
-mpirun --mca btl_openib_allow_ib true --mca btl openib,tcp,self,vader --mca mpi_java_eager 100m \
-       scala -J-Xms32g -J-Xmx32g -classpath classes:$DIABLO_HOME/lib/diablo.jar:$OPENMPI_HOME/lib/mpi.jar Multiply 10456 10345

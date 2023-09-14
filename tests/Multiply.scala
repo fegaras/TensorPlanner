@@ -8,9 +8,6 @@ object Multiply {
     param(asynchronous,true)
     PlanGenerator.trace = true
 
-    // multiple executors per node (must be 1 for cluster)
-    Communication.num_of_executors_per_node = 2
-
     val N = args(0).toInt
     val M = args(1).toInt
 
@@ -32,7 +29,7 @@ object Multiply {
         for ( k <- 0 until a.length ) {
           val i = ii*block_dim_size+k/m
           val j = jj*block_dim_size+k%m
-          if (a(k) != X(i*N+j))
+          if (Math.abs((a(k) - X(i*N+j))/a(k)) > 0.01)
             println("*** "+i+" "+j+" "+a(k)+" "+X(i*N+j))
         }
       }
@@ -69,7 +66,7 @@ object Multiply {
     val s = collect(res)
     if (isCoordinator())
       s.foreach(println)   // s.foreach(pr)
-    //validate(s)
+    //validate(s.asInstanceOf[List[((Int, Int), Any)]])
 
     end()
   }

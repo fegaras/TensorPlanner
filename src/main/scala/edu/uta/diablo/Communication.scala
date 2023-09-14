@@ -76,10 +76,8 @@ object Executor {
   var master_comm: mpi.Comm = comm
 
   def mpi_error ( ex: MPIException ) {
-    System.err.println("MPI error: "+ex.getMessage)
-    System.err.println("  Error class: "+ex.getErrorClass)
-    ex.printStackTrace()
-    comm.abort(-1)
+    info("MPI error: "+ex.getMessage)
+    recover(ex)
   }
 
   def serialization_error ( ex: IOException ) {
@@ -88,16 +86,18 @@ object Executor {
     comm.abort(-1)
   }
 
-  def comm_error ( status: Status ) {
-    val node = status.getSource
-    System.err.println("*** "+status.getError)
-    // TODO: needs recovery instead of abort
-    comm.abort(-1)
-  }
-
   def error ( msg: String ) {
     System.err.println("*** "+msg)
     comm.abort(-1)
+  }
+
+  var abort_count = 0
+  val steps_before_abort = 10
+  // kill one of the master nodes to test recovery from a fault
+  def kill_master ( master: WorkerID ) {
+    abort_count += 1
+    if (abort_count == steps_before_abort && my_master_rank == master)
+      throw new MPIException("Killing node "+master+" to test recovery")
   }
 
   // check if there is a request to send data (array blocks); if there is, get the data and cache it
@@ -126,6 +126,7 @@ object Executor {
       try {
         receive_request.free()
         buffer.clear()
+        //kill_master(1)
         // prepare for the next receive (non-blocking)
         receive_request = master_comm.iRecv(buffer,buffer.capacity(),BYTE,ANY_SOURCE,ANY_TAG)
       } catch { case ex: MPIException
@@ -321,6 +322,13 @@ object Executor {
                 => mpi_error(ex); false }
   }
 
+  // recover from failure using lineage reconstruction
+  def recover ( ex: MPIException ) {
+    ex.printStackTrace()
+    // TODO: needs recovery instead of abort
+    comm.abort(-1)
+  }
+
   def collect_statistics (): Statistics
     = try {
         val in = Array[Int](stats.apply_operations,
@@ -344,7 +352,7 @@ object Communication {
   var my_master_rank: WorkerID = -1
   var my_local_rank: WorkerID = -1
   var num_of_masters: Int = 0
-  var num_of_executors_per_node: Int = 1 /* must be 1 on cluster */
+  //var num_of_executors_per_node: Int = 1 /* must be 1 on cluster */
 
   def barrier () { master_comm.barrier() }
 
@@ -358,20 +366,19 @@ object Communication {
     try {
       InitThread(args,THREAD_FUNNELED)
       // don't abort on MPI errors
-      //comm.setErrhandler(ERRORS_RETURN)
+      comm.setErrhandler(ERRORS_RETURN)
       my_world_rank = comm.getRank
       my_local_rank = System.getenv("OMPI_COMM_WORLD_LOCAL_RANK").toInt
-      assert(num_of_executors_per_node > 0 && my_local_rank >= 0)
       // normally, a master has local rank 0 (one master per node)
-      i_am_master = (my_local_rank < num_of_executors_per_node)
+      i_am_master = true // (my_local_rank < num_of_executors_per_node)
       // allow only masters to communicate via MPI
       master_comm = comm.split(if (isMaster()) 1 else UNDEFINED,my_world_rank)
       if (isMaster()) {
         my_master_rank = master_comm.getRank
         num_of_masters = master_comm.getSize
-        val available_threads = System.getenv("OMPI_COMM_WORLD_LOCAL_SIZE")
+        //val available_threads = System.getenv("OMPI_COMM_WORLD_LOCAL_SIZE")
         info("Using master "+my_master_rank+": "+getProcessorName+"/"+my_world_rank
-             +" with "+available_threads+" threads and "
+             +" with "+(java.lang.Runtime.getRuntime.availableProcessors())+" Java threads and "
              +(java.lang.Runtime.getRuntime.totalMemory()/1024/1024/1024)+" GBs")
       }
     } catch { case ex: MPIException
