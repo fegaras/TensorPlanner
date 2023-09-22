@@ -153,15 +153,18 @@ package object diablo extends diablo.ArrayFunctions {
       Typechecker.clean(to)
       Typechecker.typecheck(to)
       val pc = if (parallel) ComprehensionTranslator.parallelize(to) else to
-      val pp = PilotPlanGenerator.makePilotPlan(to)
+      val pp = PlanGenerator.makePlanExpr(pc)
       if (trace) println("Pilot plan:\n"+Pretty.print(pp))
       val ppp = opt(ComprehensionTranslator.translate(pp,Nil))
       if (trace) println("Optimized pilot plan:\n"+Pretty.print(ppp))
-      val ec = cg.codeGen(ppp,env)
+      val fs = diablo.Assign(Var("functions"),Seq(List(Call("Array",PlanGenerator.functions.toList))))
+      val ppf = diablo.Block(List(fs,ppp))
+      val ec = cg.codeGen(ppf,env)
       if (trace) println("Pilot plan code:\n"+showCode(ec))
       val tc = cg.getType(ec,env)
       if (trace) println("Scala type: "+tc)
-      context.Expr[Any](ec)
+      //context.Expr[Any](q"if (isCoordinator()) $ec else null")
+      context.Expr[Any](q"if (isMaster()) $ec else null")
     } else {
       val pc = if (parallel) ComprehensionTranslator.parallelize(to) else to
       val ec = cg.codeGen(pc,env)
@@ -176,7 +179,7 @@ package object diablo extends diablo.ArrayFunctions {
   /** translate an array comprehension to Scala code */
   def q ( query: String ): Any = macro q_impl
 
-  def parami_impl( c: whitebox.Context )(x: c.Expr[Int], b: c.Expr[Int] ): c.Expr[Unit] = {
+  def parami_impl( c: whitebox.Context )( x: c.Expr[Int], b: c.Expr[Int] ): c.Expr[Unit] = {
     import c.universe._
     val Literal(Constant(bv:Int)) = b.tree
     val s = x.tree.toString.split('.').last

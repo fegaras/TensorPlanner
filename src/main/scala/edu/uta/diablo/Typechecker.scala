@@ -440,9 +440,6 @@ object Typechecker {
                        tp
                   case tp => tp
                }
-          case Call(f,_)
-            if List("cachedLineage","tupleLineage","applyLineage","reduceLineage").contains(f)
-            => PilotPlanGenerator.lineage_type
           case Call(f,args)
             if getTypeMap(f).isDefined
             => val Some(TypeMapS(_,tps,ps,at,st,lt,view,store)) = getTypeMap(f)
@@ -482,8 +479,11 @@ object Typechecker {
                if (!typeMatch(typecheck(b,bindPattern(p,TupleType(List(etp,etp)),env)),etp))
                  throw new Error("Wrong reduceByKey op: "+b)
                tp
-          case MethodCall(u,"reduce",_)
-            => elemType(typecheck(u,env))
+          case MethodCall(u,"reduce",Lambda(p,b)::_)
+            => val etp = elemType(typecheck(u,env))
+               if (!typeMatch(typecheck(b,bindPattern(p,TupleType(List(etp,etp)),env)),etp))
+                 throw new Error("Wrong reduce op: "+b)
+               etp
           case MethodCall(u,m,null)
             => // call the Scala typechecker to find method m
                val tu = typecheck(u,env)

@@ -117,6 +117,9 @@ object CXXCodeGenerator {
         case Call(f,el)
           => val (ss,se) = unnestBlocksList(el,false)
              (ss,Call(f,se))
+        case MethodCall(x,op,null)
+          => val (xs,xe) = unnestBlocks(x,false)
+             (xs,MethodCall(xe,op,null))
         case MethodCall(x,op,el)
           => val (xs,xe) = unnestBlocks(x,false)
              val (ss,se) = unnestBlocksList(el,false)
@@ -139,6 +142,9 @@ object CXXCodeGenerator {
           => val (xs,xe) = unnestBlocks(x,stmt)
              val (ys,ye) = unnestBlocks(y,stmt)
              (xs++ys:+Assign(xe,ye),none)
+        case While(p,x)
+          => val (xs,xe) = unnestBlocks(x,false)
+             (xs,While(p,xe))
         case flatMap(Lambda(p,b),x)
           if isRDD(x)
           => val (bs,be) = unnestBlocks(b,stmt)
@@ -317,6 +323,8 @@ object CXXCodeGenerator {
                 tab(tabs)+makeC(Let(p,Var(v),b),tabs,stmt)+"; })"
         case Let(p,x,b)
           => makeC(eliminatePattern(p,x,b),tabs,stmt)
+        case While(p,b)
+          => "while ("+makeC(p,tabs,false)+") do "+makeC(b,tabs,false)
         case _ => e.toString
       }
 

@@ -20,23 +20,13 @@ import scala.collection.immutable.{Range=>SRange}
 import scala.reflect.ClassTag
 import org.apache.spark.rdd.RDD
 import scala.collection.parallel.immutable.ParRange
+import PlanGenerator._
+
 // add for Scala 2.13
 //import scala.collection.parallel.CollectionConverters._
 
 
 trait ArrayFunctions {
-
-  def storeLineage[T] ( id: Int, index: Any, block: () => T ): Lineage
-    = StoreLineage(id,index,block)
-
-  def tupleLineage ( id: Int, x: Lineage, y: Lineage ): Lineage
-    = TupleLineage(id,x,y)
-
-  def applyLineage[T,S] ( id: Int, x: Lineage, fnc: T => S ): Lineage
-    = ApplyLineage(id,x,fnc)
-
-  def reduceLineage[T] ( id: Int, x: Lineage, y: Lineage, op: ((T,T)) => T ): Lineage
-    = ReduceLineage(id,x,y,op)
 
   final def join[K,T,S] ( x: List[(K,T)], y: List[(K,S)]  ): List[(K,(T,S))]
     = for { (k,t) <- x; (kk,s) <- y if kk == k } yield (k,(t,s))
@@ -44,8 +34,92 @@ trait ArrayFunctions {
   final def reduceByKey[K,T] ( x: List[(K,T)], op: (T,T) => T ): List[(K,T)]
     = x.groupBy(_._1).mapValues(x => x.map(_._2).reduce(op)).toList
 
-  def eval[T,S] ( e: (T,S,List[(T,(T,S,Lineage))]) ): (T,S,List[Any])
-    = PilotPlanGenerator.eval(e)
+  final def groupByKey[K,T] ( x: List[(K,T)] ): List[(K,List[T])]
+    = x.groupBy(_._1).mapValues(_.map(_._2)).toList
+
+  @transient
+  var functions: Array[Nothing=>Any] = _
+
+  type Plan[I,T,S] = (T,S,List[(I,(T,S,OprID))])
+
+  // assign every operation to an executor
+  def schedule[I,T,S] ( e: Plan[I,T,S] ) {
+    Runtime.schedule(e)
+  }
+
+  // distributed evaluation of a scheduled plan using MPI
+  def eval[I,T,S] ( e: Plan[I,T,S] ): Plan[I,T,S]
+    = Runtime.eval(e)
+
+  // eager evaluation of a single operation
+  def evalOpr ( opr_id: OprID ): Any
+    = Runtime.evalOpr(opr_id)
+
+  // collect the results of an evaluated plan at the master node
+  def collect[I,T,S] ( e: Plan[I,T,S] ): List[Any]//List[(I,Any)]
+    = Runtime.collect(e)
+
+  // single-core, in-memory evaluation (for testing only)
+  def evalMem[I,T,S] ( e: Plan[I,T,S] ): (T,S,List[(I,Any)])
+    = inMem.eval(e)
+
+  // start communication in MPI
+  def startup ( args: Array[String] ) {
+    Communication.mpi_startup(args)
+  }
+
+  // finalize communication in MPI
+  def end () {
+    Communication.mpi_finalize()
+  }
+
+  def isMaster (): Boolean = Communication.isMaster()
+
+  def isCoordinator (): Boolean = Communication.isCoordinator()
+
+  def loadOpr ( index: Any, block: Any ): OprID = {
+    loadBlocks += block
+    operations += LoadOpr(index,loadBlocks.length-1)
+    operations.length-1
+  }
+
+  def tupleOpr ( x: OprID, y: OprID ): OprID = {
+    operations += TupleOpr(x,y)
+    val loc = operations.length-1
+    operations(x).consumers = loc::operations(x).consumers
+    operations(y).consumers = loc::operations(y).consumers
+    loc
+  }
+
+  def applyOpr ( x: OprID, fnc: FunctionID ): OprID = {
+    operations += ApplyOpr(x,fnc)
+    val loc = operations.length-1
+    operations(x).consumers = loc::operations(x).consumers
+    loc
+  }
+
+  def reduceOpr ( s: List[OprID], valuep: Boolean, op: FunctionID ): OprID = {
+    s match {
+      case List(x) => x
+      case _
+        => operations += ReduceOpr(s,valuep,op)
+           val loc = operations.length-1
+           for ( x <- s )
+              operations(x).consumers = loc::operations(x).consumers
+           loc
+    }
+  }
+
+  def textFile ( filename: String ): List[(Int,String)] = {
+    import scala.io.Source.fromFile
+    val b = mutable.ArrayBuffer[String]()
+    var count: Int = 0
+    for ( line <- fromFile(filename).getLines ) {
+      b += line
+      count += 1
+    }
+    b.zipWithIndex.map{ case (s,i) => (i,s) }.toList
+  }
 
   // parRange doesn't work
   final def parRange ( n: Int, m: Int, s: Int ): ParRange
