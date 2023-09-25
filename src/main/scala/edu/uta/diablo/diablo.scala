@@ -163,8 +163,7 @@ package object diablo extends diablo.ArrayFunctions {
       if (trace) println("Pilot plan code:\n"+showCode(ec))
       val tc = cg.getType(ec,env)
       if (trace) println("Scala type: "+tc)
-      //context.Expr[Any](q"if (isCoordinator()) $ec else null")
-      context.Expr[Any](q"if (isMaster()) $ec else null")
+      context.Expr[Any](ec)
     } else {
       val pc = if (parallel) ComprehensionTranslator.parallelize(to) else to
       val ec = cg.codeGen(pc,env)

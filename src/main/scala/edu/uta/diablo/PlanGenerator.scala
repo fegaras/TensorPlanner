@@ -52,6 +52,7 @@ object PlanGenerator {
                               var cached: Any = null,         // cached result block(s)
                               //var retained_nodes: List[OprID] = Nil,
                               //var retained_count: Int = 0,
+                              var scheduled: Boolean = false,
                               var visited: Boolean = false,   // used in DFS traversal
                               var consumers: List[OprID] = Nil,
                               var count: Int = 0,             // = number of local consumers

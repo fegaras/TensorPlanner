@@ -73,8 +73,6 @@ trait ArrayFunctions {
     Communication.mpi_finalize()
   }
 
-  def isMaster (): Boolean = Communication.isMaster()
-
   def isCoordinator (): Boolean = Communication.isCoordinator()
 
   def loadOpr ( index: Any, block: Any ): OprID = {
