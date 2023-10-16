@@ -19,7 +19,7 @@ import PlanGenerator._
 import Scheduler._
 import Executor._
 import Communication._
-import scala.collection.mutable.Queue
+import scala.collection.mutable.{Queue,ArrayBuffer}
 
 
 @transient
@@ -27,31 +27,8 @@ object Runtime {
   var operations: Array[Opr] = _
   var loadBlocks: Array[Any] = _
   var exit_points: List[OprID] = Nil
+  var enable_partial_reduce = true
   var enable_gc: Boolean = true
-
-  // depth-first-search: visit each operation only once starting from s
-  def DFS ( s: List[OprID], f: OprID => Unit ) {
-    def dfs ( c: OprID ) {
-      val opr = operations(c)
-      if (!opr.visited) {
-        opr.visited = true
-        f(c)
-        opr match {
-          case TupleOpr(x,y)
-            => dfs(x)
-               dfs(y)
-          case ApplyOpr(x,_)
-            => dfs(x)
-          case ReduceOpr(s,_,_)
-            => s.foreach(dfs)
-          case _ => ;
-        }
-      }
-    }
-    for { x <- operations }
-      x.visited = false
-    s.foreach(dfs)
-  }
 
   // breadth-first-search: visit each operation only once starting from s
   def BFS ( s: List[OprID], f: OprID => Unit ) {
@@ -79,6 +56,43 @@ object Runtime {
     }
   }
 
+  def hasCachedValue ( x: Opr ): Boolean
+    = x.status == computed || x.status == completed
+
+  def initialize_opr ( x: Opr ) {
+    // a Load opr is cached in the coordinator too
+    if (isCoordinator() && x.isInstanceOf[LoadOpr])
+      x.cached = loadBlocks(x.asInstanceOf[LoadOpr].block)
+    // initial count is the number of local consumers
+    x.count = x.consumers.count(c => operations(c).node == executor_rank)
+    x match {
+      case r@ReduceOpr(s,_,op)   // used for partial reduction
+        => r.reduced_count = s.count(c => operations(c).node == executor_rank)
+           if (x.node == executor_rank)
+             r.reduced_count += s.filter( c => operations(c).node != executor_rank )
+                                 .map(operations(_).node).distinct.length
+      case _ => ;
+    }
+  }
+
+  // used for garbage collection with recovery
+  def set_closest_local_descendants ( opr_id: OprID ) {
+    val opr_queue: Queue[OprID] = Queue()
+    opr_queue.enqueue(opr_id)
+    val buffer = ArrayBuffer[OprID]()
+    val node = operations(opr_id).node
+    while (opr_queue.nonEmpty) {
+      val c = opr_queue.dequeue
+      val opr = operations(c)
+      if (!buffer.contains(c))
+        if (opr.node == node) {
+          buffer.append(c)
+          opr.oc += 1
+        } else children(opr).foreach(x => opr_queue.enqueue(x))
+    }
+    operations(opr_id).os = buffer.toList
+  }
+
   def schedule[I,T,S] ( e: Plan[I,T,S] ) {
     if (receive_request != null) {
       receive_request.cancel()
@@ -90,19 +104,12 @@ object Runtime {
     Scheduler.schedule(e)
     broadcast_plan()
     for ( x <- operations ) {
-      x.completed = false
+      x.status = notReady
       x.cached = null
-      // initial count is the number of local consumers
-      x.count = x.consumers.count(c => operations(c).node == executor_rank)
-      x match {
-        case r@ReduceOpr(s,_,op)   // used for partial reduction
-          => r.reduced_count = s.count(c => operations(c).node == executor_rank)
-             if (x.node == executor_rank)
-               r.reduced_count += s.filter( c => operations(c).node != executor_rank )
-                                   .map(operations(_).node).distinct.length
-        case _ => ;
-      }
+      initialize_opr(x)
     }
+    for ( opr_id <- operations.indices )
+      set_closest_local_descendants(opr_id)
   }
 
   def cache_data ( opr: Opr, data: Any ): Any = {
@@ -111,28 +118,28 @@ object Runtime {
       stats.max_cached_blocks = Math.max(stats.max_cached_blocks,stats.cached_blocks)
     }
     opr.cached = data
-    opr.completed = true
     data
   }
 
   def compute ( opr_id: OprID ): Any = {
     val opr = operations(opr_id)
-    info("*** computing operation "+opr_id+":"+opr+" on executor "+executor_rank)
+    info("*** computing opr "+opr_id+":"+opr+" on exec "+executor_rank)
     val res = opr match {
         case LoadOpr(_,b)
-          => cache_data(opr,loadBlocks(b))
+          => opr.status = computed
+             cache_data(opr,loadBlocks(b))
         case ApplyOpr(x,fid)
           => val f = functions(fid).asInstanceOf[Any=>List[Any]]
-             if (!operations(x).completed)
+             if (!hasCachedValue(operations(x)))
                error("missing input in Apply: "+opr_id+" at "+executor_rank)
              stats.apply_operations += 1
+             opr.status = computed
              cache_data(opr,f(operations(x).cached).head)
         case TupleOpr(x,y)
           => def f ( lg_id: OprID ): (Any,Any) = {
                 val lg = operations(lg_id)
-                if (lg.completed) {
-                  if (lg.cached == null)
-                    error("missing input: "+lg_id+" at "+executor_rank)
+                if (hasCachedValue(lg)) {
+                  assert(lg.cached != null)
                   lg.cached.asInstanceOf[(Any,Any)]
                 } else lg match {
                     case TupleOpr(x,y)
@@ -142,23 +149,23 @@ object Runtime {
                          val yy = if (operations(y).isInstanceOf[TupleOpr]) vy else gy
                          val data = (iv,(xx,yy))
                          cache_data(lg,data)
+                         lg.status = computed
                          data
-                    case _ => if (!lg.completed)
-                                error("missing input in Load: "+lg_id+" at "+executor_rank)
+                    case _ => assert(hasCachedValue(lg))
                               lg.cached.asInstanceOf[(Any,Any)]
                 }
              }
              f(opr_id)
         case ReduceOpr(s,valuep,fid)
-          => val sv = s.map{ x => if (!operations(x).completed)
-                                    error("missing input in Reduce: "+opr_id+" at "+executor_rank)
+          => val sv = s.map{ x => assert(hasCachedValue(operations(x)))
                                   operations(x).cached.asInstanceOf[(Any,Any)] }
              val op = functions(fid).asInstanceOf[((Any,Any))=>Any]
              stats.reduce_operations += 1
              val in = if (valuep) sv else sv.map(_._2)
+             opr.status = computed
              cache_data(opr,(sv.head._1,in.reduce{ (x:Any,y:Any) => op((x,y)) }))
       }
-    info("*-> result of operation "+opr_id+":"+opr+" on executor "+executor_rank+" is "+res)
+    info("*-> result of opr "+opr_id+":"+opr+" on exec "+executor_rank+" is "+res)
     res
   }
 
@@ -166,9 +173,9 @@ object Runtime {
   def gc ( opr_id: OprID ) {
     val opr = operations(opr_id)
     if (enable_gc && opr.cached != null) {
-      info("    discard the cached block of "+opr_id+" at executor "+executor_rank)
+      info("    discard the cached block of "+opr_id+" at exec "+executor_rank)
       stats.cached_blocks -= 1
-      opr.completed = false
+      opr.status = removed
       opr.cached = null   // make the cached block available to the garbage collector
     }
   }
@@ -184,6 +191,45 @@ object Runtime {
     }
   }
 
+  def enqueue_reduce_opr ( opr_id: OprID, c: OprID ) {
+    val opr = operations(opr_id)
+    val copr = operations(c)
+    copr match {
+      case ReduceOpr(s,valuep,fid)  // partial reduce
+        if enable_partial_reduce
+        => val op = functions(fid).asInstanceOf[((Any,Any))=>Any]
+           // partial reduce opr inside the copr ReduceOpr
+           if (copr.cached == null) {
+             stats.cached_blocks += 1
+             stats.max_cached_blocks = Math.max(stats.max_cached_blocks,stats.cached_blocks)
+             copr.cached = opr.cached
+           } else if (valuep)
+                    copr.cached = op((copr.cached,opr.cached))
+             else { val x = copr.cached.asInstanceOf[(Any,Any)]
+                    val y = opr.cached.asInstanceOf[(Any,Any)]
+                    copr.cached = (x._1,op((x._2,y._2)))
+                  }
+           copr.reduced_count -= 1
+           if (copr.reduced_count == 0) {
+             if (copr.node == executor_rank) {
+               // completed ReduceOpr
+               info("    completed reduce of opr "+c+" at "+executor_rank)
+               stats.reduce_operations += 1
+               copr.status = computed
+               enqueue_ready_operations(c)
+             } else {
+               // completed local reduce => send it to the reduce owner
+               info("    sending partial reduce result of opr "+c+" from "
+                    +executor_rank+" to "+copr.node)
+               send_data(List(copr.node),copr.cached,c,1)
+               gc(opr_id)
+             }
+           }
+           check_caches(c)
+      case _ => ;
+    }
+  }
+
   // After opr is completed, check its consumers to see if anyone is ready to enqueue
   def enqueue_ready_operations ( opr_id: OprID ) {
     val opr = operations(opr_id)
@@ -193,7 +239,8 @@ object Runtime {
           = opr.consumers.map(operations(_)).filter {
                 copr => (copr.node != executor_rank
                          && copr.node >= 0
-                         && !copr.isInstanceOf[ReduceOpr])
+                         && (!enable_partial_reduce
+                             || !copr.isInstanceOf[ReduceOpr]))
             }.map(_.node).distinct
       if (nodes_to_send_data.nonEmpty)
         send_data(nodes_to_send_data,opr.cached,opr_id,0)
@@ -203,43 +250,37 @@ object Runtime {
       if (copr.node >= 0)
       copr match {
         case ReduceOpr(s,valuep,fid)  // partial reduce
-          => val op = functions(fid).asInstanceOf[((Any,Any))=>Any]
-             // partial reduce opr inside the copr ReduceOpr
-             if (copr.cached == null) {
-               stats.cached_blocks += 1
-               stats.max_cached_blocks = Math.max(stats.max_cached_blocks,stats.cached_blocks)
-               copr.cached = opr.cached
-             } else if (valuep)
-                      copr.cached = op((copr.cached,opr.cached))
-               else { val x = copr.cached.asInstanceOf[(Any,Any)]
-                      val y = opr.cached.asInstanceOf[(Any,Any)]
-                      copr.cached = (x._1,op((x._2,y._2)))
-                    }
-             copr.reduced_count -= 1
-             if (copr.reduced_count == 0) {
-               if (copr.node == executor_rank) {
-                 // completed ReduceOpr
-                 info("    completed reduce of opr "+opr_id+" at "+executor_rank)
-                 stats.reduce_operations += 1
-                 copr.completed = true
-                 enqueue_ready_operations(c)
-               } else {
-                 // completed local reduce => send it to the reduce owner
-                 info("    sending partial reduce result of opr "+opr_id+" from "
-                      +executor_rank+" to "+copr.node)
-                 send_data(List(copr.node),copr.cached,c,1)
-                 gc(opr_id)
-               }
-             }
-             check_caches(c)
+          if enable_partial_reduce
+          => enqueue_reduce_opr(opr_id,c)
         case _
           => // enqueue the local consumers that are ready
              if (copr.node == executor_rank
-                 && !copr.completed
-                 && children(copr).map(operations(_)).forall(_.completed)
+                 && !hasCachedValue(copr)
+                 && children(copr).map(operations(_)).forall(hasCachedValue)
                  && !ready_queue.contains(c))
                this.synchronized { ready_queue.offer(c) }
       }
+    }
+    opr.status = completed
+  }
+
+  var receiver: ReceiverThread = _
+  var skip_work = false
+
+  var abort_count = 0
+  val steps_before_abort = 2
+  // kill one of the executors to test recovery from a fault
+  def kill_executor ( executor: WorkerID ) {
+    abort_count += 1
+    if (enable_recovery && executor_rank == executor
+        && abort_count == steps_before_abort) {
+      info("Killing executor "+executor+" to test recovery")
+      if (!accumulator.exit)  // abort exit_poll
+        send_data(List(coordinator),false,5)
+      skip_work = true
+      receiver.stop()
+      while (true)
+        Thread.sleep(1000000)
     }
   }
 
@@ -257,35 +298,32 @@ object Runtime {
     }
   }
 
-  var receiver: ReceiverThread = _
-  var force_exit = false
-
   def work () {
     var exit: Boolean = false
     var count: Int = 0
     while (!exit) {
+      kill_executor(1)  // kill executor 1 to test recovery
       // check for exit every 100 iterations
       count = (count+1)%100
       if (count == 0)
         exit = exit_poll()
-      if (!ready_queue.isEmpty && !force_exit) {
+      if (!ready_queue.isEmpty && !skip_work) {
           val opr_id = ready_queue.poll()
           compute(opr_id)
           enqueue_ready_operations(opr_id)
           check_caches(opr_id)
-        }
+      }
     }
-    if (force_exit)
-      info("Executor "+executor_rank+" has been suspended to recover from fault")
-    else info("Executor "+executor_rank+" has finished execution")
+    info("Executor "+executor_rank+" has finished execution")
   }
 
   def entry_points ( s: List[OprID] ): List[OprID] = {
-    val b = scala.collection.mutable.ArrayBuffer[OprID]()
+    val b = ArrayBuffer[OprID]()
     BFS(s,
-        c => if (operations(c).isInstanceOf[LoadOpr] && operations(c).node == executor_rank)
-               if (!b.contains(c))
-                 b.append(c))
+        c => { val copr = operations(c)
+               if (copr.isInstanceOf[LoadOpr] && copr.node == executor_rank)
+                 if (!b.contains(c))
+                   b.append(c) })
     b.toList
   }
 
@@ -325,50 +363,98 @@ object Runtime {
     loadBlocks = PlanGenerator.loadBlocks.toArray
     schedule(plan)
     eval(plan)
-    cache_data(operations(opr_id),broadcast(opr_id,operations(opr_id).cached))
-    operations(opr_id).cached.asInstanceOf[(Any,Any)]._2
+    val opr = operations(opr_id)
+    opr.status = computed
+    cache_data(opr,broadcast(opr_id,operations(opr_id).cached))
+    opr.cached.asInstanceOf[(Any,Any)]._2
   }
 
   // collect the results of an evaluated plan at the coordinator
   def collect[I,T,S] ( plan: Plan[I,T,S] ): List[Any] = {
-    var receiver: ReceiverThread = null
+    var receiver: ReceiverThread = new ReceiverThread()
+    receiver.start()
     if (isCoordinator()) {
-      info("Collecting all exit points at the coordinator")
-      receiver = new ReceiverThread()
-      receiver.start()
-    } else exit_points.foreach {
-      opr_id => val opr = operations(opr_id)
-                if (opr.node == executor_rank)
-                  send_data(List(coordinator),opr.cached,opr_id,2)
-    }
-    if (isCoordinator()) {
-      while (exit_points.exists{ opr_id => !operations(opr_id).completed })
+        info("Collecting the blocks of all exit points at the coordinator")
+        while (exit_points.exists{ opr_id => !hasCachedValue(operations(opr_id)) })
           Thread.sleep(100)
-      receiver.stop()
+        barrier()
+        receiver.stop()
+        exit_points.map(x => operations(x).cached)
+      } else {
+        exit_points.foreach {
+               opr_id => val opr = operations(opr_id)
+                         if (opr.node == executor_rank)
+                           send_data(List(coordinator),opr.cached,opr_id,2)
+          }
+        barrier()
+        receiver.stop()
+        Nil
+      }
+  }
+
+  def completed_front ( failed_executor: WorkerID, new_executor: WorkerID ): Array[OprID] = {
+    for { x <- operations }
+      x.visited = false
+    val opr_queue: Queue[OprID] = Queue()
+    val buffer = ArrayBuffer[OprID]()
+    exit_points.foreach(c => opr_queue.enqueue(c))
+    while (opr_queue.nonEmpty) {
+      val c = opr_queue.dequeue
+      val opr = operations(c)
+      if (!opr.visited) {
+        opr.visited = true
+        opr match {
+          case r@ReduceOpr(s,_,_)   // used for partial reduction
+            => def nn ( c: OprID ): OprID
+                 = if (operations(c).node == failed_executor)
+                     new_executor
+                   else operations(c).node
+               r.cached = null
+               r.reduced_count = s.count(nn(_) == executor_rank)
+               if (nn(c) == executor_rank)
+                 r.reduced_count += s.filter(nn(_) != executor_rank)
+                                     .map(nn(_)).distinct.length
+          case _ => ;
+        }
+        if (opr.node == executor_rank && hasCachedValue(opr))
+          buffer.append(c)
+        else if (executor_rank == 0 && opr.isInstanceOf[LoadOpr])
+          buffer.append(c)
+        else children(opr).foreach(opr_queue.enqueue(_))
+      }
     }
-    //barrier()
-    if (isCoordinator())
-      exit_points.map(x => operations(x).cached)
-    else Nil
+    buffer.toArray
   }
 
   // recovery from failure
   def recover ( failed_executor: WorkerID, new_executor: WorkerID ) {
-    info("Recovering from the failed executor: replacing "+failed_executor
-         +" with "+new_executor+" at executor "+executor_rank)
-    for ( opr_id <- 0 until operations.length ) {
+    skip_work = true
+    accumulator.reset()
+    info("Executor "+executor_rank+": Recovering from the failed executor by replacing "
+         +failed_executor+" with "+new_executor)
+    val front = completed_front(failed_executor,new_executor)
+    info("Executor "+executor_rank+": completed front = "+front.toList)
+    for ( opr_id <- front;
+          c <- operations(opr_id).consumers
+          if operations(c).isInstanceOf[ReduceOpr] )
+       enqueue_reduce_opr(opr_id,c)
+    if (executor_rank != new_executor) {
+      for ( opr_id <- front ) {
+        val opr = operations(opr_id)
+        if ((opr.consumers.exists(c => operations(c).node == failed_executor)
+             && (opr.status != completed
+                 || !opr.consumers.exists(c => operations(c).node == new_executor)))
+            || (opr.isInstanceOf[LoadOpr] && executor_rank == 0))
+          send_data(List(new_executor),opr.cached,opr_id,0)
+      }
+    }
+    for ( opr_id <- operations.indices ) {
       val opr = operations(opr_id)
-      if (opr.node == executor_rank && opr.cached != null && opr.node != new_executor
-          && opr.consumers.exists(c => operations(c).node == failed_executor))
-        send_data(List(new_executor),opr.cached,opr_id,0)
       if (opr.node == failed_executor)
         opr.node = new_executor
     }
-    info("Recovered from the failed executor "+failed_executor
-         +" at executor "+executor_rank)
-    //barrier()
-    force_exit = false
-    //work()
+    info("Executor "+executor_rank+": Recovered from the failed executor "+failed_executor)
+    skip_work = false
   }
 }
 
@@ -398,7 +484,7 @@ object inMem {
 
   def eval ( id: OprID, tabs: Int ): Any = {
     val e = operations(id)
-    if (e.completed) {
+    if (Runtime.hasCachedValue(e)) {
       // retrieve result block(s) from cache
       return e.cached
     }
@@ -435,7 +521,7 @@ object inMem {
       }
     info(" "*3*tabs+"*-> "+tabs+": "+res)   // pe(res)
     e.cached = res
-    e.completed = true
+    e.status = completed
     res
   }
 

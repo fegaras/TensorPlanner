@@ -4,9 +4,12 @@ import mpi.MPI.wtime
 object Multiply {
   def main ( args: Array[String] ) {
 
-    //parami(block_dim_size,10)
+    parami(block_dim_size,10)
     param(asynchronous,true)
     PlanGenerator.trace = true
+    Executor.enable_recovery = true
+    Runtime.enable_gc = false
+    Runtime.enable_partial_reduce = true
 
     val N = args(0).toInt
     val M = args(1).toInt
@@ -41,6 +44,9 @@ object Multiply {
 
       var Az = tensor*(N,M)[ ((i,j),i*j*1.0) | i <- 0..(N-1), j <- 0..(M-1) ];
       var Bz = tensor*(M,N)[ ((i,j),i*j*2.0) | i <- 0..(M-1), j <- 0..(N-1) ];
+
+//Az = tensor*(N,M)[ ((i,j),m+n) | ((i,j),m) <= Az, ((ii,jj),n) <= Bz, ii==i, jj==j ];
+//tensor*(N,M)[ ((i,j),m+n) | ((i,j),m) <= Az, ((ii,jj),n) <= Bz, ii==i, jj==j ];
 
       tensor*(N,N)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
 

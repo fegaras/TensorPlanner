@@ -42,21 +42,23 @@ object PlanGenerator {
     }
   }
 
+  type Status = Short
+  val List(notReady,scheduled,ready,computed,completed,removed): List[Status] = List(0,1,2,3,4,5)
+
   // Operation tree (pilot plan)
   @SerialVersionUID(123L)
   sealed abstract class Opr ( var node: WorkerID = -1,        // worker node
                               var size: Int = -1,             // num of blocks in output
                               var static_blevel: Int = -1,    // static b-level (bottom level)
-                              var completed: Boolean = false, // true when computed
+                              var status: Status = notReady,  // the operation status
+                              var visited: Boolean = false,   // used in BFS traversal
                               @transient
-                              var cached: Any = null,         // cached result block(s)
-                              //var retained_nodes: List[OprID] = Nil,
-                              //var retained_count: Int = 0,
-                              var scheduled: Boolean = false,
-                              var visited: Boolean = false,   // used in DFS traversal
+                              var cached: Any = null,         // cached result blocks
                               var consumers: List[OprID] = Nil,
                               var count: Int = 0,             // = number of local consumers
-                              var reduced_count: Int = 0 )    // # of reduced inputs so far
+                              var reduced_count: Int = 0,     // # of reduced inputs so far
+                              var os: List[OprID] = Nil,      // closest descendant producers on the same node
+                              var oc: Int = 0 )               // counts the closest ancestor consumers on the same node
                   extends Serializable
   case class LoadOpr ( index: Any, block: BlockID ) extends Opr
   case class TupleOpr ( x: OprID, y: OprID ) extends Opr
@@ -125,7 +127,7 @@ object PlanGenerator {
             => IfE(p,findDims(x),y)
           case Let(p,x,b)
             => Let(p,x,findDims(b))
-          case _ => e
+          case _ => Tuple(List(Nth(e,1),Nth(e,2)))
         }
     e match {
         case Seq(List(Tuple(List(key,ta))))
@@ -245,6 +247,7 @@ object PlanGenerator {
              val xp = makePlan(x)
              val Some(gl) = getOpr(p)
              val Some(key) = findKey(b)
+println("@@@@ "+key)
              Comprehension(Tuple(List(Var(k),
                                       Tuple(List(Var(dp),Var(sp),
                                                  Call("applyOpr",

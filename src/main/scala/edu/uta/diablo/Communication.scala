@@ -78,13 +78,20 @@ object Executor {
   var failed_executors: List[WorkerID] = Nil
   var active_executors: List[WorkerID] = Nil
   // max wait time in msecs when sending a message before we assume the receiver is dead
-  val max_wait_time = 10000
+  val max_wait_time = 1000
 
-  var accumulator_exit: Boolean = false
-  var accumulator_count: Int = 0
-  var accumulator_total: Any = null
-  var accumulator_values: List[Any] = Nil
-  var accumulator_acc: (Any,Any)=> Any = null
+  object accumulator {
+    var exit: Boolean = false
+    var count: Int = 0
+    var total: Any = null
+    var values: List[Any] = Nil
+    var acc: (Any,Any)=> Any = null
+    def reset () {
+      accumulator.exit = true
+      accumulator.values = Nil
+      accumulator.count = 0
+    }
+  }
 
   def mpi_error ( failed_executor: WorkerID, ex: MPIException ) {
     info("MPI communication error at "+executor_rank+": "+ex.getMessage)
@@ -100,27 +107,14 @@ object Executor {
   }
 
   def serialization_error ( ex: IOException ) {
-    System.err.println("Serialization error: "+ex.getMessage)
+    info("Serialization error: "+ex.getMessage)
     ex.printStackTrace()
     comm.abort(-1)
   }
 
   def error ( msg: String ) {
-    System.err.println("*** "+msg)
+    info("*** "+msg)
     comm.abort(-1)
-  }
-
-  var abort_count = 0
-  val steps_before_abort = 3
-  // kill one of the executor executors to test recovery from a fault
-  def kill_executor ( executor: WorkerID ) {
-    abort_count += 1
-    if (enable_recovery && abort_count == steps_before_abort && executor_rank == executor) {
-      info("Killing executor "+executor+" to test recovery")
-      Runtime.receiver.stop()
-      while (true)
-        Thread.sleep(1000)
-    }
   }
 
   // check if there is a request to send data (array blocks); if there is, get the data and cache it
@@ -135,7 +129,6 @@ object Executor {
     if (receive_request.test()) {
       // deserialize and cache the incoming data
       val len = buffer.getInt()
-      // Not working: val len = receive_request.getStatus().getCount(BYTE)
       val bb = Array.ofDim[Byte](len)
       buffer.get(bb)
       val bs = new ByteArrayInputStream(bb,0,len)
@@ -157,40 +150,43 @@ object Executor {
         val opr = operations(opr_id)
         info("    received "+(len+4)+" bytes at "+executor_rank+" (opr "+opr_id+")")
         cache_data(opr,data)
+        opr.status = completed
         enqueue_ready_operations(opr_id)
       } else if (tag == 2) {   // cache data
+        val opr = operations(opr_id)
         info("    received "+(len+4)+" bytes at "+executor_rank)
-        cache_data(operations(opr_id),data)
+        cache_data(opr,data)
+        opr.status = completed
       } else if (tag == 3) {  // coordinator will decide who will replace a failed executor
         val failed_executor = data.asInstanceOf[Int]
         if (!failed_executors.contains(failed_executor)) {
+          skip_work = true
           failed_executors = failed_executor::failed_executors
-          val exs = 0.until(comm.getSize).filter(i => !failed_executors.contains(i)).toList
-          val new_executor = exs((Math.random()*exs.length-1).toInt)
-          info("The coordinator has decided to replace the failed executor "+failed_executor+" with "+new_executor)
-          send_data(exs,(failed_executor,new_executor),0,4)
+          active_executors = active_executors.filter(_ != failed_executor)
+          val candidates = active_executors.filter(_ != coordinator)
+          val new_executor = candidates((Math.random()*candidates.length).toInt)
+          info("The coordinator has decided to replace the failed executor "
+               +failed_executor+" with "+new_executor)
+          send_data(active_executors,(failed_executor,new_executor),0,4)
         }
       } else if (tag == 4) {  // recovery at all executors (sent from coordinator)
         val (failed_executor,new_executor) = data.asInstanceOf[(Int,Int)]
-        Runtime.force_exit = true
         if (!failed_executors.contains(failed_executor))
           failed_executors = failed_executor::failed_executors
         active_executors = active_executors.filter(_ != failed_executor)
         Runtime.recover(failed_executor,new_executor)
-      } else if (tag == 5) {  // synchronize accumulation (at coordinator)
-        accumulator_values = data::accumulator_values
-        accumulator_count += 1
-        if (accumulator_count == active_executors.length) {
-          accumulator_total = accumulator_values.reduce(accumulator_acc)
-          accumulator_count = 0
-          send_data(active_executors,accumulator_total,executor_rank,6)
-          info("Aggregate "+accumulator_values+" = "+accumulator_total)
+      } else if (tag == 5) {  // synchronize accumulation (on coordinator)
+        accumulator.values = data::accumulator.values
+        accumulator.count += 1
+        if (!skip_work && accumulator.count == active_executors.length) {
+          accumulator.total = accumulator.values.reduce(accumulator.acc)
+          accumulator.count = 0
+          send_data(active_executors,accumulator.total,6)
+          //info("Aggregate "+accumulator.values+" = "+accumulator.total)
         }
       } else if (tag == 6) {   // release the barrier synchronization after accumulation
-        accumulator_exit = true
-        accumulator_total = data
-        accumulator_values = Nil
-        accumulator_count = 0
+        accumulator.reset()
+        accumulator.total = data
       } else if (tag == 1) {   // partial/final reduction
         val opr = operations(opr_id)
         opr match {
@@ -214,7 +210,7 @@ object Executor {
                  // completed ReduceOpr
                  info("    completed reduce of opr "+opr_id+" at "+executor_rank)
                  stats.reduce_operations += 1
-                 opr.completed = true
+                 opr.status = computed
                  enqueue_ready_operations(opr_id)
                }
           case _ => ;
@@ -243,7 +239,6 @@ object Executor {
     bb.putInt(ba.length).put(ba)
     info("    sending "+(ba.length+4)+" bytes from "+executor_rank
          +" to "+ranks.mkString(",")+(if (opr_id <= 0) " (tag "+tag+")" else " (opr "+opr_id+")"))
-    kill_executor(1)  // kill executor 1 to test recovery
     for ( rank <- ranks )
       try {
         var sr = comm.iSend(bb,ba.length+4,BYTE,rank,tag)
@@ -252,11 +247,33 @@ object Executor {
           count += 1
           Thread.sleep(1)
         }
-        if (!sr.test() && !Runtime.force_exit) {
+        if (!sr.test() && !Runtime.skip_work) {
           sr.cancel()
           sr.free()
           throw new MPIException("Executor "+rank+" is not responding")
         } else sr.free()
+      } catch { case ex: MPIException
+                  => mpi_error(rank,ex) }
+  }
+
+  // send data to executors
+  def send_data ( ranks: List[WorkerID], data: Any, tag: Int ) {
+    // serialize data into a byte array
+    val bs = new ByteArrayOutputStream(max_buffer_size)
+    val os = new ObjectOutputStream(bs)
+    try {
+      os.writeInt(0)
+      os.writeByte(tag)
+      os.writeObject(data)
+      os.close()
+    } catch { case ex: IOException
+                => serialization_error(ex) }
+    val ba = bs.toByteArray
+    val bb = newByteBuffer(ba.length+4)
+    bb.putInt(ba.length).put(ba)
+    for ( rank <- ranks )
+      try {
+        comm.send(bb,ba.length+4,BYTE,rank,tag)
       } catch { case ex: MPIException
                   => mpi_error(rank,ex) }
   }
@@ -282,19 +299,10 @@ object Executor {
          +" from "+rank+" (opr "+opr_id+")")
     is.close()
     operations(opr_id).cached = data
-    operations(opr_id).completed = true
+    operations(opr_id).status = completed
     data
   }
-
-  def accumulate[T] ( value: T, acc: (T,T) => T ): T = {
-    send_data(List(coordinator),value,-1,5)
-    accumulator_acc = acc.asInstanceOf[(Any,Any)=>Any]
-    accumulator_exit = false
-    while ( !accumulator_exit )
-      Thread.sleep(10)
-    accumulator_total.asInstanceOf[T]
-  }
-
+ 
   def broadcast_plan () {
     try {
       if (Communication.isCoordinator()) {
@@ -381,25 +389,39 @@ object Executor {
     exit_points
   }
 
+  // accumulate values at the coordinator O(n)
+  def accumulate[T] ( value: T, acc: (T,T) => T ): T = {
+    send_data(List(coordinator),value,5)
+    accumulator.acc = acc.asInstanceOf[(Any,Any)=>Any]
+    accumulator.exit = false
+    while ( !accumulator.exit )
+      Thread.sleep(10)
+    accumulator.total.asInstanceOf[T]
+  }
+
   // exit when the queues of all executors are empty and exit points have been computed
   def exit_poll (): Boolean = {
     def and ( x: Boolean, y: Boolean ) = x && y
-    if (force_exit)
+    if (skip_work)
       false
     else {
       val b = (ready_queue.isEmpty
                && exit_points.forall {
                      x => val opr = operations(x)
-                          opr.node != executor_rank || opr.completed })
-    if (enable_recovery)
-      accumulate(b,and)
-    else try {
-      val in = Array[Byte](if (b) 0 else 1)
-      val ret = Array[Byte](0)
-      comm.allReduce(in,ret,1,BYTE,LOR)
-      ret(0) == 0
-    } catch { case ex: MPIException
-                => mpi_error(-1,ex); false }
+                          opr.node != executor_rank || hasCachedValue(opr) })
+      if (enable_recovery) {
+        if (!b)
+          info("    cannot exit at "+executor_rank+": needs "+exit_points.filter {
+                     x => val opr = operations(x)
+                          opr.node == executor_rank && !hasCachedValue(opr) })
+        accumulate(b,and)
+      } else try {
+        val in = Array[Byte](if (b) 0 else 1)
+        val ret = Array[Byte](0)
+        comm.allReduce(in,ret,1,BYTE,LOR)
+        ret(0) == 0
+      } catch { case ex: MPIException
+                  => mpi_error(-1,ex); false }
     }
   }
 
@@ -426,16 +448,16 @@ object Executor {
   }
 }
 
+
 object Communication {
   import Executor._
   var num_of_executors: Int = 1
 
-  // barrier synchronization must be done through the coordinator
   def barrier () {
     def or ( x: Boolean, y: Boolean ) = x || y
-    if (enable_recovery)
-      accumulate(false,or)
-    else comm.barrier()
+    if (!enable_recovery)
+      comm.barrier()    // O(logn)
+    else accumulate(false,or)  // O(n)
   }
 
   def isCoordinator (): Boolean
@@ -454,13 +476,16 @@ object Communication {
            +(java.lang.Runtime.getRuntime.availableProcessors())+" Java threads and "
            +(java.lang.Runtime.getRuntime.totalMemory()/1024/1024/1024)+" GBs")
     } catch { case ex: MPIException
-                => System.err.println("MPI error: "+ex.getMessage)
+                => info("MPI error: "+ex.getMessage)
                    ex.printStackTrace()
                    comm.abort(-1)
             }
   }
 
   def mpi_finalize () {
-    Finalize()
+    info("Executor "+executor_rank+" is exiting")
+    if (!enable_recovery)
+      Finalize()
+    else System.exit(0)
   }
 }

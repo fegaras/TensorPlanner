@@ -17,6 +17,7 @@ package edu.uta.diablo
 
 import PlanGenerator._
 import scala.collection.mutable.{ListBuffer, Queue}
+import scala.collection.mutable.PriorityQueue
 
 
 object Scheduler {
@@ -83,7 +84,6 @@ object Scheduler {
     b.toList
   }
 
-  import scala.collection.mutable.PriorityQueue
   case class Worker ( workDone: Int, numTasks: Int, id: WorkerID )
 
   object MinWorkerOrder extends Ordering[Worker] {
@@ -112,18 +112,17 @@ object Scheduler {
     }
     var ep: ListBuffer[OprID] = ListBuffer[OprID]()
     for(i <- 0 until in_degree.size) {
-      if(in_degree(i) == 0) ep += i
+      if(in_degree(i) == 0)
+        ep += i
     }
     if (isCoordinator()) {
       println("Size: "+ep.size+" Entry points: "+ep)
     }
-
     for (op <- ep) {
       task_queue.enqueue(op)
     }
     for(i <- 0 until Communication.num_of_executors)
       workerQueue.enqueue(Worker(0,0,i))
-
     var total_time = 0.0
     var worker_time = 0.0
     val k = scala.math.sqrt(Communication.num_of_executors).toInt+1
@@ -143,12 +142,13 @@ object Scheduler {
         }
       }
       for(tw <- tmp_workers) {
-        if(tw.id != w.id) workerQueue.enqueue(tw)
+        if(tw.id != w.id)
+          workerQueue.enqueue(tw)
       }
       // opr is allocated to worker w
       opr match {
-        case ReduceOpr(_,true,_)  // total aggregation
-          => opr.node = 0
+        case ReduceOpr(_,true,_)  // total aggregation result is on coordinator
+          => opr.node = Executor.coordinator
         case _ => opr.node = w.id
       }
       val work_done = cpu_cost(opr) + communication_cost(opr,w.id)
