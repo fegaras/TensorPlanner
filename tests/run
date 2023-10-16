@@ -7,7 +7,7 @@ export PATH="$MPI_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$MPI_HOME/lib/:$LD_LIBRARY_PATH"
 
 # disable firewall, enable passwordless ssh to localhost and to each other, must have the same TensorPlanner code
-#mpirun -N 2 --bind-to socket --host localhost:-1,milos:-1 --use-hwthread-cpus scala -classpath classes:${DIABLO_HOME}/lib/diablo.jar:${MPI_HOME}/lib/mpi.jar -J-Xmx2g -J-Xms2g -J-Xss100m $*
+#mpirun -N 2 --bind-to socket --host localhost:-1,milos:-1 --use-hwthread-cpus -quiet scala -classpath classes:${DIABLO_HOME}/lib/diablo.jar:${MPI_HOME}/lib/mpi.jar -J-Xmx2g -J-Xms2g -J-Xss100m $*
 
 # -N is the number of executors per node
-mpirun -N 2 --bind-to socket --use-hwthread-cpus scala -classpath classes:${DIABLO_HOME}/lib/diablo.jar:${MPI_HOME}/lib/mpi.jar -J-Xmx2g -J-Xms2g -J-Xss100m $*
+mpirun -N 4 --bind-to socket --use-hwthread-cpus -quiet scala -classpath classes:${DIABLO_HOME}/lib/diablo.jar:${MPI_HOME}/lib/mpi.jar -J-Xmx4g -J-Xms2g -J-Xss100m $*

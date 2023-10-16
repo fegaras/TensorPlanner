@@ -6,6 +6,7 @@ object Test {
     parami(block_dim_size,10)
     param(asynchronous,true)
     PlanGenerator.trace = true
+    //Runtime.enable_gc = false
 
     startup(args)
 
@@ -41,25 +42,23 @@ object Test {
 
       //var n = +/[ a | ((i,j),a) <- Az ];
       //println(n);
-
+      //Az
 
 /*
         for i = 0, N-1 do
             for j = 0, M-1 do
                Cz[i,j] = Az[i,j]+Bz[i,j];
 
-         for i = 0, N-1 do
+        for i = 0, N-1 do
             for j = 0, M-1 do {
                Cz[i,j] = 0.0;
                for k = 0, N-1 do
                   Cz[i,j] += Az[i,k]*Bz[k,j];
             };
-
-          Cz
+        Cz
 
       for i = 0, 20 do
          Az = tensor*(N,M)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
-
       Az
 
      tensor*(100)[ (k,+/z) | (i,s) <- textFile("graph.txt"), let x = s.split(",").toList,

@@ -42,7 +42,7 @@ class Statistics (
   def print () {
     info("Number of apply operations: "+apply_operations)
     info("Number of reduce operations: "+reduce_operations)
-    info("Max num of cached blocks per node: "+max_cached_blocks)
+    info("Max num of cached blocks per executor: "+max_cached_blocks)
     info("Final num of cached blocks: "+cached_blocks)
   }
 }
@@ -63,7 +63,8 @@ object operator_comparator extends Comparator[OprID] {
 @transient
 // MPI communicator using openMPI (one executor per node)
 object Executor {
-  import Communication.my_master_rank
+  var executor_rank: WorkerID = 0
+  var coordinator: WorkerID = 0
   // the buffer must fit few blocks (one block of doubles is 8MBs)
   val max_buffer_size = 100000000
   val buffer: ByteBuffer = newByteBuffer(max_buffer_size)
@@ -73,31 +74,47 @@ object Executor {
   val stats: Statistics = new Statistics()
   var exit_points: List[OprID] = Nil
   val comm: Intracomm = MPI.COMM_WORLD
-  var master_comm: mpi.Comm = comm
+  var enable_recovery: Boolean = false
+  var failed_executors: List[WorkerID] = Nil
+  var active_executors: List[WorkerID] = Nil
+  // max wait time in msecs when sending a message before we assume the receiver is dead
+  val max_wait_time = 1000
 
-  def mpi_error ( ex: MPIException ) {
-    info("MPI error: "+ex.getMessage)
-    recover(ex)
+  object accumulator {
+    var exit: Boolean = false
+    var count: Int = 0
+    var total: Any = null
+    var values: List[Any] = Nil
+    var acc: (Any,Any)=> Any = null
+    def reset () {
+      accumulator.exit = true
+      accumulator.values = Nil
+      accumulator.count = 0
+    }
+  }
+
+  def mpi_error ( failed_executor: WorkerID, ex: MPIException ) {
+    info("MPI communication error at "+executor_rank+": "+ex.getMessage)
+    if (enable_recovery && failed_executor >= 0) {
+      if (!failed_executors.contains(failed_executor)) {
+        // send a message to the coordinator that there is a failed executor
+        send_data(List(0),failed_executor,0,3)
+      }
+    } else {
+      ex.printStackTrace()
+      comm.abort(-1)
+    }
   }
 
   def serialization_error ( ex: IOException ) {
-    System.err.println("Serialization error: "+ex.getMessage)
+    info("Serialization error: "+ex.getMessage)
     ex.printStackTrace()
     comm.abort(-1)
   }
 
   def error ( msg: String ) {
-    System.err.println("*** "+msg)
+    info("*** "+msg)
     comm.abort(-1)
-  }
-
-  var abort_count = 0
-  val steps_before_abort = 10
-  // kill one of the master nodes to test recovery from a fault
-  def kill_master ( master: WorkerID ) {
-    abort_count += 1
-    if (abort_count == steps_before_abort && my_master_rank == master)
-      throw new MPIException("Killing node "+master+" to test recovery")
   }
 
   // check if there is a request to send data (array blocks); if there is, get the data and cache it
@@ -106,13 +123,12 @@ object Executor {
       try {
         buffer.clear()
         // prepare for the first receive (non-blocking)
-        receive_request = master_comm.iRecv(buffer,buffer.capacity(),BYTE,ANY_SOURCE,ANY_TAG)
+        receive_request = comm.iRecv(buffer,buffer.capacity(),BYTE,ANY_SOURCE,ANY_TAG)
       } catch { case ex: MPIException
-                  => mpi_error(ex) }
+                  => mpi_error(-1,ex) }
     if (receive_request.test()) {
       // deserialize and cache the incoming data
       val len = buffer.getInt()
-      // Not working: val len = receive_request.getStatus().getCount(BYTE)
       val bb = Array.ofDim[Byte](len)
       buffer.get(bb)
       val bs = new ByteArrayInputStream(bb,0,len)
@@ -126,25 +142,58 @@ object Executor {
       try {
         receive_request.free()
         buffer.clear()
-        //kill_master(1)
         // prepare for the next receive (non-blocking)
-        receive_request = master_comm.iRecv(buffer,buffer.capacity(),BYTE,ANY_SOURCE,ANY_TAG)
+        receive_request = comm.iRecv(buffer,buffer.capacity(),BYTE,ANY_SOURCE,ANY_TAG)
       } catch { case ex: MPIException
-                  => mpi_error(ex) }
-      val opr = operations(opr_id)
-      if (tag == 0) {
-        info("    received "+(len+4)+" bytes at "+my_master_rank+" (opr "+opr_id+")")
+                  => mpi_error(-1,ex) }
+      if (tag == 0) {  // cache data and check for ready operations
+        val opr = operations(opr_id)
+        info("    received "+(len+4)+" bytes at "+executor_rank+" (opr "+opr_id+")")
         cache_data(opr,data)
+        opr.status = completed
         enqueue_ready_operations(opr_id)
-      } else if (tag == 2) {
-        info("    received "+(len+4)+" bytes at "+my_master_rank)
+      } else if (tag == 2) {   // cache data
+        val opr = operations(opr_id)
+        info("    received "+(len+4)+" bytes at "+executor_rank)
         cache_data(opr,data)
-      } else if (tag == 1) {
+        opr.status = completed
+      } else if (tag == 3) {  // coordinator will decide who will replace a failed executor
+        val failed_executor = data.asInstanceOf[Int]
+        if (!failed_executors.contains(failed_executor)) {
+          skip_work = true
+          failed_executors = failed_executor::failed_executors
+          active_executors = active_executors.filter(_ != failed_executor)
+          val candidates = active_executors.filter(_ != coordinator)
+          val new_executor = candidates((Math.random()*candidates.length).toInt)
+          info("The coordinator has decided to replace the failed executor "
+               +failed_executor+" with "+new_executor)
+          send_data(active_executors,(failed_executor,new_executor),0,4)
+        }
+      } else if (tag == 4) {  // recovery at all executors (sent from coordinator)
+        val (failed_executor,new_executor) = data.asInstanceOf[(Int,Int)]
+        if (!failed_executors.contains(failed_executor))
+          failed_executors = failed_executor::failed_executors
+        active_executors = active_executors.filter(_ != failed_executor)
+        Runtime.recover(failed_executor,new_executor)
+      } else if (tag == 5) {  // synchronize accumulation (on coordinator)
+        accumulator.values = data::accumulator.values
+        accumulator.count += 1
+        if (!skip_work && accumulator.count == active_executors.length) {
+          accumulator.total = accumulator.values.reduce(accumulator.acc)
+          accumulator.count = 0
+          send_data(active_executors,accumulator.total,6)
+          //info("Aggregate "+accumulator.values+" = "+accumulator.total)
+        }
+      } else if (tag == 6) {   // release the barrier synchronization after accumulation
+        accumulator.reset()
+        accumulator.total = data
+      } else if (tag == 1) {   // partial/final reduction
+        val opr = operations(opr_id)
         opr match {
           case ReduceOpr(s,valuep,fid)  // partial reduce
             => // partial reduce copr ReduceOpr
                info("    received partial reduce result of "+(len+4)+" bytes at "
-                    +my_master_rank+" (opr "+opr_id+")")
+                    +executor_rank+" (opr "+opr_id+")")
                val op = functions(fid).asInstanceOf[((Any,Any))=>Any]
                if (opr.cached == null) {
                  stats.cached_blocks += 1
@@ -159,9 +208,9 @@ object Executor {
                opr.reduced_count -= 1
                if (opr.reduced_count == 0) {
                  // completed ReduceOpr
-                 info("    completed reduce of opr "+opr_id+" at "+my_master_rank)
+                 info("    completed reduce of opr "+opr_id+" at "+executor_rank)
                  stats.reduce_operations += 1
-                 opr.completed = true
+                 opr.status = computed
                  enqueue_ready_operations(opr_id)
                }
           case _ => ;
@@ -171,10 +220,10 @@ object Executor {
     } else 0
   }
 
-  // send the result of an operation (array blocks) to other nodes
+  // send the result of an operation (array blocks) to other executors
   def send_data ( ranks: List[WorkerID], data: Any, opr_id: OprID, tag: Int ) {
     if (data == null)
-      error("null data sent for "+opr_id+" to "+ranks.mkString(",")+" from "+my_master_rank)
+      error("null data sent for "+opr_id+" to "+ranks.mkString(",")+" from "+executor_rank)
     // serialize data into a byte array
     val bs = new ByteArrayOutputStream(max_buffer_size)
     val os = new ObjectOutputStream(bs)
@@ -188,22 +237,54 @@ object Executor {
     val ba = bs.toByteArray
     val bb = newByteBuffer(ba.length+4)
     bb.putInt(ba.length).put(ba)
-    info("    sending "+(ba.length+4)+" bytes from "+my_master_rank
-         +" to "+ranks.mkString(",")+" (opr "+opr_id+")")
-    try {
-      for ( rank <- ranks )
-        master_comm.send(bb,ba.length+4,BYTE,rank,tag)
-    } catch { case ex: MPIException
-                => mpi_error(ex) }
+    info("    sending "+(ba.length+4)+" bytes from "+executor_rank
+         +" to "+ranks.mkString(",")+(if (opr_id <= 0) " (tag "+tag+")" else " (opr "+opr_id+")"))
+    for ( rank <- ranks )
+      try {
+        var sr = comm.iSend(bb,ba.length+4,BYTE,rank,tag)
+        var count = 0
+        while (!sr.test() && count < max_wait_time) {
+          count += 1
+          Thread.sleep(1)
+        }
+        if (!sr.test() && !Runtime.skip_work) {
+          sr.cancel()
+          sr.free()
+          throw new MPIException("Executor "+rank+" is not responding")
+        } else sr.free()
+      } catch { case ex: MPIException
+                  => mpi_error(rank,ex) }
   }
 
-  // receive the result of an operation (array blocks) from another node
+  // send data to executors
+  def send_data ( ranks: List[WorkerID], data: Any, tag: Int ) {
+    // serialize data into a byte array
+    val bs = new ByteArrayOutputStream(max_buffer_size)
+    val os = new ObjectOutputStream(bs)
+    try {
+      os.writeInt(0)
+      os.writeByte(tag)
+      os.writeObject(data)
+      os.close()
+    } catch { case ex: IOException
+                => serialization_error(ex) }
+    val ba = bs.toByteArray
+    val bb = newByteBuffer(ba.length+4)
+    bb.putInt(ba.length).put(ba)
+    for ( rank <- ranks )
+      try {
+        comm.send(bb,ba.length+4,BYTE,rank,tag)
+      } catch { case ex: MPIException
+                  => mpi_error(rank,ex) }
+  }
+
+  // receive the result of an operation (array blocks) from another executor
   def receive_data ( rank: WorkerID ): Any = {
     buffer.clear()
     try {
-      master_comm.recv(buffer,buffer.capacity(),BYTE,ANY_SOURCE,ANY_TAG)
+      comm.recv(buffer,buffer.capacity(),BYTE,ANY_SOURCE,ANY_TAG)
     } catch { case ex: MPIException
-                => mpi_error(ex) }
+                => mpi_error(rank,ex) }
     val len = buffer.getInt()
     val bb = Array.ofDim[Byte](len)
     buffer.get(bb)
@@ -214,14 +295,14 @@ object Executor {
     val data = try { is.readObject()
                    } catch { case ex: IOException
                                => serialization_error(ex); null }
-    info("    received "+(len+4)+" bytes at "+my_master_rank
+    info("    received "+(len+4)+" bytes at "+executor_rank
          +" from "+rank+" (opr "+opr_id+")")
     is.close()
     operations(opr_id).cached = data
-    operations(opr_id).completed = true
+    operations(opr_id).status = completed
     data
   }
-
+ 
   def broadcast_plan () {
     try {
       if (Communication.isCoordinator()) {
@@ -232,8 +313,8 @@ object Executor {
         os.writeObject(functions)
         os.close()
         val a = bs.toByteArray
-        master_comm.bcast(Array(a.length),1,INT,0)
-        master_comm.bcast(a,a.length,BYTE,0)
+        comm.bcast(Array(a.length),1,INT,0)
+        comm.bcast(a,a.length,BYTE,0)
         for ( opr_id <- operations.indices ) {
           val x = operations(opr_id)
           x match {
@@ -245,9 +326,9 @@ object Executor {
         }
       } else {
         val len = Array(0)
-        master_comm.bcast(len,1,INT,0)
+        comm.bcast(len,1,INT,0)
         val plan_buffer = Array.fill[Byte](len(0))(0)
-        master_comm.bcast(plan_buffer,len(0),BYTE,0)
+        comm.bcast(plan_buffer,len(0),BYTE,0)
         val bs = new ByteArrayInputStream(plan_buffer,0,plan_buffer.length)
         val is = new ObjectInputStream(bs)
         val lb_len = is.readInt()
@@ -258,15 +339,15 @@ object Executor {
         for ( x <- operations ) {
           x match {
             case LoadOpr(_,b)
-              if x.node == my_master_rank
+              if x.node == executor_rank
               => loadBlocks(b) = receive_data(0)
             case _ => ;
           }
         }
       }
-      master_comm.barrier()
+      comm.barrier()
     } catch { case ex: MPIException
-                => mpi_error(ex)
+                => mpi_error(-1,ex)
               case ex: IOException
                 => serialization_error(ex) }
   }
@@ -281,21 +362,21 @@ object Executor {
         os.flush()
         os.close()
         val a = bs.toByteArray
-        master_comm.bcast(Array(a.length),1,INT,0)
-        master_comm.bcast(a,a.length,BYTE,0)
+        comm.bcast(Array(a.length),1,INT,0)
+        comm.bcast(a,a.length,BYTE,0)
       } else {
         val len = Array(0)
-        master_comm.bcast(len,1,INT,0)
+        comm.bcast(len,1,INT,0)
         val buffer = Array.fill[Byte](len(0))(0)
-        master_comm.bcast(buffer,len(0),BYTE,0)
+        comm.bcast(buffer,len(0),BYTE,0)
         val bs = new ByteArrayInputStream(buffer,0,buffer.length)
         val is = new ObjectInputStream(bs)
         result = is.readObject()
         is.close()
       }
-      master_comm.barrier()
+      comm.barrier()
     } catch { case ex: MPIException
-                => mpi_error(ex)
+                => mpi_error(-1,ex)
               case ex: IOException
                 => serialization_error(ex) }
     result
@@ -308,87 +389,103 @@ object Executor {
     exit_points
   }
 
+  // accumulate values at the coordinator O(n)
+  def accumulate[T] ( value: T, acc: (T,T) => T ): T = {
+    send_data(List(coordinator),value,5)
+    accumulator.acc = acc.asInstanceOf[(Any,Any)=>Any]
+    accumulator.exit = false
+    while ( !accumulator.exit )
+      Thread.sleep(10)
+    accumulator.total.asInstanceOf[T]
+  }
+
   // exit when the queues of all executors are empty and exit points have been computed
   def exit_poll (): Boolean = {
-    try {
+    def and ( x: Boolean, y: Boolean ) = x && y
+    if (skip_work)
+      false
+    else {
       val b = (ready_queue.isEmpty
-               && exit_points.forall{ x => val opr = operations(x)
-                                           opr.node != my_master_rank || opr.completed })
-      val in = Array[Byte](if (b) 0 else 1)
-      val ret = Array[Byte](0)
-      master_comm.allReduce(in,ret,1,BYTE,LOR)
-      ret(0) == 0
-    } catch { case ex: MPIException
-                => mpi_error(ex); false }
-  }
-
-  // recover from failure using lineage reconstruction
-  def recover ( ex: MPIException ) {
-    ex.printStackTrace()
-    // TODO: needs recovery instead of abort
-    comm.abort(-1)
-  }
-
-  def collect_statistics (): Statistics
-    = try {
-        val in = Array[Int](stats.apply_operations,
-                            stats.reduce_operations,
-                            stats.cached_blocks)
-        val res = Array.fill[Int](in.length)(0)
-        master_comm.reduce(in,res,in.length,INT,SUM,0)
-        val max_in = Array(stats.max_cached_blocks)
-        val max = Array(0)
-        master_comm.reduce(max_in,max,1,INT,MAX,0)
-        new Statistics(res(0),res(1),res(2),max(0))
+               && exit_points.forall {
+                     x => val opr = operations(x)
+                          opr.node != executor_rank || hasCachedValue(opr) })
+      if (enable_recovery) {
+        if (!b)
+          info("    cannot exit at "+executor_rank+": needs "+exit_points.filter {
+                     x => val opr = operations(x)
+                          opr.node == executor_rank && !hasCachedValue(opr) })
+        accumulate(b,and)
+      } else try {
+        val in = Array[Byte](if (b) 0 else 1)
+        val ret = Array[Byte](0)
+        comm.allReduce(in,ret,1,BYTE,LOR)
+        ret(0) == 0
       } catch { case ex: MPIException
-                  => mpi_error(ex); stats }
+                  => mpi_error(-1,ex); false }
+    }
+  }
+
+  def collect_statistics (): Statistics = {
+    def plus ( x: Int, y: Int ) = x+y
+    def max ( x: Int, y: Int ) = Math.max(x,y)
+    if (enable_recovery)
+      new Statistics(accumulate(stats.apply_operations,plus),
+                     accumulate(stats.reduce_operations,plus),
+                     accumulate(stats.cached_blocks,plus),
+                     accumulate(stats.max_cached_blocks,max))
+    else try {
+      val in = Array[Int](stats.apply_operations,
+                          stats.reduce_operations,
+                          stats.cached_blocks)
+      val res = Array.fill[Int](in.length)(0)
+      comm.reduce(in,res,in.length,INT,SUM,0)
+      val max_in = Array(stats.max_cached_blocks)
+      val max = Array(0)
+      comm.reduce(max_in,max,1,INT,MAX,0)
+      new Statistics(res(0),res(1),res(2),max(0))
+    } catch { case ex: MPIException
+                => mpi_error(-1,ex); stats }
+  }
 }
 
 
 object Communication {
   import Executor._
-  var my_world_rank: WorkerID = 0
-  var i_am_master: Boolean = false
-  var my_master_rank: WorkerID = -1
-  var my_local_rank: WorkerID = -1
-  var num_of_masters: Int = 0
-  //var num_of_executors_per_node: Int = 1 /* must be 1 on cluster */
+  var num_of_executors: Int = 1
 
-  def barrier () { master_comm.barrier() }
+  def barrier () {
+    def or ( x: Boolean, y: Boolean ) = x || y
+    if (!enable_recovery)
+      comm.barrier()    // O(logn)
+    else accumulate(false,or)  // O(n)
+  }
 
-  // One master per node (can do MPI)
-  def isMaster (): Boolean = i_am_master
-
-  // Single coordinator
-  def isCoordinator (): Boolean = (my_master_rank == 0)
+  def isCoordinator (): Boolean
+    = (executor_rank == coordinator)
 
   def mpi_startup ( args: Array[String] ) {
     try {
       InitThread(args,THREAD_FUNNELED)
       // don't abort on MPI errors
       comm.setErrhandler(ERRORS_RETURN)
-      my_world_rank = comm.getRank
-      my_local_rank = System.getenv("OMPI_COMM_WORLD_LOCAL_RANK").toInt
-      // normally, a master has local rank 0 (one master per node)
-      i_am_master = true // (my_local_rank < num_of_executors_per_node)
-      // allow only masters to communicate via MPI
-      master_comm = comm.split(if (isMaster()) 1 else UNDEFINED,my_world_rank)
-      if (isMaster()) {
-        my_master_rank = master_comm.getRank
-        num_of_masters = master_comm.getSize
-        //val available_threads = System.getenv("OMPI_COMM_WORLD_LOCAL_SIZE")
-        info("Using master "+my_master_rank+": "+getProcessorName+"/"+my_world_rank
-             +" with "+(java.lang.Runtime.getRuntime.availableProcessors())+" Java threads and "
-             +(java.lang.Runtime.getRuntime.totalMemory()/1024/1024/1024)+" GBs")
-      }
+      executor_rank = comm.getRank
+      num_of_executors = comm.getSize
+      active_executors = 0.until(num_of_executors).toList
+      val local_rank = System.getenv("OMPI_COMM_WORLD_LOCAL_RANK").toInt
+      info("Using executor "+executor_rank+": "+getProcessorName+"/"+local_rank+" with "
+           +(java.lang.Runtime.getRuntime.availableProcessors())+" Java threads and "
+           +(java.lang.Runtime.getRuntime.totalMemory()/1024/1024/1024)+" GBs")
     } catch { case ex: MPIException
-                => System.err.println("MPI error: "+ex.getMessage)
+                => info("MPI error: "+ex.getMessage)
                    ex.printStackTrace()
                    comm.abort(-1)
             }
   }
 
   def mpi_finalize () {
-    Finalize()
+    info("Executor "+executor_rank+" is exiting")
+    if (!enable_recovery)
+      Finalize()
+    else System.exit(0)
   }
 }

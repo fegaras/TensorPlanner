@@ -16,7 +16,8 @@
 package edu.uta.diablo
 
 import PlanGenerator._
-import scala.collection.mutable.ListBuffer
+import scala.collection.mutable.{ListBuffer, Queue}
+import scala.collection.mutable.PriorityQueue
 
 
 object Scheduler {
@@ -44,16 +45,17 @@ object Scheduler {
       size(x)
   }
 
-  // calculate and store the static b_level of each node
   def set_blevel[I,T,S] ( e: Plan[I,T,S] ) {
-    def set_blevel ( opr: Opr, blevel: Int ) {
-      if (blevel > opr.static_blevel) {
-        opr.static_blevel = blevel
-        children(opr).foreach{ c => set_blevel(operations(c),blevel+1) }
+    var opr_queue: Queue[(Opr,Int)] = Queue()
+    val exit_points = e._3.map(x => x._2._3)
+    exit_points.foreach{ c => opr_queue.enqueue((operations(c),0)) }
+    while(opr_queue.nonEmpty) {
+      val (cur_opr, cur_blevel) = opr_queue.dequeue
+      if (cur_blevel > cur_opr.static_blevel) {
+        cur_opr.static_blevel = cur_blevel
+        children(cur_opr).foreach{ c => opr_queue.enqueue((operations(c),cur_blevel+1)) }
       }
     }
-    val exit_points = e._3.map(x => x._2._3)
-    exit_points.foreach{ c => set_blevel(operations(c),0) }
     for ( x <- operations )
       if (x.isInstanceOf[TupleOpr])
         x.static_blevel += size(x)
@@ -75,53 +77,93 @@ object Scheduler {
 
   def entry_points ( s: List[OprID] ): List[OprID] = {
     val b = scala.collection.mutable.ArrayBuffer[OprID]()
-    Runtime.DFS(s,
+    Runtime.BFS(s,
         c => if (operations(c).isInstanceOf[LoadOpr])
                if (!b.contains(c))
                  b.append(c))
     b.toList
   }
 
-  // assign every operation to an executor
+  case class Worker ( workDone: Int, numTasks: Int, id: WorkerID )
+
+  object MinWorkerOrder extends Ordering[Worker] {
+    def compare(x:Worker, y:Worker) = {
+      if(x.workDone == y.workDone)
+        y.numTasks compare x.numTasks
+      else 
+        y.workDone compare x.workDone
+    }
+  }
+
+  // priority queue of work done at each processor
+  var workerQueue: PriorityQueue[Worker] = PriorityQueue.empty(MinWorkerOrder)
+
   def schedule[I,T,S] ( e: Plan[I,T,S] ) {
     set_sizes()
     set_blevel(e)
-    ready_pool = ListBuffer()
-    work = 0.until(Communication.num_of_masters).map(w => 0).toArray
-    tasks = 0.until(Communication.num_of_masters).map(w => 0).toArray
-    val ep = entry_points(e._3.map(x => x._2._3))
-    if (isCoordinator())
-      info("Entry points: "+ep)
-    for ( op <- ep
-          if operations(op).node < 0
-          if !ready_pool.contains(op) )
-       ready_pool += op
-    while (ready_pool.nonEmpty) {
-      // choose a worker that has done the least work
-      val w = work.zipWithIndex.minBy{ case (x,i) => (x,tasks(i)) }._2
-      // choose opr with the least communication cost; if many, choose one with the highest b_level
-      val c = ready_pool.minBy{ x => val opr = operations(x)
-                                     ( communication_cost(opr,w),
-                                       -opr.static_blevel ) }
+    var task_queue: Queue[OprID] = Queue()
+    work = 0.until(Communication.num_of_executors).map(w => 0).toArray
+    tasks = 0.until(Communication.num_of_executors).map(w => 0).toArray
+    var in_degree: Array[Int] = Array.ofDim[Int](operations.size)
+    for(op <- operations) {
+      for(c <- op.consumers) {
+        in_degree(c) += 1
+      }
+    }
+    var ep: ListBuffer[OprID] = ListBuffer[OprID]()
+    for(i <- 0 until in_degree.size) {
+      if(in_degree(i) == 0)
+        ep += i
+    }
+    if (isCoordinator()) {
+      println("Size: "+ep.size+" Entry points: "+ep)
+    }
+    for (op <- ep) {
+      task_queue.enqueue(op)
+    }
+    for(i <- 0 until Communication.num_of_executors)
+      workerQueue.enqueue(Worker(0,0,i))
+    var total_time = 0.0
+    var worker_time = 0.0
+    val k = scala.math.sqrt(Communication.num_of_executors).toInt+1
+    while (task_queue.nonEmpty) {
+      val c = task_queue.dequeue
       val opr = operations(c)
+      var tmp_workers: ListBuffer[Worker] = ListBuffer()
+      var w = Worker(0,0,0)
+      var min_comm_cost = Int.MaxValue
+      for(i <- 0 until k) {
+        var tmp_worker = workerQueue.dequeue()
+        tmp_workers += tmp_worker
+        val tmp_cost = communication_cost(opr,tmp_worker.id)
+        if(tmp_cost < min_comm_cost) {
+          w = tmp_worker
+          min_comm_cost = tmp_cost
+        }
+      }
+      for(tw <- tmp_workers) {
+        if(tw.id != w.id)
+          workerQueue.enqueue(tw)
+      }
       // opr is allocated to worker w
       opr match {
-        case ReduceOpr(_,true,_)  // total aggregation
-          => opr.node = 0
-        case _ => opr.node = w
+        case ReduceOpr(_,true,_)  // total aggregation result is on coordinator
+          => opr.node = Executor.coordinator
+        case _ => opr.node = w.id
       }
-      work(w) += cpu_cost(opr) + communication_cost(opr,w)
-      tasks(w) += 1
+      val work_done = cpu_cost(opr) + communication_cost(opr,w.id)
+      workerQueue.enqueue(Worker(w.workDone + work_done, w.numTasks+1, w.id))
+      work(w.id) += work_done
+      tasks(w.id) += 1
       if (isCoordinator())
-        info("schedule opr "+c+" on node "+w+" (work = "+work(w)+")")
-      ready_pool -= c
+        info("schedule opr "+c+" on node "+w.id+" (work = "+work(w.id)+")")
       // add more ready nodes
       for { c <- opr.consumers } {
         val copr = operations(c)
-        if (copr.node < 0
-            && !ready_pool.contains(c)
-            && children(copr).forall(operations(_).node >= 0))
-          ready_pool += c
+        in_degree(c) -= 1
+        if (in_degree(c) == 0) {
+          task_queue.enqueue(c)
+        }
       }
     }
     if (trace && isCoordinator())
