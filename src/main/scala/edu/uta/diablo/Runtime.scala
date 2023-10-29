@@ -43,7 +43,7 @@ object Runtime {
         opr.visited = true
         f(c)
         opr match {
-          case TupleOpr(x,y)
+          case PairOpr(x,y)
             => opr_queue.enqueue(x)
                opr_queue.enqueue(y)
           case ApplyOpr(x,_)
@@ -93,7 +93,7 @@ object Runtime {
     operations(opr_id).os = buffer.toList
   }
 
-  def schedule[I,T,S] ( e: Plan[I,T,S] ) {
+  def schedule[I] ( e: Plan[I] ) {
     if (receive_request != null) {
       receive_request.cancel()
       receive_request.free()
@@ -125,7 +125,7 @@ object Runtime {
     val opr = operations(opr_id)
     info("*** computing opr "+opr_id+":"+opr+" on exec "+executor_rank)
     val res = opr match {
-        case LoadOpr(_,b)
+        case LoadOpr(b)
           => opr.status = computed
              cache_data(opr,loadBlocks(b))
         case ApplyOpr(x,fid)
@@ -135,18 +135,18 @@ object Runtime {
              stats.apply_operations += 1
              opr.status = computed
              cache_data(opr,f(operations(x).cached).head)
-        case TupleOpr(x,y)
+        case PairOpr(x,y)
           => def f ( lg_id: OprID ): (Any,Any) = {
                 val lg = operations(lg_id)
                 if (hasCachedValue(lg)) {
                   assert(lg.cached != null)
                   lg.cached.asInstanceOf[(Any,Any)]
                 } else lg match {
-                    case TupleOpr(x,y)
+                    case PairOpr(x,y)
                       => val gx@(iv,vx) = f(x)
                          val gy@(_,vy) = f(y)
-                         val xx = if (operations(x).isInstanceOf[TupleOpr]) vx else gx
-                         val yy = if (operations(y).isInstanceOf[TupleOpr]) vy else gy
+                         val xx = if (operations(x).isInstanceOf[PairOpr]) gx else vx
+                         val yy = if (operations(y).isInstanceOf[PairOpr]) gy else vy
                          val data = (iv,(xx,yy))
                          cache_data(lg,data)
                          lg.status = computed
@@ -156,6 +156,11 @@ object Runtime {
                 }
              }
              f(opr_id)
+        case SeqOpr(s)
+          => val sv = s.map{ x => assert(hasCachedValue(operations(x)))
+                                  operations(x).cached }
+             opr.status = computed
+             cache_data(opr,sv)
         case ReduceOpr(s,valuep,fid)
           => val sv = s.map{ x => assert(hasCachedValue(operations(x)))
                                   operations(x).cached.asInstanceOf[(Any,Any)] }
@@ -201,7 +206,8 @@ object Runtime {
            // partial reduce opr inside the copr ReduceOpr
            if (copr.cached == null) {
              stats.cached_blocks += 1
-             stats.max_cached_blocks = Math.max(stats.max_cached_blocks,stats.cached_blocks)
+             stats.max_cached_blocks = Math.max(stats.max_cached_blocks,
+                                                stats.cached_blocks)
              copr.cached = opr.cached
            } else if (valuep)
                     copr.cached = op((copr.cached,opr.cached))
@@ -317,9 +323,9 @@ object Runtime {
     info("Executor "+executor_rank+" has finished execution")
   }
 
-  def entry_points ( s: List[OprID] ): List[OprID] = {
+  def entry_points ( es: List[OprID] ): List[OprID] = {
     val b = ArrayBuffer[OprID]()
-    BFS(s,
+    BFS(es,
         c => { val copr = operations(c)
                if (copr.isInstanceOf[LoadOpr] && copr.node == executor_rank)
                  if (!b.contains(c))
@@ -328,8 +334,9 @@ object Runtime {
   }
 
   // distributed evaluation of a scheduled plan using MPI
-  def eval[I,T,S] ( plan: Plan[I,T,S] ): Plan[I,T,S] = {
-    exit_points = broadcast_exit_points(plan)
+  def eval[I] ( plan: Plan[I] ): Plan[I] = {
+    exit_points = plan._3.map(_._2)
+    broadcast_exit_points(exit_points)
     if (isCoordinator())
       info("Exit points: "+exit_points)
     ready_queue.clear()
@@ -358,7 +365,7 @@ object Runtime {
 
   // eager evaluation of a single operation
   def evalOpr ( opr_id: OprID ): Any = {
-    val plan = (1,(),List((0,(1,(),opr_id))))
+    val plan = (1,EmptyTuple(),List((0,opr_id)))
     operations = PlanGenerator.operations.toArray
     loadBlocks = PlanGenerator.loadBlocks.toArray
     schedule(plan)
@@ -370,26 +377,28 @@ object Runtime {
   }
 
   // collect the results of an evaluated plan at the coordinator
-  def collect[I,T,S] ( plan: Plan[I,T,S] ): List[Any] = {
+  def collect[I] ( plan: Plan[I] ): Tensor[I] = {
+    val (ds,dd,es) = plan
     var receiver: ReceiverThread = new ReceiverThread()
     receiver.start()
     if (isCoordinator()) {
-        info("Collecting the blocks of all exit points at the coordinator")
-        while (exit_points.exists{ opr_id => !hasCachedValue(operations(opr_id)) })
+        info("Collecting the blocks of tasks "+es+" at the coordinator")
+        while (es.exists{ case (_,opr_id) => !hasCachedValue(operations(opr_id)) })
           Thread.sleep(100)
         barrier()
         receiver.stop()
-        exit_points.map(x => operations(x).cached)
-      } else {
-        exit_points.foreach {
-               opr_id => val opr = operations(opr_id)
-                         if (opr.node == executor_rank)
-                           send_data(List(coordinator),opr.cached,opr_id,2)
-          }
+        (ds,dd,es.map{ case (i,opr_id) => (i,operations(opr_id).cached) })
+    } else {
+        es.foreach {
+             case (i,opr_id)
+               => val opr = operations(opr_id)
+                  if (opr.node == executor_rank)
+                    send_data(List(coordinator),opr.cached,opr_id,2)
+        }
         barrier()
         receiver.stop()
-        Nil
-      }
+        (ds,dd,Nil)
+    }
   }
 
   def completed_front ( failed_executor: WorkerID, new_executor: WorkerID ): Array[OprID] = {
@@ -490,24 +499,26 @@ object inMem {
     }
     info(" "*3*tabs+"*** "+tabs+": "+id+"/"+e)
     val res = e match {
-        case LoadOpr(_,b)
+        case LoadOpr(b)
           => loadBlocks(b)
         case ApplyOpr(x,fid)
           => val f = functions(fid).asInstanceOf[Any=>List[Any]]
              stats.apply_operations += 1
              f(eval(x,tabs+1)).head
-        case TupleOpr(x,y)
+        case PairOpr(x,y)
           => def f ( lg: OprID ): (Any,Any)
                = operations(lg) match {
-                    case TupleOpr(x,y)
+                    case PairOpr(x,y)
                       => val gx@(iv,vx) = f(x)
                          val gy@(_,vy) = f(y)
-                         val xx = if (operations(x).isInstanceOf[TupleOpr]) vx else gx
-                         val yy = if (operations(y).isInstanceOf[TupleOpr]) vy else gy
+                         val xx = if (operations(x).isInstanceOf[PairOpr]) gx else vx
+                         val yy = if (operations(y).isInstanceOf[PairOpr]) gy else vy
                          (iv,(xx,yy))
                     case _ => eval(lg,tabs+1).asInstanceOf[(Any,Any)]
                  }
              f(id)
+        case SeqOpr(s)
+          => s.map(eval(_,tabs+1))
         case ReduceOpr(s,true,fid)
           => val sv = s.map(eval(_,tabs+1))
              val op = functions(fid).asInstanceOf[((Any,Any))=>Any]
@@ -525,15 +536,13 @@ object inMem {
     res
   }
 
-  def eval[I,T,S] ( e: Plan[I,T,S] ): (T,S,List[(I,Any)])
-    = e match {
-        case (dp,sp,s)
-          => operations = PlanGenerator.operations.toArray
-             stats.clear()
-             operations.foreach(x => x.count = x.consumers.length)
-             val res = s.map{ case (i,(ds,ss,lg))
-                                => eval(lg,0).asInstanceOf[(I,Any)] }
-             info("Number of tasks: "+operations.length)
-             (dp,sp,res)
-      }
+  def eval[I] ( plan: Plan[I] ): Tensor[I] = {
+    val (ds,dd,s) = plan
+    operations = PlanGenerator.operations.toArray
+    stats.clear()
+    operations.foreach(x => x.count = x.consumers.length)
+    val res = s.map{ case (i,lg) => eval(lg,0).asInstanceOf[(I,Any)] }
+    info("Number of tasks: "+operations.length)
+    (ds,dd,res)
+  }
 }

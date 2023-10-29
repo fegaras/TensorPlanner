@@ -258,11 +258,11 @@ object ComprehensionTranslator {
       case MethodCall(Store("rdd",tps,args,x),"reduce",f)
         => MethodCall(translate(x,vars),"reduce",f)
       case reduce(op,Comprehension(h,qs))
-        // total aggregation for in-memory comprehension
-        if !is_rdd_comprehension(qs)
+        // don't use: total aggregation for in-memory comprehension
+        if false && !is_rdd_comprehension(qs)
         => val nv = newvar
            val nr = qs:+AssignQual(Var(nv),mcall(op,Var(nv),h))
-           val etp = typecheck(h)
+           val etp = typecheck(h)      // typecheck error
            val zero = zeroValue(op,etp)
            translate(Block(List(VarDecl(nv,etp,Seq(List(zero))),
                                 Comprehension(ignore,nr),Var(nv))),vars)

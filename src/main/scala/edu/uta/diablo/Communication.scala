@@ -52,8 +52,8 @@ object operator_comparator extends Comparator[OprID] {
   def priority ( opr_id: OprID ): Int
     = operations(opr_id) match {
         case ReduceOpr(_,_,_) => 1
-        case TupleOpr(_,_) => 2
-        case LoadOpr(_,_) => 3
+        case PairOpr(_,_) => 2
+        case LoadOpr(_) => 3
         case _ => 4
       }
   override def compare ( x: OprID, y: OprID ): Int
@@ -318,7 +318,7 @@ object Executor {
         for ( opr_id <- operations.indices ) {
           val x = operations(opr_id)
           x match {
-            case LoadOpr(_,b)
+            case LoadOpr(b)
               if x.node > 0
               => send_data(List(x.node),loadBlocks(b),opr_id,0)
             case _ => ;
@@ -338,7 +338,7 @@ object Executor {
         is.close()
         for ( x <- operations ) {
           x match {
-            case LoadOpr(_,b)
+            case LoadOpr(b)
               if x.node == executor_rank
               => loadBlocks(b) = receive_data(0)
             case _ => ;
@@ -382,10 +382,8 @@ object Executor {
     result
   }
 
-  def broadcast_exit_points[I,T,S] ( e: Plan[I,T,S] ): List[OprID] = {
-    exit_points = broadcast(if (Communication.isCoordinator())
-                              e._3.map(x => x._2._3)
-                            else null).asInstanceOf[List[OprID]]
+  def broadcast_exit_points ( es: List[OprID] ): List[OprID] = {
+    exit_points = broadcast(if (Communication.isCoordinator()) es else null).asInstanceOf[List[OprID]]
     exit_points
   }
 

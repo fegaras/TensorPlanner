@@ -352,6 +352,9 @@ object Normalizer {
            normalize(flatMap(Lambda(TuplePat(List(VarPat(kv),VarPat(nv))),
                                     Seq(List(Tuple(List(Var(kv),Seq(List(Var(nv)))))))),
                              groupBy(x)))
+      case reduce(m,Comprehension(reduce(n,Comprehension(u,qs)),ps))
+        if m == n
+        => normalize(reduce(m,Comprehension(u,ps++qs)))
       case reduce(m,Seq(List(x)))
         => normalize(x)
       case reduce(m,Seq(Nil))

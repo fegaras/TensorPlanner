@@ -566,7 +566,7 @@ object Typechecker {
                             case SeqType(t)
                               => bindPattern(p,t,env)
                             case ParametricType(c,List(t))
-                              if isCollection(c)
+                              //if isCollection(c)
                               => bindPattern(p,t,env)
                             case t => throw new Error("Expected a collection type in "+e+" (found "+t+")")
                          }
@@ -575,7 +575,7 @@ object Typechecker {
                  case ArrayType(d,_)
                    => ArrayType(d,elemType(btp))
                  case ParametricType(c,List(_))
-                   if isCollection(c)
+                   //if isCollection(c)
                    => ParametricType(c,List(elemType(btp)))
                  case _ => btp
                }

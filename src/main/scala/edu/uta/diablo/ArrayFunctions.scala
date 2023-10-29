@@ -28,8 +28,13 @@ import PlanGenerator._
 
 trait ArrayFunctions {
 
-  final def join[K,T,S] ( x: List[(K,T)], y: List[(K,S)]  ): List[(K,(T,S))]
-    = for { (k,t) <- x; (kk,s) <- y if kk == k } yield (k,(t,s))
+  final def join[K,T,S] ( x: List[(K,T)], y: List[(K,S)]  ): List[(K,(T,S))] = {
+    val h = new mutable.HashMap[K,T]()
+    h ++= x
+    for ( (k,w) <- y;
+          v <- h.get(k) )
+      yield (k,(v,w))
+  }
 
   final def reduceByKey[K,T] ( x: List[(K,T)], op: (T,T) => T ): List[(K,T)]
     = x.groupBy(_._1).mapValues(x => x.map(_._2).reduce(op)).toList
@@ -37,18 +42,34 @@ trait ArrayFunctions {
   final def groupByKey[K,T] ( x: List[(K,T)] ): List[(K,List[T])]
     = x.groupBy(_._1).mapValues(_.map(_._2)).toList
 
+  final def cogroup[K,T,S] ( x: List[(K,T)], y: List[(K,S)]  ): List[(K,(List[T],List[S]))] = {
+    val h = new mutable.HashMap[K,(List[T],List[S])]()
+    x.foreach{ case (k,v)
+                 => if (h.contains(k)) {
+                      val (xs,ys) = h(k)
+                      h.update(k,(v::xs,ys))
+                    } else h += ((k,(List(v),Nil))) }
+    y.foreach{ case (k,v)
+                 => if (h.contains(k)) {
+                      val (xs,ys) = h(k)
+                      h.update(k,(xs,v::ys))
+                    } else h += ((k,(Nil,List(v)))) }
+    h.toList
+  }
+
   @transient
   var functions: Array[Nothing=>Any] = _
 
-  type Plan[I,T,S] = (T,S,List[(I,(T,S,OprID))])
+  type Tensor[I] = (Any,Any,List[(I,Any)])
+  type Plan[I] = (Any,Any,List[(I,OprID)])
 
   // assign every operation to an executor
-  def schedule[I,T,S] ( e: Plan[I,T,S] ) {
+  def schedule[I] ( e: Plan[I] ) {
     Runtime.schedule(e)
   }
 
   // distributed evaluation of a scheduled plan using MPI
-  def eval[I,T,S] ( e: Plan[I,T,S] ): Plan[I,T,S]
+  def eval[I] ( e: Plan[I] ): Plan[I]
     = Runtime.eval(e)
 
   // eager evaluation of a single operation
@@ -56,11 +77,11 @@ trait ArrayFunctions {
     = Runtime.evalOpr(opr_id)
 
   // collect the results of an evaluated plan at the master node
-  def collect[I,T,S] ( e: Plan[I,T,S] ): List[Any]//List[(I,Any)]
+  def collect[I] ( e: Plan[I] ): Tensor[I]
     = Runtime.collect(e)
 
   // single-core, in-memory evaluation (for testing only)
-  def evalMem[I,T,S] ( e: Plan[I,T,S] ): (T,S,List[(I,Any)])
+  def evalMem[I] ( e: Plan[I] ): Tensor[I]
     = inMem.eval(e)
 
   // start communication in MPI
@@ -73,16 +94,17 @@ trait ArrayFunctions {
     Communication.mpi_finalize()
   }
 
-  def isCoordinator (): Boolean = Communication.isCoordinator()
+  def isCoordinator (): Boolean
+    = Communication.isCoordinator()
 
-  def loadOpr ( index: Any, block: Any ): OprID = {
+  def loadOpr ( block: Any ): OprID = {
     loadBlocks += block
-    operations += LoadOpr(index,loadBlocks.length-1)
+    operations += LoadOpr(loadBlocks.length-1)
     operations.length-1
   }
 
-  def tupleOpr ( x: OprID, y: OprID ): OprID = {
-    operations += TupleOpr(x,y)
+  def pairOpr ( x: OprID, y: OprID ): OprID = {
+    operations += PairOpr(x,y)
     val loc = operations.length-1
     operations(x).consumers = loc::operations(x).consumers
     operations(y).consumers = loc::operations(y).consumers
@@ -106,6 +128,14 @@ trait ArrayFunctions {
               operations(x).consumers = loc::operations(x).consumers
            loc
     }
+  }
+
+  def seqOpr ( s: List[OprID] ): OprID = {
+    operations += SeqOpr(s)
+    val loc = operations.length-1
+    for ( x <- s )
+       operations(x).consumers = loc::operations(x).consumers
+    loc
   }
 
   def textFile ( filename: String ): List[(Int,String)] = {

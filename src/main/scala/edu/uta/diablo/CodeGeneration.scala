@@ -829,6 +829,10 @@ abstract class CodeGeneration {
         => val xc = codeGen(x,env)
            val ctp = Type2Tree(tp)
            q"$xc.asInstanceOf[$ctp]"
+      case IfE(p,x,Seq(Nil))
+        => val pc = codeGen(p,env)
+           val xc = codeGen(x,env)
+           q"{ assert($pc); $xc }"
       case IfE(p,x,y)
         => val pc = codeGen(p,env)
            val xc = codeGen(x,env)

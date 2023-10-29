@@ -33,7 +33,7 @@ object Scheduler {
   def size ( e: Opr ): Int = {
     if (e.size <= 0)
       e.size = e match {
-                  case TupleOpr(x,y)
+                  case PairOpr(x,y)
                     => size(operations(x)) + size(operations(y))
                   case _ => 1
                }
@@ -45,9 +45,9 @@ object Scheduler {
       size(x)
   }
 
-  def set_blevel[I,T,S] ( e: Plan[I,T,S] ) {
+  def set_blevel[I] ( e: Plan[I] ) {
     var opr_queue: Queue[(Opr,Int)] = Queue()
-    val exit_points = e._3.map(x => x._2._3)
+    val exit_points = e._3.map(x => x._2)
     exit_points.foreach{ c => opr_queue.enqueue((operations(c),0)) }
     while(opr_queue.nonEmpty) {
       val (cur_opr, cur_blevel) = opr_queue.dequeue
@@ -57,15 +57,16 @@ object Scheduler {
       }
     }
     for ( x <- operations )
-      if (x.isInstanceOf[TupleOpr])
+      if (x.isInstanceOf[PairOpr])
         x.static_blevel += size(x)
   }
 
   def cpu_cost ( opr: Opr ): Int
     = children(opr).map{ c => val copr = operations(c)
                               copr match {
-                                case LoadOpr(_,_) => 0
-                                case TupleOpr(_,_) => 0
+                                case LoadOpr(_) => 0
+                                case SeqOpr(_) => 0
+                                case PairOpr(_,_) => 0
                                 case _ => size(copr)
                               } }.sum
 
@@ -98,7 +99,7 @@ object Scheduler {
   // priority queue of work done at each processor
   var workerQueue: PriorityQueue[Worker] = PriorityQueue.empty(MinWorkerOrder)
 
-  def schedule[I,T,S] ( e: Plan[I,T,S] ) {
+  def schedule[I] ( e: Plan[I] ) {
     set_sizes()
     set_blevel(e)
     var task_queue: Queue[OprID] = Queue()
