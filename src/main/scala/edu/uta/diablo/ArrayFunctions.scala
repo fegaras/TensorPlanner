@@ -28,13 +28,8 @@ import PlanGenerator._
 
 trait ArrayFunctions {
 
-  final def join[K,T,S] ( x: List[(K,T)], y: List[(K,S)]  ): List[(K,(T,S))] = {
-    val h = new mutable.HashMap[K,T]()
-    h ++= x
-    for ( (k,w) <- y;
-          v <- h.get(k) )
-      yield (k,(v,w))
-  }
+  final def join[K,T,S] ( x: List[(K,T)], y: List[(K,S)]  ): List[(K,(T,S))]
+    = for { (k,t) <- x; (kk,s) <- y if kk == k } yield (k,(t,s))
 
   final def reduceByKey[K,T] ( x: List[(K,T)], op: (T,T) => T ): List[(K,T)]
     = x.groupBy(_._1).mapValues(x => x.map(_._2).reduce(op)).toList

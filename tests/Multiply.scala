@@ -65,8 +65,8 @@ object Multiply {
       println("eval time: %.3f secs".format(wtime()-t))
     val s = collect(res)
     if (isCoordinator())
-      s.foreach(println)   // s.foreach(pr)
-    //validate(s.asInstanceOf[List[((Int, Int), Any)]])
+      s._3.foreach(println)   // s._3.foreach(pr)
+    //validate(s._3.asInstanceOf[List[((Int, Int), Any)]])
 
     end()
   }

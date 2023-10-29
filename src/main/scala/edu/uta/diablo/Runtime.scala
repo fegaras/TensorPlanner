@@ -336,7 +336,7 @@ object Runtime {
   // distributed evaluation of a scheduled plan using MPI
   def eval[I] ( plan: Plan[I] ): Plan[I] = {
     exit_points = plan._3.map(_._2)
-    broadcast_exit_points(exit_points)
+    exit_points = broadcast_exit_points(exit_points)
     if (isCoordinator())
       info("Exit points: "+exit_points)
     ready_queue.clear()
