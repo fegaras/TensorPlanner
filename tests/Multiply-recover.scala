@@ -54,13 +54,6 @@ object Multiply {
 
     var t = wtime()
 
-    if (false && isCoordinator()) {
-      //validate
-          (evalMem(plan)._3)
-      println("in-memory time: %.3f secs".format(wtime()-t))
-    }
-
-    t = wtime()
     schedule(plan)
     if (isCoordinator())
       println("schedule time: %.3f secs".format(wtime()-t))
@@ -71,8 +64,7 @@ object Multiply {
       println("eval time: %.3f secs".format(wtime()-t))
     val s = collect(res)
     if (isCoordinator())
-      s.foreach(println)   // s.foreach(pr)
-    //validate(s.asInstanceOf[List[((Int, Int), Any)]])
+      s._3.foreach(println)
 
     end()
   }

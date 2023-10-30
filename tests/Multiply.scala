@@ -42,12 +42,17 @@ object Multiply {
       var Az = tensor*(N,M)[ ((i,j),i*j*1.0) | i <- 0..(N-1), j <- 0..(M-1) ];
       var Bz = tensor*(M,N)[ ((i,j),i*j*2.0) | i <- 0..(M-1), j <- 0..(N-1) ];
 
-      tensor*(N,N)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
+      var t = wtime();
+
+      var R = tensor*(N,N)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
+
+      if (isCoordinator())
+        println("plan creation: %.3f secs".format(wtime()-t));
+      R
 
       """)
 
     var t = wtime()
-
     if (false && isCoordinator()) {
       //validate
           (evalMem(plan)._3)
