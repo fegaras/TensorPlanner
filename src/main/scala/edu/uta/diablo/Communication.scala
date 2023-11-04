@@ -43,7 +43,7 @@ class Statistics (
     info("Number of apply operations: "+apply_operations)
     info("Number of reduce operations: "+reduce_operations)
     info("Max num of cached blocks per executor: "+max_cached_blocks)
-    info("Final num of cached blocks: "+cached_blocks)
+    //info("Final num of cached blocks: "+cached_blocks)
   }
 }
 
@@ -66,7 +66,7 @@ object Executor {
   var executor_rank: WorkerID = 0
   var coordinator: WorkerID = 0
   // the buffer must fit few blocks (one block of doubles is 8MBs)
-  val max_buffer_size = 100000000
+  val max_buffer_size = 500000000
   val buffer: ByteBuffer = newByteBuffer(max_buffer_size)
   // operations ready to be executed
   var ready_queue = new PriorityBlockingQueue[OprID](1000,operator_comparator)
@@ -151,7 +151,11 @@ object Executor {
         info("    received "+(len+4)+" bytes at "+executor_rank+" (opr "+opr_id+")")
         cache_data(opr,data)
         opr.status = completed
-        enqueue_ready_operations(opr_id)
+        new Thread() {
+          override def run () {
+            enqueue_ready_operations(opr_id)
+          }
+        }.start()
       } else if (tag == 2) {   // cache data
         val opr = operations(opr_id)
         info("    received "+(len+4)+" bytes at "+executor_rank)
@@ -190,8 +194,8 @@ object Executor {
       } else if (tag == 1) {   // partial/final reduction
         val opr = operations(opr_id)
         opr match {
-          case ReduceOpr(s,valuep,fid)  // partial reduce
-            => // partial reduce copr ReduceOpr
+          case ReduceOpr(s,valuep,fid)
+            => // partial reduce ReduceOpr
                info("    received partial reduce result of "+(len+4)+" bytes at "
                     +executor_rank+" (opr "+opr_id+")")
                val op = functions(fid).asInstanceOf[((Any,Any))=>Any]
@@ -200,9 +204,11 @@ object Executor {
                  stats.max_cached_blocks = Math.max(stats.max_cached_blocks,stats.cached_blocks)
                  opr.cached = data
                } else if (valuep)
+                        // total aggregation
                         opr.cached = op((opr.cached,data))
                  else { val x = opr.cached.asInstanceOf[(Any,Any)]
                         val y = data.asInstanceOf[(Any,Any)]
+                        // merge the current state with the incoming partially reduced data
                         opr.cached = (x._1,op((x._2,y._2)))
                       }
                opr.reduced_count -= 1
@@ -211,7 +217,11 @@ object Executor {
                  info("    completed reduce of opr "+opr_id+" at "+executor_rank)
                  stats.reduce_operations += 1
                  opr.status = computed
-                 enqueue_ready_operations(opr_id)
+                 new Thread() {
+                   override def run () {
+                     enqueue_ready_operations(opr_id)
+                   }
+                 }.start()
                }
           case _ => ;
         }
@@ -241,17 +251,21 @@ object Executor {
          +" to "+ranks.mkString(",")+(if (opr_id <= 0) " (tag "+tag+")" else " (opr "+opr_id+")"))
     for ( rank <- ranks )
       try {
-        var sr = comm.iSend(bb,ba.length+4,BYTE,rank,tag)
-        var count = 0
-        while (!sr.test() && count < max_wait_time) {
-          count += 1
-          Thread.sleep(1)
+        if (!enable_recovery)
+          comm.send(bb,ba.length+4,BYTE,rank,tag)
+        else {
+          var sr = comm.iSend(bb,ba.length+4,BYTE,rank,tag)
+          var count = 0
+          while (!sr.test() && count < max_wait_time) {
+            count += 1
+            Thread.sleep(1)
+          }
+          if (!sr.test() && !Runtime.skip_work) {
+            sr.cancel()
+            sr.free()
+            throw new MPIException("Executor "+rank+" is not responding")
+          } else sr.free()
         }
-        if (!sr.test() && !Runtime.skip_work) {
-          sr.cancel()
-          sr.free()
-          throw new MPIException("Executor "+rank+" is not responding")
-        } else sr.free()
       } catch { case ex: MPIException
                   => mpi_error(rank,ex) }
   }

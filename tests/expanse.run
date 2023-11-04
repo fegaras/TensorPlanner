@@ -39,6 +39,6 @@ done
 ulimit -m unlimited
 
 # for each expanse node: 2 sockets, 1 executor per socket, 64 Java threads per executor
-mpirun -N 2 --bind-to socket --mca btl_openib_allow_ib true --mca btl openib,tcp,self,vader \
+mpirun -N 2 --bind-to socket --mca btl_openib_allow_ib true --mca btl tcp,self,vader \
        scala -J-Xms64g -J-Xmx64g -classpath classes:$DIABLO_HOME/lib/diablo.jar:$OPENMPI_HOME/lib/mpi.jar Multiply 14456 13345
 

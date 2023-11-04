@@ -145,8 +145,10 @@ object Runtime {
                     case PairOpr(x,y)
                       => val gx@(iv,vx) = f(x)
                          val gy@(_,vy) = f(y)
-                         val xx = if (operations(x).isInstanceOf[PairOpr]) gx else vx
-                         val yy = if (operations(y).isInstanceOf[PairOpr]) gy else vy
+                         val xx = if (operations(x).isInstanceOf[PairOpr])
+                                    gx else vx
+                         val yy = if (operations(y).isInstanceOf[PairOpr])
+                                    gy else vy
                          val data = (iv,(xx,yy))
                          cache_data(lg,data)
                          lg.status = computed
@@ -210,9 +212,11 @@ object Runtime {
                                                 stats.cached_blocks)
              copr.cached = opr.cached
            } else if (valuep)
+                    // total aggregation
                     copr.cached = op((copr.cached,opr.cached))
              else { val x = copr.cached.asInstanceOf[(Any,Any)]
                     val y = opr.cached.asInstanceOf[(Any,Any)]
+                    // merge the current state with the partially reduced data
                     copr.cached = (x._1,op((x._2,y._2)))
                   }
            copr.reduced_count -= 1
@@ -229,6 +233,7 @@ object Runtime {
                     +executor_rank+" to "+copr.node)
                send_data(List(copr.node),copr.cached,c,1)
                gc(opr_id)
+               gc(c)
              }
            }
            check_caches(c)
@@ -236,7 +241,7 @@ object Runtime {
     }
   }
 
-  // After opr is completed, check its consumers to see if anyone is ready to enqueue
+  // After opr is computed, check its consumers to see if anyone is ready to enqueue
   def enqueue_ready_operations ( opr_id: OprID ) {
     val opr = operations(opr_id)
     if (opr.node == executor_rank) {
@@ -267,6 +272,10 @@ object Runtime {
                this.synchronized { ready_queue.offer(c) }
       }
     }
+    // if there is no consumer on the same node, garbage collect the task cache
+    if (opr.node == executor_rank && !exit_points.contains(opr_id)
+        && opr.consumers.forall( c => operations(c).node != executor_rank ))
+      gc(opr_id)
     opr.status = completed
   }
 

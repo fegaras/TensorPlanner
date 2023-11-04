@@ -75,6 +75,13 @@ trait ArrayFunctions {
   def collect[I] ( e: Plan[I] ): Tensor[I]
     = Runtime.collect(e)
 
+  def clearPlans () {
+    Runtime.operations.foreach {
+        e => Runtime.initialize_opr(e)
+             e.status = PlanGenerator.notReady
+    }
+  }
+
   // single-core, in-memory evaluation (for testing only)
   def evalMem[I] ( e: Plan[I] ): Tensor[I]
     = inMem.eval(e)

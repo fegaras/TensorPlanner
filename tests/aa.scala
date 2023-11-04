@@ -20,6 +20,9 @@ object Test {
 
     val graph = textFile("graph.txt").map{ case (_,line) => val a = line.split(","); (a(0).toInt,a(0).toInt) }
 
+    val rand = new scala.util.Random()
+    val theta_init: List[(Int,Double)] = (0 to M-1).map(i => (i,rand.nextDouble()-0.5)).toList
+
     val plan = q("""
 
       var Az = tensor*(N,M)[ ((i,j),2.3) | i <-0..(N-1), j<-0..(M-1) ];
