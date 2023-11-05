@@ -117,6 +117,83 @@ object Executor {
     comm.abort(-1)
   }
 
+  // process the incoming message
+  def handle_received_message ( tag: Byte, opr_id: OprID, data: Any, len: Int ) {
+    val opr = operations(opr_id)
+    if (tag == 0) {  // cache data and check for ready operations
+      val opr = operations(opr_id)
+      info("    received "+(len+4)+" bytes at "+executor_rank+" (opr "+opr_id+")")
+      cache_data(opr,data)
+      opr.status = completed
+      enqueue_ready_operations(opr_id)
+    } else if (tag == 2) {   // cache data
+      val opr = operations(opr_id)
+      info("    received "+(len+4)+" bytes at "+executor_rank)
+      cache_data(opr,data)
+      opr.status = completed
+    } else if (tag == 3) {  // coordinator will decide who will replace a failed executor
+      val failed_executor = data.asInstanceOf[Int]
+      if (!failed_executors.contains(failed_executor)) {
+        skip_work = true
+        failed_executors = failed_executor::failed_executors
+        active_executors = active_executors.filter(_ != failed_executor)
+        val candidates = active_executors.filter(_ != coordinator)
+        val new_executor = candidates((Math.random()*candidates.length).toInt)
+        info("The coordinator has decided to replace the failed executor "
+             +failed_executor+" with "+new_executor)
+        send_data(active_executors,(failed_executor,new_executor),0,4)
+      }
+    } else if (tag == 4) {  // recovery at all executors (sent from coordinator)
+      val (failed_executor,new_executor) = data.asInstanceOf[(Int,Int)]
+      if (!failed_executors.contains(failed_executor))
+        failed_executors = failed_executor::failed_executors
+      active_executors = active_executors.filter(_ != failed_executor)
+      Runtime.recover(failed_executor,new_executor)
+    } else if (tag == 5) {  // synchronize accumulation (on coordinator)
+      accumulator.values = data::accumulator.values
+      accumulator.count += 1
+      if (!skip_work && accumulator.count == active_executors.length) {
+        accumulator.total = accumulator.values.reduce(accumulator.acc)
+        accumulator.count = 0
+        send_data(active_executors,accumulator.total,6)
+        //info("Aggregate "+accumulator.values+" = "+accumulator.total)
+      }
+    } else if (tag == 6) {   // release the barrier synchronization after accumulation
+      accumulator.reset()
+      accumulator.total = data
+    } else if (tag == 1) {   // partial/final reduction
+      val opr = operations(opr_id)
+      opr match {
+        case ReduceOpr(s,valuep,fid)
+          => // partial reduce ReduceOpr
+             info("    received partial reduce result of "+(len+4)+" bytes at "
+                  +executor_rank+" (opr "+opr_id+")")
+             val op = functions(fid).asInstanceOf[((Any,Any))=>Any]
+             if (opr.cached == null) {
+               stats.cached_blocks += 1
+               stats.max_cached_blocks = Math.max(stats.max_cached_blocks,stats.cached_blocks)
+               opr.cached = data
+             } else if (valuep)
+                      // total aggregation
+                      opr.cached = op((opr.cached,data))
+               else { val x = opr.cached.asInstanceOf[(Any,Any)]
+                      val y = data.asInstanceOf[(Any,Any)]
+                      // merge the current state with the incoming partially reduced data
+                      opr.cached = (x._1,op((x._2,y._2)))
+                    }
+             opr.reduced_count -= 1
+             if (opr.reduced_count == 0) {
+               // completed ReduceOpr
+               info("    completed reduce of opr "+opr_id+" at "+executor_rank)
+               stats.reduce_operations += 1
+               opr.status = computed
+               enqueue_ready_operations(opr_id)
+             }
+        case _ => ;
+      }
+    } else error("Unknown received tag: "+tag+" at exec "+executor_rank)
+  }
+
   // check if there is a request to send data (array blocks); if there is, get the data and cache it
   def check_communication (): Int = {
     if (receive_request == null)
@@ -146,86 +223,11 @@ object Executor {
         receive_request = comm.iRecv(buffer,buffer.capacity(),BYTE,ANY_SOURCE,ANY_TAG)
       } catch { case ex: MPIException
                   => mpi_error(-1,ex) }
-      if (tag == 0) {  // cache data and check for ready operations
-        val opr = operations(opr_id)
-        info("    received "+(len+4)+" bytes at "+executor_rank+" (opr "+opr_id+")")
-        cache_data(opr,data)
-        opr.status = completed
-        new Thread() {
-          override def run () {
-            enqueue_ready_operations(opr_id)
-          }
-        }.start()
-      } else if (tag == 2) {   // cache data
-        val opr = operations(opr_id)
-        info("    received "+(len+4)+" bytes at "+executor_rank)
-        cache_data(opr,data)
-        opr.status = completed
-      } else if (tag == 3) {  // coordinator will decide who will replace a failed executor
-        val failed_executor = data.asInstanceOf[Int]
-        if (!failed_executors.contains(failed_executor)) {
-          skip_work = true
-          failed_executors = failed_executor::failed_executors
-          active_executors = active_executors.filter(_ != failed_executor)
-          val candidates = active_executors.filter(_ != coordinator)
-          val new_executor = candidates((Math.random()*candidates.length).toInt)
-          info("The coordinator has decided to replace the failed executor "
-               +failed_executor+" with "+new_executor)
-          send_data(active_executors,(failed_executor,new_executor),0,4)
+      new Thread() {
+        override def run () {
+          handle_received_message(tag,opr_id,data,len)
         }
-      } else if (tag == 4) {  // recovery at all executors (sent from coordinator)
-        val (failed_executor,new_executor) = data.asInstanceOf[(Int,Int)]
-        if (!failed_executors.contains(failed_executor))
-          failed_executors = failed_executor::failed_executors
-        active_executors = active_executors.filter(_ != failed_executor)
-        Runtime.recover(failed_executor,new_executor)
-      } else if (tag == 5) {  // synchronize accumulation (on coordinator)
-        accumulator.values = data::accumulator.values
-        accumulator.count += 1
-        if (!skip_work && accumulator.count == active_executors.length) {
-          accumulator.total = accumulator.values.reduce(accumulator.acc)
-          accumulator.count = 0
-          send_data(active_executors,accumulator.total,6)
-          //info("Aggregate "+accumulator.values+" = "+accumulator.total)
-        }
-      } else if (tag == 6) {   // release the barrier synchronization after accumulation
-        accumulator.reset()
-        accumulator.total = data
-      } else if (tag == 1) {   // partial/final reduction
-        val opr = operations(opr_id)
-        opr match {
-          case ReduceOpr(s,valuep,fid)
-            => // partial reduce ReduceOpr
-               info("    received partial reduce result of "+(len+4)+" bytes at "
-                    +executor_rank+" (opr "+opr_id+")")
-               val op = functions(fid).asInstanceOf[((Any,Any))=>Any]
-               if (opr.cached == null) {
-                 stats.cached_blocks += 1
-                 stats.max_cached_blocks = Math.max(stats.max_cached_blocks,stats.cached_blocks)
-                 opr.cached = data
-               } else if (valuep)
-                        // total aggregation
-                        opr.cached = op((opr.cached,data))
-                 else { val x = opr.cached.asInstanceOf[(Any,Any)]
-                        val y = data.asInstanceOf[(Any,Any)]
-                        // merge the current state with the incoming partially reduced data
-                        opr.cached = (x._1,op((x._2,y._2)))
-                      }
-               opr.reduced_count -= 1
-               if (opr.reduced_count == 0) {
-                 // completed ReduceOpr
-                 info("    completed reduce of opr "+opr_id+" at "+executor_rank)
-                 stats.reduce_operations += 1
-                 opr.status = computed
-                 new Thread() {
-                   override def run () {
-                     enqueue_ready_operations(opr_id)
-                   }
-                 }.start()
-               }
-          case _ => ;
-        }
-      }
+      }.start()
       1
     } else 0
   }

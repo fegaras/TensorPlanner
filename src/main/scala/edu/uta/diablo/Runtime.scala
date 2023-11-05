@@ -232,11 +232,13 @@ object Runtime {
                info("    sending partial reduce result of opr "+c+" from "
                     +executor_rank+" to "+copr.node)
                send_data(List(copr.node),copr.cached,c,1)
-               gc(opr_id)
                gc(c)
              }
            }
-           check_caches(c)
+           // copr is done with opr => check if we can GC opr
+           opr.count -= 1
+           if (opr.count <= 0)
+             gc(opr_id)
       case _ => ;
     }
   }
@@ -327,7 +329,8 @@ object Runtime {
           compute(opr_id)
           enqueue_ready_operations(opr_id)
           check_caches(opr_id)
-      }
+      } else if (false && count == 0 && ready_queue.isEmpty)
+               info("Empty queue in exec "+executor_rank)
     }
     info("Executor "+executor_rank+" has finished execution")
   }
