@@ -21,6 +21,7 @@ import scala.collection.mutable.PriorityQueue
 
 
 object Scheduler {
+  val trace = false
   var max_lineage_length = 3
   // work done at each processor
   var work: Array[Int] = _
@@ -117,7 +118,7 @@ object Scheduler {
         ep += i
     }
     if (isCoordinator()) {
-      println("Size: "+ep.size+" Entry points: "+ep)
+      info("Entry points: "+ep)
     }
     for (op <- ep) {
       task_queue.enqueue(op)
@@ -126,7 +127,8 @@ object Scheduler {
       workerQueue.enqueue(Worker(0,0,i))
     var total_time = 0.0
     var worker_time = 0.0
-    val k = scala.math.sqrt(Communication.num_of_executors).toInt+1
+    val k = Math.min(Communication.num_of_executors,
+                     Math.sqrt(Communication.num_of_executors).toInt+1)
     while (task_queue.nonEmpty) {
       val c = task_queue.dequeue
       val opr = operations(c)
@@ -156,7 +158,7 @@ object Scheduler {
       workerQueue.enqueue(Worker(w.workDone + work_done, w.numTasks+1, w.id))
       work(w.id) += work_done
       tasks(w.id) += 1
-      if (isCoordinator())
+      if (trace && isCoordinator())
         info("schedule opr "+c+" on node "+w.id+" (work = "+work(w.id)+")")
       // add more ready nodes
       for { c <- opr.consumers } {

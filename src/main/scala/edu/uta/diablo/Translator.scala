@@ -83,6 +83,8 @@ object Translator {
         case MethodCall(o,":",List(x))
           => Merge(translate(o,env,vars,fncs),
                    translate(x,env,vars,fncs))
+        case MethodCall(o,"_@",null)
+          => translate(o,env,vars,fncs)
         case MethodCall(o,m,null)
           => val vo = newvar
              Comprehension(MethodCall(Var(vo),m,null),

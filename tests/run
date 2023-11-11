@@ -6,8 +6,16 @@ MPI_HOME=$HOME/openmpi
 export PATH="$MPI_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$MPI_HOME/lib/:$LD_LIBRARY_PATH"
 
-# disable firewall, enable passwordless ssh to localhost and to each other, must have the same TensorPlanner code
-#mpirun -N 2 --bind-to socket --host localhost:-1,milos:-1 --use-hwthread-cpus -quiet scala -classpath classes:${DIABLO_HOME}/lib/diablo.jar:${MPI_HOME}/lib/mpi.jar -J-Xmx2g -J-Xms2g -J-Xss100m $*
+# number of executors per node
+executors=2
 
-# -N is the number of executors per node
-mpirun -N 4 --bind-to socket --use-hwthread-cpus -quiet scala -classpath classes:${DIABLO_HOME}/lib/diablo.jar:${MPI_HOME}/lib/mpi.jar -J-Xmx4g -J-Xms2g -J-Xss100m $*
+mem=`awk '/MemFree/ { printf "%.0f", $2/1024/1024 }' /proc/meminfo`
+# max available memory in GB per executor
+mem=$[$mem/$executors]
+
+# run on 2 nodes: localhost and milos
+#disable firewall, enable passwordless ssh to localhost and to each other, must have the same TensorPlanner code
+#mpirun -N $executors --bind-to socket --host localhost:-1,milos:-1 --use-hwthread-cpus -quiet scala -classpath classes:${DIABLO_HOME}/lib/diablo.jar:${MPI_HOME}/lib/mpi.jar -J-Xmx${mem}g -J-Xms2g -J-Xss100m $*
+
+# run on localhost
+mpirun -N $executors --bind-to socket --use-hwthread-cpus -quiet scala -classpath classes:${DIABLO_HOME}/lib/diablo.jar:${MPI_HOME}/lib/mpi.jar -J-Xmx${mem}g -J-Xms1g -J-Xss100m $*

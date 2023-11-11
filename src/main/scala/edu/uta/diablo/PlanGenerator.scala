@@ -43,7 +43,7 @@ object PlanGenerator {
   }
 
   type Status = Short
-  val List(notReady,scheduled,ready,computed,completed,removed): List[Status] = List(0,1,2,3,4,5)
+  val List(notReady,scheduled,ready,computed,completed,removed,locked,zombie): List[Status] = List(0,1,2,3,4,5,6,7)
 
   // Operation tree (pilot plan)
   @SerialVersionUID(123L)
@@ -61,11 +61,22 @@ object PlanGenerator {
               var os: List[OprID] = Nil,      // closest descendant producers on the same node
               var oc: Int = 0 )               // counts the closest ancestor consumers on the same node
         extends Serializable
-  case class LoadOpr ( block: BlockID ) extends Opr
-  case class PairOpr ( x: OprID, y: OprID ) extends Opr
-  case class ApplyOpr ( x: OprID, fnc: FunctionID ) extends Opr
-  case class ReduceOpr ( s: List[OprID], valuep: Boolean, op: FunctionID ) extends Opr
-  case class SeqOpr ( s: List[OprID] ) extends Opr
+
+  case class LoadOpr ( block: BlockID ) extends Opr {
+    override def hashCode (): Int = (1,block).##
+  }
+  case class PairOpr ( x: OprID, y: OprID ) extends Opr {
+    override def hashCode (): Int = (2,x,y).##
+  }
+  case class ApplyOpr ( x: OprID, fnc: FunctionID ) extends Opr {
+    override def hashCode (): Int = (3,x,fnc).##
+  }
+  case class ReduceOpr ( s: List[OprID], valuep: Boolean, op: FunctionID ) extends Opr {
+    override def hashCode (): Int = (4,s,valuep,op).##
+  }
+  case class SeqOpr ( s: List[OprID] ) extends Opr {
+    override def hashCode (): Int = (5,s).##
+  }
 
   // Opr uses OprID for Opr references
   var operations: ArrayBuffer[Opr] = ArrayBuffer[Opr]()
@@ -139,25 +150,6 @@ object PlanGenerator {
       }
   }
 
-  def getApplyOprs ( p: Pattern, e: Expr ): Expr
-    = (p,e) match {
-         case (TuplePat(List(x,y)),flatMap(f,Call("diablo_join",a::b::_)))
-           => Call("applyOpr",
-                   List(Call("pairOpr",
-                             List(getApplyOprs(x,a),
-                                  getApplyOprs(y,b))),
-                        function(f)))
-         case (TuplePat(List(x,y)),flatMap(f,Call("diablo_cogroup",a::b::_)))
-           => Call("applyOpr",
-                   List(Call("pairOpr",
-                             List(Call("seqOpr",List(getApplyOprs(x,a))),
-                                  Call("seqOpr",List(getApplyOprs(y,b))))),
-                        function(f)))
-         case (TuplePat(List(index,VarPat(opr))),flatMap(f,_))
-           => Call("applyOpr",List(Var(opr),function(f)))
-         case _ => toExpr(p)
-      }
-
   def function ( e: Expr ): Expr = {
     val i = functions.indexOf(e)
     IntConst(if (i >= 0)
@@ -165,8 +157,31 @@ object PlanGenerator {
              else { functions += e; functions.length-1 })
   }
 
+  def getIndices ( p: Pattern ): Pattern
+    = p match {
+        case TuplePat(List(i,VarPat(_)))
+          => i
+        case TuplePat(List(p1,p2))
+          => TuplePat(List(getIndices(p1),getIndices(p2)))
+        case _ => p
+      }
+
   // generates code that constructs a pilot plan of type List[(index,OprID)]
-  def makePlan ( e: Expr, topJoin: Boolean ): Expr = {
+  def makePlan ( e: Expr, top: Boolean ): Expr = {
+    def getJoinType ( join: String ): Option[String]
+      = join match {
+          case "diablo_join" => Some("join")
+          case "diablo_cogroup" => Some("cogroup")
+          case "join" => Some("join")
+          case "cogroup" => Some("cogroup")
+          case _ => None
+        }
+    def isJoinOrRBK ( x: Expr ): Boolean
+      = x match {
+          case Call(join,_) => getJoinType(join).nonEmpty
+          case MethodCall(_,"reduceByKey",_) => true
+          case _ => false
+        }
     e match {
         case Nth(Var(v),3)
           if typecheck_var(v).isDefined
@@ -184,12 +199,25 @@ object PlanGenerator {
         case Nth(Var(v),3)
           // bound to a tensor plan
           => e
-        case Call("diablo_join",x::y::_)
-          => Call("join",List(makePlan(x,false),makePlan(y,false)))
-        case Call("diablo_cogroup",x::y::_)
+         case Call(join,x::y::_)
+          if getJoinType(join).nonEmpty
           => val xp = makePlan(x,false)
              val yp = makePlan(y,false)
-             Call("cogroup",List(xp,yp))
+             val Some(inMemJoin) = getJoinType(join)
+             val k = newvar; val ix = newvar; val tx = newvar
+             val iy = newvar; val ty = newvar
+             val itp = TuplePat(List(TuplePat(List(VarPat(ix),VarPat(tx))),
+                                     TuplePat(List(VarPat(iy),VarPat(ty)))))
+             val pair = Call("pairOpr",
+                             if (inMemJoin == "join")
+                               List(Var(tx),Var(ty))
+                             else List(Call("seqOpr",List(Var(tx))),
+                                       Call("seqOpr",List(Var(ty)))))
+             Comprehension(Tuple(List(Var(k),
+                                      Tuple(List(Tuple(List(Var(ix),Var(iy))),
+                                                 pair)))),
+                           List(Generator(TuplePat(List(VarPat(k),itp)),
+                                          Call(inMemJoin,List(xp,yp)))))
         case flatMap(Lambda(p,b),MethodCall(_,"parallelize",x::_))
           => val k = newvar
              val v = newvar
@@ -200,49 +228,80 @@ object PlanGenerator {
                                   Generator(TuplePat(List(VarPat(k),VarPat(v))),
                                             b))),
                         "toList",null)
-        case flatMap(f@Lambda(p@TuplePat(List(kk,pp)),b),x@Call(join,_))
-          if List("diablo_join","diablo_cogroup").contains(join)
-             && getKey(b).isDefined
-          => val xp = makePlan(x,false)
-             val Some(key) = getKey(b)
-             val gl = if (topJoin)
-                        getApplyOprs(pp,e)
-                      else toExpr(pp)
-             Comprehension(Tuple(List(key,gl)),
-                           List(Generator(p,xp)))
-        case flatMap(f@Lambda(p@TuplePat(List(_,pp)),b),x)
-          if topJoin && getKey(b).isDefined
-          => val xp = makePlan(x,topJoin)
-             val Some(key) = getKey(b)
-             val gl = Call("applyOpr",List(toExpr(pp),function(f)))
-             Comprehension(Tuple(List(key,gl)),
-                           List(Generator(p,xp)))
         case flatMap(f@Lambda(p@TuplePat(List(kk,pp)),b),x)
-          if getKey(b).isDefined
-          => val xp = makePlan(x,topJoin)
+          if top && getKey(b).isDefined && isJoinOrRBK(x)
+          => val xp = makePlan(x,top)
              val Some(key) = getKey(b)
-             val gl = toExpr(pp)
-             Comprehension(Tuple(List(key,Tuple(List(toExpr(kk),gl)))),
-                           List(Generator(p,xp)))
-        case MethodCall(x,"reduceByKey",List(op,_))
-          => val k = newvar
-             val s = newvar
-             val xp = makePlan(x,topJoin)
-             flatMap(Lambda(TuplePat(List(VarPat(k),VarPat(s))),
-                            Seq(List(Tuple(List(Var(k),
-                                                Call("reduceOpr",
-                                                     List(Var(s),
-                                                          BoolConst(false),function(op)))))))),
-                     Call("groupByKey",List(xp)))
+             val ip = getIndices(pp)
+             val jk = newvar; val iv = newvar; val tv = newvar
+             Comprehension(Tuple(List(key,
+                                      Call("applyOpr",
+                                           List(Var(tv),function(f))))),
+                           List(Generator(TuplePat(List(VarPat(jk),TuplePat(List(ip,VarPat(tv))))),
+                                          xp)))
         case flatMap(f,x)
+          if top
           => val k = newvar
              val gl = newvar
-             val xp = makePlan(x,topJoin)
+             val xp = makePlan(x,top)
              flatMap(Lambda(TuplePat(List(VarPat(k),VarPat(gl))),
                             Seq(List(Tuple(List(Var(k),
                                                 Call("applyOpr",
                                                      List(Var(gl),function(f)))))))),
                      xp)
+        case flatMap(f@Lambda(p@TuplePat(List(kk,pp)),b),x@Call(join,_))
+          if getKey(b).isDefined && getJoinType(join).nonEmpty
+          => val xp = makePlan(x,top)
+             val Some(key) = getKey(b)
+             val ip = getIndices(pp)
+             val jk = newvar; val iv = newvar; val tv = newvar
+             Comprehension(Tuple(List(key,
+                                 Tuple(List(toExpr(ip),
+                                      Call("applyOpr",
+                                           List(Var(tv),function(f))))))),
+                           List(Generator(TuplePat(List(VarPat(jk),TuplePat(List(ip,VarPat(tv))))),
+                                          xp)))
+        case flatMap(f@Lambda(p@TuplePat(List(kk,pp)),b),x@Call(join,_))
+          if false && getJoinType(join).nonEmpty
+          => val xp = makePlan(x,top)
+             val ip = getIndices(pp)
+             val jk = newvar; val iv = newvar; val tv = newvar
+             Comprehension(Tuple(List(toExpr(kk),
+                                 Tuple(List(toExpr(ip),
+                                      Call("applyOpr",
+                                           List(Var(tv),function(f))))))),
+                           List(Generator(TuplePat(List(VarPat(jk),TuplePat(List(ip,VarPat(tv))))),
+                                          xp)))
+        case flatMap(f@Lambda(p@TuplePat(List(kk,pp)),b),x)
+          if getKey(b).isDefined
+          => val gl = newvar
+             val xp = makePlan(x,top)
+             val Some(key) = getKey(b)
+             flatMap(Lambda(TuplePat(List(kk,VarPat(gl))),
+                            Seq(List(Tuple(List(key,Tuple(List(toExpr(kk),
+                                                Call("applyOpr",
+                                                     List(Var(gl),function(f)))))))))),
+                     xp)
+        case flatMap(f,x)
+          => val k = newvar
+             val gl = newvar
+             val xp = makePlan(x,top)
+             flatMap(Lambda(TuplePat(List(VarPat(k),VarPat(gl))),
+                            Seq(List(Tuple(List(Var(k),
+                                                Call("applyOpr",
+                                                     List(Var(gl),function(f)))))))),
+                     xp)
+        case MethodCall(x,"reduceByKey",List(op,_))
+          => val k = newvar
+             val s = newvar
+             val xp = makePlan(x,false)
+             val rv = Call("reduceOpr",
+                           List(flatMap(Lambda(VarPat("x"),Seq(List(Nth(Var("x"),2)))),
+                                        Var(s)),
+                                BoolConst(false),function(op)))
+             flatMap(Lambda(TuplePat(List(VarPat(k),VarPat(s))),
+                            Seq(List(Tuple(List(Var(k),rv))))),
+                     Call("groupByKey",List(xp)))
         case _ => apply(e,makePlanExpr)
       }
   }

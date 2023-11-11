@@ -261,6 +261,83 @@ object Typechecker {
     val btpat: Regex = """(full_|)(rdd|dataset)_block_tensor_(\d+)_(\d+)""".r
     val gtpat: Regex = """(full_|)(rdd|dataset)_block_(bool_|)tensor_(\d+)_(\d+)""".r
 
+    val operations = List("+","-","*","/","&&","||")
+
+    def new_names ( n: Int ): List[String]
+      = (1 to n).map(i => newvar).toList
+
+    def binary_array_operation ( e: Expr, env: Environment ): Boolean = {
+      def modify ( ne: Expr ): Boolean = {
+        val z = e.asInstanceOf[MethodCall]
+        z.obj = ne; z.method = "_@"; z.args = null  // destructive
+        true
+      }
+      def dims ( tp: Type ): Option[Int]
+        = tp match {
+            case ArrayType(d,_)
+              => Some(d)
+            case SeqType(TupleType(List(TupleType(ts),_)))
+              if ts.forall( _ == intType )
+              => Some(ts.length)
+            case SeqType(TupleType(List(etp,_)))
+              if etp == intType
+              => Some(1)
+            case _ => None
+          }
+      e match {
+        case MethodCall(x,m,List(y))
+          => (typecheck(x,env),typecheck(y,env)) match {
+                case (tx,ty)   // matrix-matrix multiplication
+                  if m == "@" && dims(tx) == Some(2) && dims(ty) == Some(2)
+                  => val List(i,k,a,kk,j,b,w) = new_names(7)
+                     modify(Comprehension(Tuple(List(Tuple(List(Var(i),Var(j))),reduce("+",Var(w)))),
+                                 List(Generator(tuple(List(tuple(List(VarPat(i),VarPat(k))),VarPat(a))),x),
+                                      Generator(tuple(List(tuple(List(VarPat(kk),VarPat(j))),VarPat(b))),y),
+                                      Predicate(MethodCall(Var(k),"==",List(Var(kk)))),
+                                      LetBinding(VarPat(w),MethodCall(Var(a),"*",List(Var(b)))),
+                                      GroupByQual(tuple(List(VarPat(i),VarPat(j))),
+                                                  Tuple(List(Var(i),Var(j)))))))
+                case (tx,ty)   // matrix-vector multiplication
+                  if m == "@" && dims(tx) == Some(2) && dims(ty) == Some(1)
+                  => val List(i,k,a,kk,b,w) = new_names(6)
+                     modify(Comprehension(Tuple(List(Var(i),reduce("+",Var(w)))),
+                                 List(Generator(tuple(List(tuple(List(VarPat(i),VarPat(k))),VarPat(a))),x),
+                                      Generator(tuple(List(VarPat(kk),VarPat(b))),y),
+                                      Predicate(MethodCall(Var(k),"==",List(Var(kk)))),
+                                      LetBinding(VarPat(w),MethodCall(Var(a),"*",List(Var(b)))),
+                                      GroupByQual(VarPat(i),Var(i)))))
+                case (tx,ty)  // cell-wise operations
+                  if dims(tx) == dims(ty) && dims(tx).nonEmpty && dims(ty).nonEmpty && operations.contains(m)
+                  => val vxs = new_names(dims(tx).get)
+                     val vys = new_names(dims(ty).get)
+                     val xv = newvar
+                     val yv = newvar
+                     modify(Comprehension(Tuple(List(Tuple(vxs.map(Var)),
+                                                     MethodCall(Var(xv),m,List(Var(yv))))),
+                                List(Generator(tuple(List(tuple(vxs.map(VarPat)),VarPat(xv))),x),
+                                     Generator(tuple(List(tuple(vys.map(VarPat)),VarPat(yv))),y))++
+                                            (vxs zip vys).map{ case (vx,vy)
+                                                                 => Predicate(MethodCall(Var(vx),"==",
+                                                                                         List(Var(vy)))) } ))
+                case (tx,BasicType(tp))  // value operated on array cells
+                  if operations.contains(m) && dims(tx).nonEmpty && List("Int","Long","Double").contains(tp)
+                  => val vxs = new_names(dims(tx).get)
+                     val xv = newvar
+                     modify(Comprehension(Tuple(List(Tuple(vxs.map(Var)),
+                                                     MethodCall(Var(xv),m,List(y)))),
+                                          List(Generator(tuple(List(tuple(vxs.map(VarPat)),VarPat(xv))),x))))
+                case (BasicType(tp),tx)  // value operated on array cells
+                  if operations.contains(m) && dims(tx).nonEmpty && List("Int","Long","Double").contains(tp)
+                  => val vxs = new_names(dims(tx).get)
+                     val xv = newvar
+                     modify(Comprehension(Tuple(List(Tuple(vxs.map(Var)),
+                                                     MethodCall(y,m,List(Var(xv))))),
+                                          List(Generator(tuple(List(tuple(vxs.map(VarPat)),VarPat(xv))),x))))
+                  case _ => false
+               }
+        }
+    }
+
     def typecheck ( e: Expr, env: Environment ): Type
       = if (e.tpe != null)
            e.tpe   // the cached type of e
@@ -484,6 +561,8 @@ object Typechecker {
                if (!typeMatch(typecheck(b,bindPattern(p,TupleType(List(etp,etp)),env)),etp))
                  throw new Error("Wrong reduce op: "+b)
                etp
+          case MethodCall(u,"_@",null)
+            => typecheck(u,env)
           case MethodCall(u,m,null)
             => // call the Scala typechecker to find method m
                val tu = typecheck(u,env)
@@ -503,6 +582,9 @@ object Typechecker {
           case MethodCall(Var(op),"/",List(u))    // reduction such as max/e
             if is_reduction(op,typecheck(u,env))
             => typecheck(reduce(op,u),env)
+          case MethodCall(x,m,List(y))
+            if binary_array_operation(e,env)
+            => typecheck(e,env)  // was modified
           case MethodCall(u,m,args)
             => // call the Scala typechecker to find method m
                val tu = typecheck(u,env)

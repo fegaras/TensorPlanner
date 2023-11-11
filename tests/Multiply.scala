@@ -64,10 +64,8 @@ object Multiply {
     if (isCoordinator())
       println("schedule time: %.3f secs".format(wtime()-t))
 
-    t = wtime()
     val res = eval(plan)
-    if (isCoordinator())
-      println("eval time: %.3f secs".format(wtime()-t))
+
     val s = collect(res)
     if (isCoordinator())
       s._3.foreach(println)   // s._3.foreach(pr)

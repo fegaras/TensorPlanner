@@ -99,46 +99,50 @@ trait ArrayFunctions {
   def isCoordinator (): Boolean
     = Communication.isCoordinator()
 
-  def loadOpr ( block: Any ): OprID = {
-    loadBlocks += block
-    operations += LoadOpr(loadBlocks.length-1)
-    operations.length-1
-  }
+  // it is used in finding duplicate tasks
+  val task_table = new mutable.HashMap[Int,OprID]()
 
-  def pairOpr ( x: OprID, y: OprID ): OprID = {
-    operations += PairOpr(x,y)
-    val loc = operations.length-1
-    operations(x).consumers = loc::operations(x).consumers
-    operations(y).consumers = loc::operations(y).consumers
-    loc
-  }
-
-  def applyOpr ( x: OprID, fnc: FunctionID ): OprID = {
-    operations += ApplyOpr(x,fnc)
-    val loc = operations.length-1
-    operations(x).consumers = loc::operations(x).consumers
-    loc
-  }
-
-  def reduceOpr ( s: List[OprID], valuep: Boolean, op: FunctionID ): OprID = {
-    s match {
-      case List(x) => x
-      case _
-        => operations += ReduceOpr(s,valuep,op)
-           val loc = operations.length-1
-           for ( x <- s )
-              operations(x).consumers = loc::operations(x).consumers
-           loc
+  // store a new operation when is not duplicate 
+  private def store_opr ( opr: Opr, children: List[OprID] ): OprID = {
+    val key = Math.abs(opr.##)
+    val entry = task_table.get(key)
+    if (entry.nonEmpty && operations(entry.head) == opr)
+      entry.head
+    else {
+      val loc = operations.length
+      if (entry.isEmpty)
+        task_table += ((key,loc))
+      operations += opr
+      for ( c <- children ) {
+         val copr = operations(c)
+         if (!copr.consumers.contains(loc))
+           copr.consumers = loc::copr.consumers
+      }
+      loc
     }
   }
 
-  def seqOpr ( s: List[OprID] ): OprID = {
-    operations += SeqOpr(s)
-    val loc = operations.length-1
-    for ( x <- s )
-       operations(x).consumers = loc::operations(x).consumers
+  def loadOpr ( block: Any ): OprID = {
+    val loc = store_opr(LoadOpr(loadBlocks.length),Nil)
+    loadBlocks += block
     loc
   }
+
+  def pairOpr ( x: OprID, y: OprID ): OprID
+    = store_opr(PairOpr(x,y),List(x,y))
+
+  def applyOpr ( x: OprID, fnc: FunctionID ): OprID
+    = store_opr(ApplyOpr(x,fnc),List(x))
+
+  def reduceOpr ( s: List[OprID], valuep: Boolean, op: FunctionID ): OprID
+    = s match {
+        case List(x) => x
+        case _
+          => store_opr(ReduceOpr(s,valuep,op),s)
+      }
+
+  def seqOpr ( s: List[OprID] ): OprID
+    = store_opr(SeqOpr(s),s)
 
   def textFile ( filename: String ): List[(Int,String)] = {
     import scala.io.Source.fromFile

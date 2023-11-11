@@ -3,7 +3,7 @@
 #SBATCH --job-name="diablo"
 #SBATCH --output="run.log"
 #SBATCH --partition=compute
-#SBATCH --nodes=2
+#SBATCH --nodes=1
 #SBATCH --ntasks-per-node=128
 #SBATCH --mem=249325M
 #SBATCH --export=ALL
@@ -30,7 +30,7 @@ done
 rm -rf classes
 mkdir -p classes
 
-scala_files="Multiply.scala"
+scala_files="mult.scala"
 for f in $scala_files; do
     echo compiling $f ...
     scalac -d classes -cp $JARS $f >/dev/null
@@ -39,6 +39,5 @@ done
 ulimit -m unlimited
 
 # for each expanse node: 2 sockets, 1 executor per socket, 64 Java threads per executor
-mpirun -N 2 --bind-to socket --mca btl_openib_allow_ib true --mca btl tcp,self,vader \
-       scala -J-Xms64g -J-Xmx64g -classpath classes:$DIABLO_HOME/lib/diablo.jar:$OPENMPI_HOME/lib/mpi.jar Multiply 14456 13345
-
+mpirun -N 2 --bind-to socket --mca btl_openib_allow_ib true \
+       scala -J-Xms64g -J-Xmx64g -classpath classes:$DIABLO_HOME/lib/diablo.jar:$OPENMPI_HOME/lib/mpi.jar Multiply 1 10000 10

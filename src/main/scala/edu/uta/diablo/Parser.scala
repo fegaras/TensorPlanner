@@ -75,14 +75,14 @@ object Parser extends StandardTokenParsers {
 
   lexical.delimiters ++= List( "(" , ")" , "[", "]", "{", "}", "," , ":", ";", ".", "=>", "=", "->", "<-",
                                "||", "&&", "!", "==", "<=", ">=", "<", ">", "!=", "+", "-", "*", "/", "%",
-                               ":=", "#", "^", "|", "&", "..", "::" )
+                               ":=", "#", "^", "|", "&", "..", "::", "@" )
 
   lexical.reserved ++= List( "var", "for", "in", "do", "while", "if", "else", "true", "false", "def", "let",
                              "return", "typemap", "group", "by", "tensor" )
 
   /* groups of infix operator precedence, from low to high */
   val operator_precedence: List[Parser[String]]
-      = List( "..", "||", "^", "&&"|"&", "<="|">="|"<"|">", "=="|"!=", "+"|"-", "*"|"/"|"%", "=" )
+      = List( "..", "||", "^", "&&"|"&", "<="|">="|"<"|">", "=="|"!=", "+"|"-", "*"|"/"|"%"|"@", "=" )
 
   /* all infix operators not listed in operator_precedence have the same highest precedence */  
   val infixOpr: Parser[String]

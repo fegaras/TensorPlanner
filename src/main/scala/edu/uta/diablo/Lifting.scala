@@ -134,7 +134,102 @@ object Lifting {
         case _ => src
       }
 
-  val array_buffer_pat: Regex = """array_buffer([_a-z]*)""".r
+  // Handles the case when e is in a generator domain and is a tensor comprehension.
+  // Add tensor information using the dimensions of array indices
+  def set_compr_storage ( e: Expr, env: Environment ): Option[Expr] = {
+    def tuple_comps ( e: Expr ): List[Expr]
+      = e match { case Tuple(es) => es; case _ => List(e) }
+    // bind each array index to a dimension
+    def index_dims ( qs: List[Qualifier], env: Environment ): Option[Map[String,Expr]]
+      = qs.foldLeft[Option[Map[String,Expr]]](Some(Map[String,Expr]())) {
+           case (Some(r),Generator(TuplePat(List(i,v)),Lift(bpat(_,_,_,_),u)))
+             => typecheck(u,env) match {
+                   case StorageType(bpat(full,cm,dn,sn),_,List(ds,dd))
+                     => Some(r ++ patvars(i).zip(tuple_comps(ds)++tuple_comps(dd)).toMap)
+                   case _ => None
+                }
+           case (r,_) => r
+        }
+    e match {
+        case Comprehension(Tuple(List(i,v)),qs)
+          if index_dims(qs,env).nonEmpty && tuple_comps(i).forall(_.isInstanceOf[Var])
+          => val vt = typecheck(v,env)
+             val is = tuple_comps(i).map(_.asInstanceOf[Var].name)
+             val Some(m) = index_dims(qs,env)
+             // since storage is not specified explicitly, use a dense array
+             val storage = "rdd_block_tensor_%s_0".format(is.length)
+             Some(Lift(storage,
+                       Store(storage,List(vt),List(tuple(is.map(m(_))),tuple(Nil)),
+                             Comprehension(Tuple(List(i,v)),qs))))
+        case _ => None
+      }
+  }
+
+  def lift_qualifiers ( qs: List[Qualifier], env: Environment ): (Environment,List[String],List[Qualifier])
+    = qs.foldLeft((env,Nil:List[String],Nil:List[Qualifier])) {
+         case ((r,s,n),Generator(p,Call("_full",List(u))))
+           => val lu = lift_expr(u,r)
+              lu.tpe = null    // clear the type info of e
+              typecheck(lu,r) match {
+                 case StorageType(f@pat(_,_,_,_,sn),tps,args)
+                   if sn.toInt > 0
+                   => val Some(TypeMapS(_,ps,_,_,t1,lt,map,_)) = getTypeMap("full_"+f).map(fresh)
+                      val tp = substType(lt,Some((ps zip tps).toMap))
+                      ( bindPattern(p,elemType(tp),r),
+                        s ++ patvars(p),
+                        n:+Generator(p,Lift("full_"+f,lu)) )
+                 case StorageType(f,tps,args)
+                   => val Some(TypeMapS(_,ps,_,_,t1,lt,map,_)) = getTypeMap(f).map(fresh)
+                      val tp = substType(lt,Some((ps zip tps).toMap))
+                      ( bindPattern(p,elemType(tp),r),
+                        s ++ patvars(p),
+                        n:+Generator(p,Lift(f,lu)) )
+                 case _
+                   => ( bindPattern(p,elemType(typecheck(lu,r)),r),
+                        s ++ patvars(p),
+                        n:+Generator(p,lu) )
+              }
+         case ((r,s,n),Generator(p,u:Comprehension))
+           if set_compr_storage(lift_expr(u,r),r).nonEmpty
+           => val lu = lift_expr(u,r)
+              lu.tpe = null    // clear the type info of e
+              val tp = typecheck(lu,r)
+              val Some(nu) = set_compr_storage(lu,r)
+              ( bindPattern(p,elemType(tp),r),
+                s ++ patvars(p),
+                n:+Generator(p,nu) )
+         case ((r,s,n),Generator(p,u))
+           => val lu = lift_expr(u,r)
+              lu.tpe = null    // clear the type info of e
+              typecheck(lu,r) match {
+                 case StorageType(f,tps,args)
+                   => val Some(TypeMapS(_,ps,_,_,t1,lt,map,_)) = getTypeMap(f).map(fresh)
+                      val tp = substType(lt,Some((ps zip tps).toMap))
+                      ( bindPattern(p,elemType(tp),r),
+                        s ++ patvars(p),
+                        n:+Generator(p,Lift(f,lu)) )
+                 case tp
+                   => ( bindPattern(p,elemType(typecheck(lu,r)),r),
+                        s ++ patvars(p),
+                        n:+Generator(p,lu) )
+              }
+         case ((r,s,n),LetBinding(p,d))
+           => val tp = typecheck(d,r)
+              ( bindPattern(p,tp,r),
+                s++patvars(p),
+                n:+LetBinding(p,lift_expr(d,r)) )
+         case ((r,s,n),GroupByQual(p,k))
+           => val nvs = patvars(p)
+              val ktp = typecheck(k,r)
+              // lift all pattern variables to bags
+              ( bindPattern(p,ktp,r++s.diff(nvs).map{ v => (v,SeqType(r(v))) }.toMap),
+                nvs ++ s,
+                n:+GroupByQual(p,lift_expr(k,r)) )
+         case ((r,s,n),Predicate(p))
+           => (r,s,n:+Predicate(lift_expr(p,r)))
+         case ((r,s,n),q)
+           => (r,s,n:+q)
+       }
 
   def lift_expr ( e: Expr, env: Environment ): Expr
     = e match {
@@ -149,7 +244,8 @@ object Lifting {
                          => val nenv = bindPattern(p,tp,env)
                             Case(p,lift_expr(c,nenv),lift_expr(b,nenv)) })
         case Block(es)
-          => Block(es.foldLeft((env,Nil:List[Expr])) {
+          =>   val array_buffer_pat: Regex = """array_buffer([_a-z]*)""".r
+               Block(es.foldLeft((env,Nil:List[Expr])) {
                   case ((r,s),x@VarDecl(v,at,Seq(List(Call("array",_)))))
                     => (r + (v->at), s:+x)
                   case ((r,s),x@VarDecl(v,at,Seq(List(Call(array_buffer_pat(_),_)))))
@@ -199,62 +295,7 @@ object Lifting {
              val ut = elemType(typecheck(ul,env))
              Assign(dl,lift_assign(ul,dt,ut,env))
         case Comprehension(h,qs)
-          => val (nenv,_,nqs)
-                = qs.foldLeft((env,Nil:List[String],Nil:List[Qualifier])) {
-                    case ((r,s,n),Generator(p,Call("_full",List(u))))
-                      => val lu = lift_expr(u,r)
-                         lu.tpe = null    // clear the type info of e
-                         typecheck(lu,r) match {
-                            case StorageType(f@pat(_,_,_,_,sn),tps,args)
-                              if sn.toInt > 0
-                              => val Some(TypeMapS(_,ps,_,_,t1,lt,map,_)) = getTypeMap("full_"+f).map(fresh)
-                                 val tp = substType(lt,Some((ps zip tps).toMap))
-                                 ( bindPattern(p,elemType(tp),r),
-                                   s ++ patvars(p),
-                                   n:+Generator(p,Lift("full_"+f,lu)) )
-                            case StorageType(f,tps,args)
-                              => val Some(TypeMapS(_,ps,_,_,t1,lt,map,_)) = getTypeMap(f).map(fresh)
-                                 val tp = substType(lt,Some((ps zip tps).toMap))
-                                 ( bindPattern(p,elemType(tp),r),
-                                   s ++ patvars(p),
-                                   n:+Generator(p,Lift(f,lu)) )
-                            case _
-                              => ( bindPattern(p,elemType(typecheck(lu,r)),r),
-                                   s ++ patvars(p),
-                                   n:+Generator(p,lu) )
-                         }
-                    case ((r,s,n),Generator(p,u))
-                      => val lu = lift_expr(u,r)
-                         lu.tpe = null    // clear the type info of e
-                         typecheck(lu,r) match {
-                            case StorageType(f,tps,args)
-                              => val Some(TypeMapS(_,ps,_,_,t1,lt,map,_)) = getTypeMap(f).map(fresh)
-                                 val tp = substType(lt,Some((ps zip tps).toMap))
-                                 ( bindPattern(p,elemType(tp),r),
-                                   s ++ patvars(p),
-                                   n:+Generator(p,Lift(f,lu)) )
-                            case tp
-                              => ( bindPattern(p,elemType(typecheck(lu,r)),r),
-                                   s ++ patvars(p),
-                                   n:+Generator(p,lu) )
-                         }
-                    case ((r,s,n),LetBinding(p,d))
-                      => val tp = typecheck(d,r)
-                         ( bindPattern(p,tp,r),
-                           s++patvars(p),
-                           n:+LetBinding(p,lift_expr(d,r)) )
-                    case ((r,s,n),GroupByQual(p,k))
-                      => val nvs = patvars(p)
-                         val ktp = typecheck(k,r)
-                         // lift all pattern variables to bags
-                         ( bindPattern(p,ktp,r++s.diff(nvs).map{ v => (v,SeqType(r(v))) }.toMap),
-                           nvs ++ s,
-                           n:+GroupByQual(p,lift_expr(k,r)) )
-                    case ((r,s,n),Predicate(p))
-                      => (r,s,n:+Predicate(lift_expr(p,r)))
-                    case ((r,s,n),q)
-                      => (r,s,n:+q)
-                  }
+          => val (nenv,_,nqs) = lift_qualifiers(qs,env)
              Comprehension(lift_expr(h,nenv),nqs)
         case Apply(Lambda(p,b),arg)
           => val na = lift_expr(arg,env)

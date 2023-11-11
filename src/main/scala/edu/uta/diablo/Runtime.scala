@@ -18,15 +18,57 @@ package edu.uta.diablo
 import PlanGenerator._
 import Scheduler._
 import Executor._
-import Communication._
+import Communication.barrier
 import scala.collection.mutable.{Queue,ArrayBuffer}
+import java.util.Comparator
+import java.util.concurrent.{LinkedBlockingQueue,PriorityBlockingQueue}
+import mpi.MPI.wtime
 
+
+@transient
+class Statistics (
+      var apply_operations: Int = 0,
+      var reduce_operations: Int = 0,
+      var cached_blocks: Int = 0,
+      var max_cached_blocks: Int = 0 ) {
+
+  def clear () {
+    apply_operations = 0
+    reduce_operations = 0
+    cached_blocks = 0
+    max_cached_blocks = 0
+  }
+
+  def print () {
+    info("Number of apply operations: "+apply_operations)
+    info("Number of reduce operations: "+reduce_operations)
+    info("Max num of cached blocks per executor: "+max_cached_blocks)
+    //info("Final num of cached blocks: "+cached_blocks)
+  }
+}
+
+@transient
+object operator_comparator extends Comparator[OprID] {
+  def priority ( opr_id: OprID ): Int
+    = operations(opr_id) match {
+        case ReduceOpr(_,_,_) => 1
+        case PairOpr(_,_) => 2
+        case LoadOpr(_) => 3
+        case _ => 4
+      }
+  override def compare ( x: OprID, y: OprID ): Int
+    = priority(x) - priority(y)
+}
 
 @transient
 object Runtime {
   var operations: Array[Opr] = _
   var loadBlocks: Array[Any] = _
   var exit_points: List[OprID] = Nil
+  // operations ready to be executed
+  var ready_queue = new PriorityBlockingQueue[OprID](1000,operator_comparator)
+  var send_queue = new LinkedBlockingQueue[(List[WorkerID],OprID)](100)
+  var stats: Statistics = new Statistics()
   var enable_partial_reduce = true
   var enable_gc: Boolean = true
 
@@ -50,6 +92,8 @@ object Runtime {
             => opr_queue.enqueue(x)
           case ReduceOpr(s_list,_,_)
             => s_list.foreach(op => opr_queue.enqueue(op))
+          case SeqOpr(s_list)
+            => s_list.foreach(op => opr_queue.enqueue(op))
           case _ => ;
         }
       }
@@ -57,12 +101,13 @@ object Runtime {
   }
 
   def hasCachedValue ( x: Opr ): Boolean
-    = x.status == computed || x.status == completed
+    = (x.status == computed || x.status == completed
+       || x.status == locked || x.status == zombie)
 
   def initialize_opr ( x: Opr ) {
     // a Load opr is cached in the coordinator too
     if (isCoordinator() && x.isInstanceOf[LoadOpr])
-      x.cached = loadBlocks(x.asInstanceOf[LoadOpr].block)
+      cache_data(x,loadBlocks(x.asInstanceOf[LoadOpr].block))
     // initial count is the number of local consumers
     x.count = x.consumers.count(c => operations(c).node == executor_rank)
     x match {
@@ -101,7 +146,11 @@ object Runtime {
     }
     operations = PlanGenerator.operations.toArray
     loadBlocks = PlanGenerator.loadBlocks.toArray
+    val t = System.currentTimeMillis()
     Scheduler.schedule(e)
+    if (isCoordinator())
+      info("Scheduling time: %.5f secs".format((System.currentTimeMillis()-t)/1000.0))
+    val time = wtime()
     broadcast_plan()
     for ( x <- operations ) {
       x.status = notReady
@@ -110,6 +159,8 @@ object Runtime {
     }
     for ( opr_id <- operations.indices )
       set_closest_local_descendants(opr_id)
+    if (isCoordinator())
+      info("Setup time: %.3f secs".format((wtime-time)/1000.0))
   }
 
   def cache_data ( opr: Opr, data: Any ): Any = {
@@ -180,10 +231,15 @@ object Runtime {
   def gc ( opr_id: OprID ) {
     val opr = operations(opr_id)
     if (enable_gc && opr.cached != null) {
-      info("    discard the cached block of "+opr_id+" at exec "+executor_rank)
-      stats.cached_blocks -= 1
-      opr.status = removed
-      opr.cached = null   // make the cached block available to the garbage collector
+      if (opr.status == locked)
+        opr.status = zombie
+      else {
+          info("    discard the cached block of "
+               +opr_id+" at exec "+executor_rank)
+          stats.cached_blocks -= 1
+          opr.status = removed
+          opr.cached = null   // make the cached block available to the garbage collector
+      }
     }
   }
 
@@ -255,8 +311,10 @@ object Runtime {
                          && (!enable_partial_reduce
                              || !copr.isInstanceOf[ReduceOpr]))
             }.map(_.node).distinct
-      if (nodes_to_send_data.nonEmpty)
-        send_data(nodes_to_send_data,opr.cached,opr_id,0)
+      if (nodes_to_send_data.nonEmpty) {
+        opr.status = locked
+        send_queue.offer((nodes_to_send_data,opr_id))
+      }
     }
     for ( c <- opr.consumers ) {
       val copr = operations(c)
@@ -278,10 +336,12 @@ object Runtime {
     if (opr.node == executor_rank && !exit_points.contains(opr_id)
         && opr.consumers.forall( c => operations(c).node != executor_rank ))
       gc(opr_id)
-    opr.status = completed
+    if (opr.status != locked)
+      opr.status = completed
   }
 
   var receiver: ReceiverThread = _
+  var sender: SenderThread = _
   var skip_work = false
 
   var abort_count = 0
@@ -296,6 +356,7 @@ object Runtime {
         send_data(List(coordinator),false,5)
       skip_work = true
       receiver.stop()
+      sender.stop()
       while (true)
         Thread.sleep(1000000)
     }
@@ -310,7 +371,26 @@ object Runtime {
       }
       while (true) {
         check_communication()
-        Thread.sleep(10)
+        Thread.sleep(1)
+      }
+    }
+  }
+
+  class SenderThread extends Thread {
+    override def run () {
+      while (true) {
+        if (!send_queue.isEmpty) {
+          val (dest,opr_id) = send_queue.poll()
+          val opr = operations(opr_id)
+          send_data(dest,opr.cached,opr_id,0)
+          if (opr.status == zombie) {
+            info("    delayed discard the cached block of "
+                 +opr_id+" at exec "+executor_rank)
+            stats.cached_blocks -= 1
+            opr.status = removed
+            opr.cached = null     // allow gc to reclaim it
+          }
+        } else Thread.sleep(1)
       }
     }
   }
@@ -329,8 +409,7 @@ object Runtime {
           compute(opr_id)
           enqueue_ready_operations(opr_id)
           check_caches(opr_id)
-      } else if (false && count == 0 && ready_queue.isEmpty)
-               info("Empty queue in exec "+executor_rank)
+      }
     }
     info("Executor "+executor_rank+" has finished execution")
   }
@@ -347,6 +426,7 @@ object Runtime {
 
   // distributed evaluation of a scheduled plan using MPI
   def eval[I] ( plan: Plan[I] ): Plan[I] = {
+    val time = wtime()
     exit_points = plan._3.map(_._2)
     exit_points = broadcast_exit_points(exit_points)
     if (isCoordinator())
@@ -358,6 +438,8 @@ object Runtime {
     info("Queue on "+executor_rank+": "+ready_queue)
     receiver = new ReceiverThread()
     receiver.start()
+    sender = new SenderThread()
+    sender.start()
     work()
     if (PlanGenerator.trace) {
       val stats = collect_statistics()
@@ -368,7 +450,9 @@ object Runtime {
     }
     barrier()
     receiver.stop()
+    sender.stop()
     if (PlanGenerator.trace) {
+      info("Evaluation time: %.3f secs".format((wtime()-time)/1000.0))
       val cbs = operations.indices.filter(x => operations(x).cached != null)
       info("Cached blocks at "+executor_rank+": ("+cbs.length+") "+cbs)
     }
@@ -476,85 +560,5 @@ object Runtime {
     }
     info("Executor "+executor_rank+": Recovered from the failed executor "+failed_executor)
     skip_work = false
-  }
-}
-
-
-/****************************************************************************************************
-* 
-* Single-core, in-memory evaluation (for testing only)
-* 
-****************************************************************************************************/
-
-object inMem {
-  val stats: Statistics = new Statistics()
-  var operations: Array[Opr] = _
-
-  def pe ( e: Any ): Any
-    = e match {
-        case x: (Any,Any)
-          => x._2 match {
-               case z: (Any,Any,Array[Double]) @unchecked
-                 => z._3.toList
-               case z: (Any,Any)
-                 => (pe((x._1,z._1)),pe((x._1,z._2)))
-               case z => z
-             }
-        case x => x
-      }
-
-  def eval ( id: OprID, tabs: Int ): Any = {
-    val e = operations(id)
-    if (Runtime.hasCachedValue(e)) {
-      // retrieve result block(s) from cache
-      return e.cached
-    }
-    info(" "*3*tabs+"*** "+tabs+": "+id+"/"+e)
-    val res = e match {
-        case LoadOpr(b)
-          => loadBlocks(b)
-        case ApplyOpr(x,fid)
-          => val f = functions(fid).asInstanceOf[Any=>List[Any]]
-             stats.apply_operations += 1
-             f(eval(x,tabs+1)).head
-        case PairOpr(x,y)
-          => def f ( lg: OprID ): (Any,Any)
-               = operations(lg) match {
-                    case PairOpr(x,y)
-                      => val gx@(iv,vx) = f(x)
-                         val gy@(_,vy) = f(y)
-                         val xx = if (operations(x).isInstanceOf[PairOpr]) gx else vx
-                         val yy = if (operations(y).isInstanceOf[PairOpr]) gy else vy
-                         (iv,(xx,yy))
-                    case _ => eval(lg,tabs+1).asInstanceOf[(Any,Any)]
-                 }
-             f(id)
-        case SeqOpr(s)
-          => s.map(eval(_,tabs+1))
-        case ReduceOpr(s,true,fid)
-          => val sv = s.map(eval(_,tabs+1))
-             val op = functions(fid).asInstanceOf[((Any,Any))=>Any]
-             stats.reduce_operations += 1
-             sv.reduce{ (x:Any,y:Any) => op((x,y)) }
-        case ReduceOpr(s,false,fid)
-          => val sv = s.map(eval(_,tabs+1).asInstanceOf[(Any,Any)])
-             val op = functions(fid).asInstanceOf[((Any,Any))=>Any]
-             stats.reduce_operations += 1
-             (sv.head._1,sv.map(_._2).reduce{ (x:Any,y:Any) => op((x,y)) })
-      }
-    info(" "*3*tabs+"*-> "+tabs+": "+res)   // pe(res)
-    e.cached = res
-    e.status = completed
-    res
-  }
-
-  def eval[I] ( plan: Plan[I] ): Tensor[I] = {
-    val (ds,dd,s) = plan
-    operations = PlanGenerator.operations.toArray
-    stats.clear()
-    operations.foreach(x => x.count = x.consumers.length)
-    val res = s.map{ case (i,lg) => eval(lg,0).asInstanceOf[(I,Any)] }
-    info("Number of tasks: "+operations.length)
-    (ds,dd,res)
   }
 }

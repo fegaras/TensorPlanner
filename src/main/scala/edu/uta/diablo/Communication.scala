@@ -20,45 +20,8 @@ import Runtime._
 import mpi._
 import mpi.MPI._
 import java.nio.ByteBuffer
-import java.util.Comparator
-import java.util.concurrent.PriorityBlockingQueue
 import java.io._
 
-
-@transient
-class Statistics (
-      var apply_operations: Int = 0,
-      var reduce_operations: Int = 0,
-      var cached_blocks: Int = 0,
-      var max_cached_blocks: Int = 0 ) {
-
-  def clear () {
-    apply_operations = 0
-    reduce_operations = 0
-    cached_blocks = 0
-    max_cached_blocks = 0
-  }
-
-  def print () {
-    info("Number of apply operations: "+apply_operations)
-    info("Number of reduce operations: "+reduce_operations)
-    info("Max num of cached blocks per executor: "+max_cached_blocks)
-    //info("Final num of cached blocks: "+cached_blocks)
-  }
-}
-
-@transient
-object operator_comparator extends Comparator[OprID] {
-  def priority ( opr_id: OprID ): Int
-    = operations(opr_id) match {
-        case ReduceOpr(_,_,_) => 1
-        case PairOpr(_,_) => 2
-        case LoadOpr(_) => 3
-        case _ => 4
-      }
-  override def compare ( x: OprID, y: OprID ): Int
-    = priority(x) - priority(y)
-}
 
 @transient
 // MPI communicator using openMPI (one executor per node)
@@ -68,12 +31,8 @@ object Executor {
   // the buffer must fit few blocks (one block of doubles is 8MBs)
   val max_buffer_size = 500000000
   val buffer: ByteBuffer = newByteBuffer(max_buffer_size)
-  // operations ready to be executed
-  var ready_queue = new PriorityBlockingQueue[OprID](1000,operator_comparator)
   var receive_request: Request = _
-  val stats: Statistics = new Statistics()
-  var exit_points: List[OprID] = Nil
-  val comm: Intracomm = MPI.COMM_WORLD
+  var comm: Intracomm = _//MPI.COMM_WORLD
   var enable_recovery: Boolean = false
   var failed_executors: List[WorkerID] = Nil
   var active_executors: List[WorkerID] = Nil
@@ -121,13 +80,11 @@ object Executor {
   def handle_received_message ( tag: Byte, opr_id: OprID, data: Any, len: Int ) {
     val opr = operations(opr_id)
     if (tag == 0) {  // cache data and check for ready operations
-      val opr = operations(opr_id)
       info("    received "+(len+4)+" bytes at "+executor_rank+" (opr "+opr_id+")")
       cache_data(opr,data)
       opr.status = completed
       enqueue_ready_operations(opr_id)
     } else if (tag == 2) {   // cache data
-      val opr = operations(opr_id)
       info("    received "+(len+4)+" bytes at "+executor_rank)
       cache_data(opr,data)
       opr.status = completed
@@ -162,7 +119,6 @@ object Executor {
       accumulator.reset()
       accumulator.total = data
     } else if (tag == 1) {   // partial/final reduction
-      val opr = operations(opr_id)
       opr match {
         case ReduceOpr(s,valuep,fid)
           => // partial reduce ReduceOpr
@@ -420,6 +376,7 @@ object Executor {
       false
     else {
       val b = (ready_queue.isEmpty
+               && send_queue.isEmpty
                && exit_points.forall {
                      x => val opr = operations(x)
                           opr.node != executor_rank || hasCachedValue(opr) })
@@ -480,6 +437,7 @@ object Communication {
   def mpi_startup ( args: Array[String] ) {
     try {
       InitThread(args,THREAD_FUNNELED)
+      comm = MPI.COMM_WORLD
       // don't abort on MPI errors
       comm.setErrhandler(ERRORS_RETURN)
       executor_rank = comm.getRank
