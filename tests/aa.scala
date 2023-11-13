@@ -30,8 +30,11 @@ object Test {
       var Cz = tensor*(N,M)[ ((i,j),4.5) | i <-0..(N-1), j<-0..(M-1) ];
       var V = tensor*(N)[ (i,2.3) | i <-0..(N-1) ];
 
-      Az = Az@Cz@Bz;
+      //Az = Az+Bz-3.5*Cz;
+      Az = (Az-Cz)@(Bz*2+3)@Cz;
       Az
+
+//tensor*(N,M)[ (((i+1)%N,j),a+1) | ((i,j),a) <- Az ];
 
       //tensor*(N)[ (i,+/v) | (i,v) <- V, ((ii,j),a) <- Az, ii==i, let v = a+v, group by i ];
 

@@ -230,7 +230,7 @@ object PlanGenerator {
                         "toList",null)
         case flatMap(f@Lambda(p@TuplePat(List(kk,pp)),b),x)
           if top && getKey(b).isDefined && isJoinOrRBK(x)
-          => val xp = makePlan(x,top)
+          => val xp = makePlan(x,false)
              val Some(key) = getKey(b)
              val ip = getIndices(pp)
              val jk = newvar; val iv = newvar; val tv = newvar
@@ -243,7 +243,7 @@ object PlanGenerator {
           if top
           => val k = newvar
              val gl = newvar
-             val xp = makePlan(x,top)
+             val xp = makePlan(x,false)
              flatMap(Lambda(TuplePat(List(VarPat(k),VarPat(gl))),
                             Seq(List(Tuple(List(Var(k),
                                                 Call("applyOpr",
@@ -251,22 +251,11 @@ object PlanGenerator {
                      xp)
         case flatMap(f@Lambda(p@TuplePat(List(kk,pp)),b),x@Call(join,_))
           if getKey(b).isDefined && getJoinType(join).nonEmpty
-          => val xp = makePlan(x,top)
+          => val xp = makePlan(x,false)
              val Some(key) = getKey(b)
              val ip = getIndices(pp)
              val jk = newvar; val iv = newvar; val tv = newvar
              Comprehension(Tuple(List(key,
-                                 Tuple(List(toExpr(ip),
-                                      Call("applyOpr",
-                                           List(Var(tv),function(f))))))),
-                           List(Generator(TuplePat(List(VarPat(jk),TuplePat(List(ip,VarPat(tv))))),
-                                          xp)))
-        case flatMap(f@Lambda(p@TuplePat(List(kk,pp)),b),x@Call(join,_))
-          if false && getJoinType(join).nonEmpty
-          => val xp = makePlan(x,top)
-             val ip = getIndices(pp)
-             val jk = newvar; val iv = newvar; val tv = newvar
-             Comprehension(Tuple(List(toExpr(kk),
                                  Tuple(List(toExpr(ip),
                                       Call("applyOpr",
                                            List(Var(tv),function(f))))))),

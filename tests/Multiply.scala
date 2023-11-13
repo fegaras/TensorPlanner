@@ -61,15 +61,14 @@ object Multiply {
 
     t = wtime()
     schedule(plan)
-    if (isCoordinator())
-      println("schedule time: %.3f secs".format(wtime()-t))
 
     val res = eval(plan)
 
     val s = collect(res)
-    if (isCoordinator())
+    if (isCoordinator()) {
       s._3.foreach(println)   // s._3.foreach(pr)
-    //validate(s._3.asInstanceOf[List[((Int, Int), Any)]])
+      validate(s._3.asInstanceOf[List[((Int, Int), Any)]])
+    }
 
     end()
   }

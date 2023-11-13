@@ -38,7 +38,7 @@ object Multiply {
     """)
 
     if (isCoordinator())
-      println("plan creation: %.3f secs".format(System.currentTimeMillis()-t));
+      println("plan creation: %.3f secs".format((System.currentTimeMillis()-t)/1000.0));
 
     schedule(plan)
 

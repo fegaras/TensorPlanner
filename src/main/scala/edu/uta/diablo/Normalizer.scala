@@ -110,14 +110,20 @@ object Normalizer {
     = qs.forall{ case GroupByQual(_,_) => false; case _ => true }
 
   @tailrec
-  def notGrouped ( p: Pattern, head: Expr, qs: List[Qualifier] ): Boolean
+  def notGrouped ( v: String, head: Expr, qs: List[Qualifier] ): Boolean
     = qs match {
-        case GroupByQual(gp,ge)::r
-          if gp == p
-          => notGrouped(p,head,r)
         case GroupByQual(gp,_)::r
-          => patvars(p).map( s => occurrences(s,Comprehension(head,r)) ).sum == 0
-        case _::r => notGrouped(p,head,r)
+          if patvars(gp).contains(v)
+          => notGrouped(v,head,r)
+        case Generator(p,_)::r
+          if patvars(p).contains(v)
+          => true
+        case LetBinding(p,_)::r
+          if patvars(p).contains(v)
+          => true
+        case GroupByQual(gp,_)::r
+          => occurrences(v,Comprehension(head,r)) == 0
+        case _::r => notGrouped(v,head,r)
         case Nil => true
       }
 
@@ -203,7 +209,7 @@ object Normalizer {
       case LetBinding(TuplePat(ps),Tuple(es))::r
         => normalize(head,(ps zip es).map{ case (p,e) => LetBinding(p,e) }++r,env,opts)
       case LetBinding(p@VarPat(v),u)::r
-        => if (notGrouped(p,head,r) && (isSimple(u) || occurrences(v,Comprehension(head,r)) <= 1))
+        => if (notGrouped(v,head,r) && (isSimple(u) || occurrences(v,Comprehension(head,r)) <= 1))
 //   why? nested tiled fails with this                                     && !isRepeated(v,head)))
              normalize(head,r,bindEnv(p,normalize(substE(u,env)))++freeEnv(p,env),opts)
            else LetBinding(p,normalize(substE(u,env)))::normalize(head,r,env,opts)

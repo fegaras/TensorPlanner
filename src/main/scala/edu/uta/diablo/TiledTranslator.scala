@@ -679,13 +679,11 @@ object TiledTranslator {
                        val rval = tuple(env.map(x => VarPat(x._2)))
                        val pvars = patvars(p).map(Var)
                        val tdims = List(tuple(pvars.take(dn)),tuple(pvars.takeRight(sn)))
-                       if (trace) println("Comprehension without group-by:\n"
-                                          +Pretty.print(Comprehension(Tuple(List(toExpr(p),liftedTile)),
-                                                     List(Generator(TuplePat(List(p,rval)),
-                                                                    Lift("rdd",rdd))))))
                        val gnc = Comprehension(Tuple(List(toExpr(p),liftedTile)),
                                                List(Generator(TuplePat(List(p,rval)),
                                                               Lift("rdd",rdd))))
+                       if (trace)
+                         println("Comprehension without group-by:\n"+Pretty.print(gnc))
                        val gtp = elemType(typecheck(gnc))
                        val res = Store("rdd",List(gtp),Nil,gnc)
                        Tuple(dims:+res)

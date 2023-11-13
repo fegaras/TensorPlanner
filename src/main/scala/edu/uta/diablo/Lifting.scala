@@ -148,6 +148,14 @@ object Lifting {
                      => Some(r ++ patvars(i).zip(tuple_comps(ds)++tuple_comps(dd)).toMap)
                    case _ => None
                 }
+           case (Some(r),GroupByQual(VarPat(v),Var(w)))
+             if v != w && r.contains(w)
+             => Some(r + ((v,r(w))))
+           case (Some(r),GroupByQual(TuplePat(vs),Tuple(xs)))
+             => Some(r ++ (vs zip xs).flatMap { case (VarPat(v),Var(w))
+                                                  if v != w && r.contains(w)
+                                                  => List((v,r(w)))
+                                                case _ => Nil })
            case (r,_) => r
         }
     e match {

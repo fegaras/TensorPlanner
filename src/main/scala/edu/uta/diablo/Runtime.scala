@@ -483,7 +483,7 @@ object Runtime {
           Thread.sleep(100)
         barrier()
         receiver.stop()
-        (ds,dd,es.map{ case (i,opr_id) => (i,operations(opr_id).cached) })
+        (ds,dd,es.map{ case (i,opr_id) => operations(opr_id).cached.asInstanceOf[(I,Any)] })
     } else {
         es.foreach {
              case (i,opr_id)

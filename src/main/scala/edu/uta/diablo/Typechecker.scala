@@ -285,6 +285,16 @@ object Typechecker {
             case _ => None
           }
       e match {
+        case MethodCall(x,m,null)
+          => typecheck(x,env) match {
+                case tx   // matrix transpose
+                  if m == "trans" && dims(tx) == Some(2)
+                  => val vxs = new_names(dims(tx).get)
+                     val xv = newvar
+                     modify(Comprehension(Tuple(List(Tuple(vxs.map(Var).reverse),Var(xv))),
+                                          List(Generator(tuple(List(tuple(vxs.map(VarPat)),VarPat(xv))),x))))
+                case _ => false
+             }
         case MethodCall(x,m,List(y))
           => (typecheck(x,env),typecheck(y,env)) match {
                 case (tx,ty)   // matrix-matrix multiplication
@@ -326,13 +336,13 @@ object Typechecker {
                      modify(Comprehension(Tuple(List(Tuple(vxs.map(Var)),
                                                      MethodCall(Var(xv),m,List(y)))),
                                           List(Generator(tuple(List(tuple(vxs.map(VarPat)),VarPat(xv))),x))))
-                case (BasicType(tp),tx)  // value operated on array cells
-                  if operations.contains(m) && dims(tx).nonEmpty && List("Int","Long","Double").contains(tp)
-                  => val vxs = new_names(dims(tx).get)
-                     val xv = newvar
-                     modify(Comprehension(Tuple(List(Tuple(vxs.map(Var)),
-                                                     MethodCall(y,m,List(Var(xv))))),
-                                          List(Generator(tuple(List(tuple(vxs.map(VarPat)),VarPat(xv))),x))))
+                case (BasicType(tp),ty)  // value operated on array cells
+                  if operations.contains(m) && dims(ty).nonEmpty && List("Int","Long","Double").contains(tp)
+                  => val vys = new_names(dims(ty).get)
+                     val yv = newvar
+                     modify(Comprehension(Tuple(List(Tuple(vys.map(Var)),
+                                                     MethodCall(x,m,List(Var(yv))))),
+                                          List(Generator(tuple(List(tuple(vys.map(VarPat)),VarPat(yv))),y))))
                   case _ => false
                }
         }
