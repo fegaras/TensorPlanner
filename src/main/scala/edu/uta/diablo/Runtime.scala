@@ -160,7 +160,7 @@ object Runtime {
     for ( opr_id <- operations.indices )
       set_closest_local_descendants(opr_id)
     if (isCoordinator())
-      info("Setup time: %.3f secs".format((wtime-time)/1000.0))
+      info("Setup time: %.3f secs".format(wtime-time))
   }
 
   def cache_data ( opr: Opr, data: Any ): Any = {
@@ -452,7 +452,8 @@ object Runtime {
     receiver.stop()
     sender.stop()
     if (PlanGenerator.trace) {
-      info("Evaluation time: %.3f secs".format((wtime()-time)/1000.0))
+      if (isCoordinator())
+        info("Evaluation time: %.3f secs".format(wtime()-time))
       val cbs = operations.indices.filter(x => operations(x).cached != null)
       info("Cached blocks at "+executor_rank+": ("+cbs.length+") "+cbs)
     }

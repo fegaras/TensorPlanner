@@ -58,6 +58,7 @@ object PlanGenerator {
               var consumers: List[OprID] = Nil,
               var count: Int = 0,             // = number of local consumers
               var reduced_count: Int = 0,     // # of reduced inputs so far
+              var cpu_cost: Int = 0,          // number of nested loops when processing blocks
               var os: List[OprID] = Nil,      // closest descendant producers on the same node
               var oc: Int = 0 )               // counts the closest ancestor consumers on the same node
         extends Serializable
@@ -139,7 +140,7 @@ object PlanGenerator {
           => Some(key)
         case flatMap(Lambda(f,b),x)
           => for ( bc <- getKey(b) )
-                yield flatMap(Lambda(f,bc),x)
+                yield flatMap(Lambda(f,Seq(List(bc))),x)
         case IfE(p,x,y)
           => for ( xc <- getKey(x) )
                 yield IfE(p,xc,y)
@@ -156,6 +157,15 @@ object PlanGenerator {
                i
              else { functions += e; functions.length-1 })
   }
+
+  def cpu_cost ( e: Expr ): Int
+    = e match {
+        case Call("merge_tensors",_)
+          => 1
+        case flatMap(x,_)
+          => 1+cpu_cost(x)
+        case _ => AST.accumulate[Int](e,cpu_cost _,Math.max(_,_),0)
+      }
 
   def getIndices ( p: Pattern ): Pattern
     = p match {
@@ -199,7 +209,7 @@ object PlanGenerator {
         case Nth(Var(v),3)
           // bound to a tensor plan
           => e
-         case Call(join,x::y::_)
+        case Call(join,x::y::_)
           if getJoinType(join).nonEmpty
           => val xp = makePlan(x,false)
              val yp = makePlan(y,false)
@@ -228,15 +238,16 @@ object PlanGenerator {
                                   Generator(TuplePat(List(VarPat(k),VarPat(v))),
                                             b))),
                         "toList",null)
-        case flatMap(f@Lambda(p@TuplePat(List(kk,pp)),b),x)
-          if top && getKey(b).isDefined && isJoinOrRBK(x)
+        case flatMap(f@Lambda(p@TuplePat(List(kk,pp)),b),x@Call(join,_))
+          if top && getKey(b).isDefined && getJoinType(join).nonEmpty
           => val xp = makePlan(x,false)
              val Some(key) = getKey(b)
              val ip = getIndices(pp)
              val jk = newvar; val iv = newvar; val tv = newvar
              Comprehension(Tuple(List(key,
                                       Call("applyOpr",
-                                           List(Var(tv),function(f))))),
+                                           List(Var(tv),function(f),
+                                                IntConst(cpu_cost(f)))))),
                            List(Generator(TuplePat(List(VarPat(jk),TuplePat(List(ip,VarPat(tv))))),
                                           xp)))
         case flatMap(f,x)
@@ -247,7 +258,8 @@ object PlanGenerator {
              flatMap(Lambda(TuplePat(List(VarPat(k),VarPat(gl))),
                             Seq(List(Tuple(List(Var(k),
                                                 Call("applyOpr",
-                                                     List(Var(gl),function(f)))))))),
+                                                     List(Var(gl),function(f),
+                                                          IntConst(cpu_cost(f))))))))),
                      xp)
         case flatMap(f@Lambda(p@TuplePat(List(kk,pp)),b),x@Call(join,_))
           if getKey(b).isDefined && getJoinType(join).nonEmpty
@@ -258,7 +270,8 @@ object PlanGenerator {
              Comprehension(Tuple(List(key,
                                  Tuple(List(toExpr(ip),
                                       Call("applyOpr",
-                                           List(Var(tv),function(f))))))),
+                                           List(Var(tv),function(f),
+                                                IntConst(cpu_cost(f)))))))),
                            List(Generator(TuplePat(List(VarPat(jk),TuplePat(List(ip,VarPat(tv))))),
                                           xp)))
         case flatMap(f@Lambda(p@TuplePat(List(kk,pp)),b),x)
@@ -269,7 +282,8 @@ object PlanGenerator {
              flatMap(Lambda(TuplePat(List(kk,VarPat(gl))),
                             Seq(List(Tuple(List(key,Tuple(List(toExpr(kk),
                                                 Call("applyOpr",
-                                                     List(Var(gl),function(f)))))))))),
+                                                     List(Var(gl),function(f),
+                                                          IntConst(cpu_cost(f))))))))))),
                      xp)
         case flatMap(f,x)
           => val k = newvar
@@ -278,7 +292,8 @@ object PlanGenerator {
              flatMap(Lambda(TuplePat(List(VarPat(k),VarPat(gl))),
                             Seq(List(Tuple(List(Var(k),
                                                 Call("applyOpr",
-                                                     List(Var(gl),function(f)))))))),
+                                                     List(Var(gl),function(f),
+                                                          IntConst(cpu_cost(f))))))))),
                      xp)
         case MethodCall(x,"reduceByKey",List(op,_))
           => val k = newvar
@@ -287,7 +302,8 @@ object PlanGenerator {
              val rv = Call("reduceOpr",
                            List(flatMap(Lambda(VarPat("x"),Seq(List(Nth(Var("x"),2)))),
                                         Var(s)),
-                                BoolConst(false),function(op)))
+                                BoolConst(false),function(op),
+                                IntConst(cpu_cost(op))))
              flatMap(Lambda(TuplePat(List(VarPat(k),VarPat(s))),
                             Seq(List(Tuple(List(Var(k),rv))))),
                      Call("groupByKey",List(xp)))
@@ -309,7 +325,8 @@ object PlanGenerator {
                                                                       Seq(List(Nth(Var("x"),2)))),
                                                                makePlan(x,true)),
                                                        BoolConst(true),
-                                                       function(op))))),
+                                                       function(op),
+                                                       IntConst(cpu_cost(op)))))),
                          elemType(typecheck(x)))
              case _ => apply(e,makePlanExpr)
            }

@@ -24,19 +24,24 @@ object Test {
       var Cz = tensor*(N,M)[ ((i,j),4.5) | i <-0..(N-1), j<-0..(M-1) ];
       var V = tensor*(N)[ (i,2.3) | i <-0..(N-1) ];
 
-      Az = tensor*(N,M)[ ((i,j),v+a) | (i,v) <- V, ((ii,j),a) <- Az, ii==i ];
+      Az = [ ((i,j),v+a) | (i,v) <- V, ((ii,j),a) <- Az, ii==i ];
 
-      Az = tensor*(N,M)[ ((i,j),a+1) | ((i,j),a) <- Az ];
+      Az = [ ((i,j),a+1) | ((i,j),a) <- Az ];
 
-      V = tensor*(N)[ (i,+/a) | ((i,j),a) <- Az, group by i ];
+      V = [ (i,+/a) | ((i,j),a) <- Az, group by i ];
 
-      Az = tensor*(N,M)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
+      Az = [ ((i,j),v+a) | (i,v) <- V, ((ii,j),a) <- Az, ii==i ];
 
-      Az = tensor*(N,M)[ ((i,j),m+n) | ((i,j),m) <= Az, ((ii,jj),n) <= Bz, ii==i, jj==j ];
+      Az = [ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
 
-      Az = tensor*(N,M)[ ((i,j),m+n+k) | ((i,j),m) <= Az, ((ii,jj),n) <= Bz, ((iii,jjj),k) <- Cz, ii==i, jj==j, iii==i, jjj==j ];
+      Az = [ ((i,j),m+n) | ((i,j),m) <= Az, ((ii,jj),n) <= Bz, ii==i, jj==j ];
 
-      Az = tensor*(N,M)[ ((i,j),+/v) | ((i,k),a) <= Az, ((kk,l),b) <= Bz, ((ll,j),c) <- Cz, kk==k, ll==l, let v = a*b*c, group by (i,j) ];
+      Az = [ ((i,j),m+n+k) | ((i,j),m) <= Az, ((ii,jj),n) <= Bz, ((iii,jjj),k) <- Cz, ii==i, jj==j, iii==i, jjj==j ];
+
+      Az = [ ((i,j),+/v) | ((i,k),a) <= Az, ((kk,l),b) <= Bz, ((ll,j),c) <- Cz, kk==k, ll==l, let v = a*b*c, group by (i,j) ];
+
+      // NumPy-style - @ is matrix-matrix multiplication
+      Az = (Az-Cz)@(Bz*2+3)@(Cz*Az-1);
 
       var n = +/[ a | ((i,j),a) <- Az ];
       println(n);
@@ -53,7 +58,7 @@ object Test {
             };
 
       for i = 0, 20 do
-         Az = tensor*(N,M)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
+         Az = [ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
 
       Az
 

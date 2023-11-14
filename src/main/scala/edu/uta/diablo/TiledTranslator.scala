@@ -437,8 +437,8 @@ object TiledTranslator {
                              ++ is.map( i => VarPat(prefix("size",i)) ))
                val nc = Comprehension(toExpr(p),
                                       rdd_qualifiers(qs,vars)++tbinds)
-               if (trace) println("Parallelizing the in-memory comprehension:\n"
-                                  +Pretty.print(nc))
+               if (false && trace) println("Parallelizing the in-memory comprehension:\n"
+                                           +Pretty.print(nc))
                val rdd = flatMap(Lambda(p,Seq(List(tuple(List(tuple(tile_coords),tile))))),
                                  MethodCall(Var("spark_context"),
                                             "parallelize",

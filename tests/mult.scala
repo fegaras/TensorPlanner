@@ -51,7 +51,7 @@ object Multiply {
         t = wtime()-t
         val s = collect(res)
       } catch { case x: Throwable => println(x); return -1.0 }
-      t/1000.0
+      t
     }
 
     def test ( name: String, f: => Double ) {

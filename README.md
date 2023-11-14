@@ -23,9 +23,9 @@ MPI_HOME=$HOME/openmpi
 export PATH="$MPI_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$MPI_HOME/lib/:$LD_LIBRARY_PATH"
 ```
-Go to `TensorPlaner/lib/` and do:
+Go to `TensorPlaner/tests/` and do:
 ```bash
-./build aa.scala
+./build test.scala
 ./run Test
 ```
 
