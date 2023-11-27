@@ -832,7 +832,8 @@ abstract class CodeGeneration {
       case IfE(p,x,Seq(Nil))
         => val pc = codeGen(p,env)
            val xc = codeGen(x,env)
-           q"{ assert($pc); $xc }"
+           //q"{ assert($pc); $xc }"
+           q"if ($pc) $xc else Nil"
       case IfE(p,x,y)
         => val pc = codeGen(p,env)
            val xc = codeGen(x,env)

@@ -40,11 +40,17 @@ object Test {
 
       Az = [ ((i,j),+/v) | ((i,k),a) <= Az, ((kk,l),b) <= Bz, ((ll,j),c) <- Cz, kk==k, ll==l, let v = a*b*c, group by (i,j) ];
 
+      // slicing
+      var D = Az[12:19,5:11:2];
+
       // NumPy-style - @ is matrix-matrix multiplication
       Az = (Az-Cz)@(Bz*2+3)@(Cz*Az-1);
 
-      var n = +/[ a | ((i,j),a) <- Az ];
-      println(n);
+      // rotate a matrix
+      Az = [ (((i+1)%N,j),a) | ((i,j),a) <- Az ];
+
+      //var n = +/[ a | ((i,j),a) <- Az ];
+      //println(n);
 
         for i = 0, N-1 do
             for j = 0, M-1 do

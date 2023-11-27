@@ -2,7 +2,7 @@ import edu.uta.diablo._
 import org.apache.spark._
 import System._
 
-object MultiplyDiablo {
+object Multiply {
   def main ( args: Array[String] ) {
     val N = args(0).toInt
     val M = args(1).toInt
@@ -11,8 +11,6 @@ object MultiplyDiablo {
     spark_context = new SparkContext(conf)
     //conf.set("spark.serializer","org.apache.spark.serializer.KryoSerializer")
     //conf.set("spark.kryo.registrationRequired","true")
-
-    param(groupByJoin,true)
 
     val t = currentTimeMillis()
 

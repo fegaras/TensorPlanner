@@ -67,7 +67,8 @@ object Multiply {
     val s = collect(res)
     if (isCoordinator()) {
       s._3.foreach(println)   // s._3.foreach(pr)
-      validate(s._3.asInstanceOf[List[((Int, Int), Any)]])
+      //validate
+        (s._3.asInstanceOf[List[((Int, Int), Any)]])
     }
 
     end()

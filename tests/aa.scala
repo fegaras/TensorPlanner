@@ -7,26 +7,36 @@ object Test {
     param(asynchronous,true)
     PlanGenerator.trace = true
     //Runtime.enable_gc = true
+    //Runtime.enable_partial_reduce = false
 
     startup(args)
 
-    def pr ( x: (Any,Any) ) {
-      val z = x._2.asInstanceOf[(Any,Any,Array[Double])]
-      println(x+"   "+z._3.map(w => "%.1f".format(w)).toList)
+    def pr ( a: ((Int,Int),EmptyTuple,List[((Int,Int),((Int,Int),EmptyTuple,Array[Double]))]) ) {
+      val bn = block_dim_size
+      val n = a._1._1
+      val m = a._1._2
+      val z = Array.ofDim[Double](n*m)
+      for { ((ci,cj),((cn,cm),_,s)) <- a._3;
+            i <- 0 until cn;
+            j <- 0 until cm } {
+         z((ci*bn+i)*m + (cj*bn+j)) = s(i*cm+j)
+      }
+      for ( i <- 0 until n ) {
+         for ( j <- 0 until m )
+            print("\t%3.1f".format(z(i*m+j)))
+         println()
+      }
     }
 
-    val N = 13
-    val M = 25
+    val N = 23
+    val M = 15
 
     val graph = textFile("graph.txt").map{ case (_,line) => val a = line.split(","); (a(0).toInt,a(0).toInt) }
 
-    val rand = new scala.util.Random()
-    val theta_init: List[(Int,Double)] = (0 to M-1).map(i => (i,rand.nextDouble()-0.5)).toList
-
     val plan = q("""
 
-      var Az = tensor*(N,M)[ ((i,j),2.3) | i <-0..(N-1), j<-0..(M-1) ];
-      var Bz = tensor*(N,M)[ ((i,j),3.4) | i <-0..(N-1), j<-0..(M-1) ];
+      var Az = tensor*(N,M)[ ((i,j),i*j*1.0) | i <-0..(N-1), j<-0..(M-1) ];
+      var Bz = tensor*(M,N)[ ((i,j),3.4) | i <-0..(N-1), j<-0..(M-1) ];
       var Cz = tensor*(N,M)[ ((i,j),4.5) | i <-0..(N-1), j<-0..(M-1) ];
       var V = tensor*(N)[ (i,2.3) | i <-0..(N-1) ];
 
@@ -51,9 +61,17 @@ object Test {
 
       //tensor*(N,M)[ ((i,j),+/v) | ((i,k),a) <= Az, ((kk,l),b) <= Bz, ((ll,j),c) <- Cz, kk==k, ll==l, let v = a*b*c, group by (i,j) ];
 
+      //tensor*(N,M)[ (((i+1)%N,j),a) | ((i,j),a) <- Az ];
+
+      //tensor*(N-12,M-11)[ (((N-12+i)%N,(M-11+j)%M),a) | ((i,j),a) <- Az ];    // A[12:22,11:14]
+
+      //tensor*(8,3)[ (((N-12+i)%N,(M-11+j)%M),a) | ((i,j),a) <- Az ];    // A[12:19,11:13]
+
+      //Az[12:19,5:11:2];
+
       // error: tensor*(N)[ (i,+/v) | (i,v) <- V, ((ii,j),a) <- Az, ii==i, let v = a+v, group by i ];
 
-      // error: tensor*(N,M)[ (((i+1)%N,j),a+1) | ((i,j),a) <- Az ];
+      // error: tensor*(N,M)[ ((i-12,j-14),a) | ((i,j),a) <- Az, i>=12, j>=14 ];
 
       //var n = +/[ a | ((i,j),a) <- Az ];
       //println(n);
@@ -78,6 +96,7 @@ object Test {
 
      tensor*(100)[ (i,j.length) | (i,j) <- graph, group by i ];
 */
+
       """)
 
     if (false && isCoordinator())
@@ -85,8 +104,13 @@ object Test {
 
     schedule(plan)
     val res = collect(eval(plan))
-    if (isCoordinator())
-      res._3.foreach(println)
+    if (isCoordinator()) {
+      val s = res.asInstanceOf[((Int,Int),EmptyTuple,List[((Int,Int),((Int,Int),
+                        EmptyTuple,Array[Double]))])]
+      //println(s)
+      //println(s._3.map(x => x._2._3.length))
+      pr(s)
+    }
 
     end()
 

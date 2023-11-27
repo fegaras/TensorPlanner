@@ -69,8 +69,8 @@ object PlanGenerator {
   case class PairOpr ( x: OprID, y: OprID ) extends Opr {
     override def hashCode (): Int = (2,x,y).##
   }
-  case class ApplyOpr ( x: OprID, fnc: FunctionID ) extends Opr {
-    override def hashCode (): Int = (3,x,fnc).##
+  case class ApplyOpr ( x: OprID, fnc: FunctionID, extra_args: Any ) extends Opr {
+    override def hashCode (): Int = (3,x,fnc,extra_args).##
   }
   case class ReduceOpr ( s: List[OprID], valuep: Boolean, op: FunctionID ) extends Opr {
     override def hashCode (): Int = (4,s,valuep,op).##
@@ -90,7 +90,7 @@ object PlanGenerator {
     = e match {
         case PairOpr(x,y)
           => List(x,y)
-        case ApplyOpr(x,_)
+        case ApplyOpr(x,_,_)
           => List(x)
         case SeqOpr(s)
           => s
@@ -134,22 +134,29 @@ object PlanGenerator {
     }
   }
 
-  def getKey ( e: Expr ): Option[Expr] = {
-    e match {
+  def embedApplyOpr ( e: Expr, f: Lambda, tv: String, args: List[Pattern], idx: Option[Expr] ): Option[Expr]
+    = e match {
         case Seq(List(Tuple(List(key,ta))))
-          => Some(key)
-        case flatMap(Lambda(f,b),x)
-          => for ( bc <- getKey(b) )
-                yield flatMap(Lambda(f,Seq(List(bc))),x)
+          => val t = Call("applyOpr",
+                          List(Var(tv),
+                               function(if (args.isEmpty) f else Lambda(TuplePat(args),f)),
+                               Tuple(args.map(toExpr)),
+                               IntConst(cpu_cost(f))))
+             Some(Seq(List(Tuple(List(key,if (idx.nonEmpty)
+                                            Tuple(List(idx.head,t))
+                                          else t)))))
+        case flatMap(g@Lambda(p,b),x)
+          => val Lambda(q,d) = f
+             for ( bc <- embedApplyOpr(b,Lambda(q,b),tv,args:+p,idx) )
+                yield flatMap(Lambda(p,bc),x)
         case IfE(p,x,y)
-          => for ( xc <- getKey(x) )
+          => for ( xc <- embedApplyOpr(x,f,tv,args,idx) )
                 yield IfE(p,xc,y)
         case Let(p,x,b)
-          => for ( bc <- getKey(b) )
+          => for ( bc <- embedApplyOpr(b,f,tv,args,idx) )
                 yield Let(p,x,bc)
         case _ => None
       }
-  }
 
   def function ( e: Expr ): Expr = {
     val i = functions.indexOf(e)
@@ -239,51 +246,23 @@ object PlanGenerator {
                                             b))),
                         "toList",null)
         case flatMap(f@Lambda(p@TuplePat(List(kk,pp)),b),x@Call(join,_))
-          if top && getKey(b).isDefined && getJoinType(join).nonEmpty
+          if embedApplyOpr(b,f,"",Nil,None).nonEmpty && getJoinType(join).nonEmpty
           => val xp = makePlan(x,false)
-             val Some(key) = getKey(b)
-             val ip = getIndices(pp)
              val jk = newvar; val iv = newvar; val tv = newvar
-             Comprehension(Tuple(List(key,
-                                      Call("applyOpr",
-                                           List(Var(tv),function(f),
-                                                IntConst(cpu_cost(f)))))),
-                           List(Generator(TuplePat(List(VarPat(jk),TuplePat(List(ip,VarPat(tv))))),
-                                          xp)))
-        case flatMap(f,x)
-          if top
-          => val k = newvar
-             val gl = newvar
-             val xp = makePlan(x,false)
-             flatMap(Lambda(TuplePat(List(VarPat(k),VarPat(gl))),
-                            Seq(List(Tuple(List(Var(k),
-                                                Call("applyOpr",
-                                                     List(Var(gl),function(f),
-                                                          IntConst(cpu_cost(f))))))))),
+             val ip = getIndices(pp)
+             val Some(key) = embedApplyOpr(b,f,tv,Nil,
+                                   if (top) None else Some(toExpr(ip)))
+             flatMap(Lambda(TuplePat(List(VarPat(jk),TuplePat(List(ip,VarPat(tv))))),
+                            key),
                      xp)
-        case flatMap(f@Lambda(p@TuplePat(List(kk,pp)),b),x@Call(join,_))
-          if getKey(b).isDefined && getJoinType(join).nonEmpty
-          => val xp = makePlan(x,false)
-             val Some(key) = getKey(b)
-             val ip = getIndices(pp)
-             val jk = newvar; val iv = newvar; val tv = newvar
-             Comprehension(Tuple(List(key,
-                                 Tuple(List(toExpr(ip),
-                                      Call("applyOpr",
-                                           List(Var(tv),function(f),
-                                                IntConst(cpu_cost(f)))))))),
-                           List(Generator(TuplePat(List(VarPat(jk),TuplePat(List(ip,VarPat(tv))))),
-                                          xp)))
-        case flatMap(f@Lambda(p@TuplePat(List(kk,pp)),b),x)
-          if getKey(b).isDefined
-          => val gl = newvar
+        case flatMap(f@Lambda(p@TuplePat(List(ip,pp)),b),x)
+          if embedApplyOpr(b,f,"",Nil,None).nonEmpty
+          => val tv = newvar; val k = newvar
              val xp = makePlan(x,top)
-             val Some(key) = getKey(b)
-             flatMap(Lambda(TuplePat(List(kk,VarPat(gl))),
-                            Seq(List(Tuple(List(key,Tuple(List(toExpr(kk),
-                                                Call("applyOpr",
-                                                     List(Var(gl),function(f),
-                                                          IntConst(cpu_cost(f))))))))))),
+             val Some(key) = embedApplyOpr(b,f,tv,Nil,
+                                   if (top) None else Some(toExpr(ip)))
+             flatMap(Lambda(TuplePat(List(ip,VarPat(tv))),
+                            key),
                      xp)
         case flatMap(f,x)
           => val k = newvar
@@ -292,7 +271,9 @@ object PlanGenerator {
              flatMap(Lambda(TuplePat(List(VarPat(k),VarPat(gl))),
                             Seq(List(Tuple(List(Var(k),
                                                 Call("applyOpr",
-                                                     List(Var(gl),function(f),
+                                                     List(Var(gl),
+                                                          function(f),
+                                                          Tuple(Nil),
                                                           IntConst(cpu_cost(f))))))))),
                      xp)
         case MethodCall(x,"reduceByKey",List(op,_))

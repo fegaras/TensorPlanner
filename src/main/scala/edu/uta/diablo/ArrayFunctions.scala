@@ -131,8 +131,8 @@ trait ArrayFunctions {
   def pairOpr ( x: OprID, y: OprID ): OprID
     = store_opr(PairOpr(x,y),List(x,y),0)
 
-  def applyOpr ( x: OprID, fnc: FunctionID, cost: Int ): OprID
-    = store_opr(ApplyOpr(x,fnc),List(x),cost)
+  def applyOpr ( x: OprID, fnc: FunctionID, args: Any, cost: Int ): OprID
+    = store_opr(ApplyOpr(x,fnc,args),List(x),cost)
 
   def reduceOpr ( s: List[OprID], valuep: Boolean, op: FunctionID, cost: Int ): OprID
     = s match {
@@ -154,6 +154,8 @@ trait ArrayFunctions {
     }
     b.zipWithIndex.map{ case (s,i) => (i,s) }.toList
   }
+
+  def slice[T] ( array: T, ranges: List[Any] ): T = array
 
   // parRange doesn't work
   final def parRange ( n: Int, m: Int, s: Int ): ParRange

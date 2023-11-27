@@ -136,10 +136,34 @@ object Parser extends StandardTokenParsers {
                                  => MatchE(r,cs.map{ case _~p~Some(c)~_~b => Case(p,c,b)
                                                      case _~p~_~_~b => Case(p,BoolConst(true),b) }) } }
 
+ def idx: Parser[Expr]
+     = positioned(
+         ":" ~ opt( opt( expr ) ~ opt( ":" ~ expr ) ) ^^
+         { case _~None => Range(IntConst(0),Var("*"),IntConst(1))
+           case _~Some(None~None) => Range(IntConst(0),Var("*"),IntConst(1))
+           case _~Some(None~Some(_~k)) => Range(IntConst(0),Var("*"),k)
+           case _~Some(Some(s)~None) => Range(IntConst(0),s,IntConst(1))
+           case _~Some(Some(s)~Some(_~k)) => Range(IntConst(0),s,k)
+         }
+       | expr ~ opt( ":" ~ opt( opt( expr ) ~ opt( ":" ~ expr ) ) ) ^^
+         { case e~None => e
+           case e~Some(_~None) => Range(e,Var("*"),IntConst(1))
+           case e~Some(_~Some(None~None)) => Range(e,Var("*"),IntConst(1))
+           case e~Some(_~Some(None~Some(_~k))) => Range(e,Var("*"),k)
+           case e~Some(_~Some(Some(s)~None)) => Range(e,s,IntConst(1))
+           case e~Some(_~Some(Some(s)~Some(_~k))) => Range(e,s,k)
+         }
+       )
+
  def factorList ( e: Expr ): Parser[Expr]
      = positioned(
-         "[" ~ rep1sep( expr, "," ) ~ "]" ^^
-         { case _~s~_ => Index(e,s) }
+         "[" ~ rep1sep( idx, "," ) ~ "]" ^^
+         { case _~s~_
+             if s.exists(_.isInstanceOf[Range])
+             => Call("slice",List(e,Seq(s.map( i => if (i.isInstanceOf[Range]) i
+                                                    else Range(i,i,IntConst(1))
+                                             ))))
+           case _~s~_ => Index(e,s) }
        | "." ~ ident ~ "(" ~ repsep( expr, "," ) ~ ")" ^^
          { case _~m~_~el~_ => MethodCall(e,m,el) }
        | "." ~ ident ^^
@@ -157,7 +181,10 @@ object Parser extends StandardTokenParsers {
                           case (r,Project(_,a)) => Project(r,a)
                           case (r,Nth(_,n)) => Nth(r,n)
                           case (r,Index(_,s)) => Index(r,s)
-                          case (r,MethodCall(_,m,el)) => MethodCall(r,m,el)
+                          case (r,MethodCall(_,m,el))
+                            => MethodCall(r,m,el)
+                          case (r,Call("slice",List(e,s)))
+                            => Call("slice",List(r,s))
                           case (r,_) => r } })
 
  def dest: Parser[Expr]
@@ -169,7 +196,10 @@ object Parser extends StandardTokenParsers {
                   case (r,Project(_,a)) => Project(r,a)
                   case (r,Nth(_,n)) => Nth(r,n)
                   case (r,Index(_,s)) => Index(r,s)
-                  case (r,MethodCall(_,m,el)) => MethodCall(r,m,el)
+                  case (r,MethodCall(_,m,el))
+                    => MethodCall(r,m,el)
+                  case (r,Call("slice",List(e,s)))
+                    => Call("slice",List(r,s))
                   case (r,_) => r }
         })
 

@@ -2,6 +2,8 @@
 
 ### Installation using Open MPI
 
+DIABLO depends on Scala 2.12.15, open-mpi, Spark 3.2.1, JDK 11, and sbt 1.6.2.
+
 Download and install open-mpi from [https://www.open-mpi.org/software/](https://www.open-mpi.org/software/).
 Set `$JAVA_HOME` to point to your Java instalation. For example:
 ```bash
@@ -28,22 +30,12 @@ Go to `TensorPlaner/tests/` and do:
 ./build test.scala
 ./run Test
 ```
-
-# DIABLO: a Data-Intensive Array-Based Loop Optimizer
-
-A compiler from array-based loops to distributed data parallel programs that can run on Apache Spark.
-Arrays are stored as distributed collections of blocks of fixed size (ie, square tiles for matrices).
-It works on Apache Spark and on Scala's Parallel collections.
-
-### Installation on Spark
-
-DIABLO depends on Scala 2.12.15, Spark 3.2.1, JDK 11, and sbt 1.6.2. To compile DIABLO, use ``sbt package`` or ``mvn install``.
-To test  on Spark:
+To test using Spark:
 ```bash
 export SPARK_HOME= ... path to Spark home ...
 cd tests/
-./build tiled.scala
-./run Test
+./build-diablo Multiply-diablo.scala
+./run-diablo Multiply 1234 2345
 ```
 ## Data Model
 
@@ -84,8 +76,19 @@ For example, a 4-dimensional array `A` constructed using `tensor(d1,d2)(s1,s2)` 
 The index `z` is found in `sparse` using binary search. If it doesn't exist, it's zero (0, 0.0, false, or null).<br/>
 A boolean sparse tensor does not have a `values` array.<br/>
 A block tensor, tensor*(d<sub>1</sub>,...,d<sub>n</sub>)(s<sub>1</sub>,...,s<sub>m</sub>) e, is stored as a distributed collection of blocks of type
-RDD[(coord,block)], where coord is the block coordinates (of type (Int,...,Int)) and block is a fixed-size tensor constructed
+(coord,block), where coord is the block coordinates (of type (Int,...,Int)) and block is a fixed-size tensor constructed
 using tensor(N,...,N)(N,...,N). A block has fixed size `block_size` (default is 100M int/float), which means that each dimension N has N<sup>n+m</sup>=`block_size` .
+
+## Abbreviated Syntax
+
+| example | meaning | equivalent tensor comprehension |
+| ------- | ------- | ------------------------------- |
+| A+B | cell-wise operation +, -, *, / | tensor*(n,n)[ ((i,j),a+b) \| ((i,j),a) <- A, ((ii,jj),b) <- B, ii == i, jj == j ] |
+| A+2 | cell-wise operation +, -, *, / | tensor*(n,n)[ ((i,j),a+2) \| ((i,j),a) <- A ] |
+| A@B | matrix-matrix multiplication | tensor*(n,n)[ ((i,j),+/v) \| ((i,k),a) <- A, ((kk,j),b) <- B, kk == k, let v = a*b, group by (i,j) ] |
+| A@V | matrix-vector multiplication | tensor*(n,n)[ (i,+/w) \| ((i,k),a) <- A, (kk,v) <- V, kk == k, let w = a*v, group by i ] |
+| A.t | transpose | tensor*(n,n)[ ((j,i),a) \| ((i,j),a) <- A ] |
+| A[2:5,3:8:2] | slicing | tensor*(4,6)[ (((n-2+i)%n,(n-3+j*2)%n),a) \| ((i,j),a) <- A ] |
 
 ## Matrix multiplication using array comprehensions:
 

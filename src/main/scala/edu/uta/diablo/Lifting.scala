@@ -134,11 +134,12 @@ object Lifting {
         case _ => src
       }
 
+  def tuple_comps ( e: Expr ): List[Expr]
+    = e match { case Tuple(es) => es; case _ => List(e) }
+
   // Handles the case when e is in a generator domain and is a tensor comprehension.
   // Add tensor information using the dimensions of array indices
   def set_compr_storage ( e: Expr, env: Environment ): Option[Expr] = {
-    def tuple_comps ( e: Expr ): List[Expr]
-      = e match { case Tuple(es) => es; case _ => List(e) }
     // bind each array index to a dimension
     def index_dims ( qs: List[Qualifier], env: Environment ): Option[Map[String,Expr]]
       = qs.foldLeft[Option[Map[String,Expr]]](Some(Map[String,Expr]())) {
@@ -274,6 +275,58 @@ object Lifting {
                   case ((r,s),e)
                     => (r,s:+lift_expr(e,r))
              }._2)
+        case Call("slice",List(a,Seq(ranges)))
+          => val la = lift_expr(a,env)
+             la.tpe = null
+             typecheck(la,env) match {
+                case StorageType(st@bpat(full,cm,dn,sn),List(tp),List(ds,dd))
+                  => val dims = tuple_comps(ds)++tuple_comps(dd)
+                     if (ranges.length != dims.length)
+                       throw new Error("Array indexing "+a+" needs "+dims.length
+                                       +" indices (found "+ranges.length+" )")
+                     val vs = ranges.map(v => newvar)
+                     val is = (ranges zip dims zip vs).map {
+                                 case ((Range(i1,i2,IntConst(1)),dim),i)
+                                   if i1 == i2
+                                   => Var(i)
+                                 case ((Range(IntConst(0),Var("*"),IntConst(1)),dim),i)
+                                   => Var(i)
+                                 case ((Range(i1,i2,i3),dim),i)
+                                   => val k = MethodCall(MethodCall(dim,"-",List(i1)),
+                                                  "+",List(MethodCall(Var(i),"*",List(i3))))
+                                      MethodCall(k,"%",List(dim))
+                              }
+                     val ps = (ranges zip vs).map {
+                                 case (Range(i1,i2,IntConst(1)),i)
+                                   if i1 == i2
+                                   => List(Predicate(MethodCall(Var(i),"==",List(i1))))
+                                 case _ => Nil
+                              }.flatten
+                     val nds = (ranges zip dims).map {
+                                 case (Range(i1,i2,IntConst(1)),dim)
+                                   if i1 == i2
+                                   => IntConst(1)
+                                 case (Range(IntConst(0),Var("*"),IntConst(1)),dim)
+                                   => dim
+                                 case (Range(i1,Var("*"),i3),dim)
+                                   => MethodCall(MethodCall(dim,"-",List(i1)),
+                                                 "/",List(i3))
+                                 case (Range(i1,i2,i3),dim)
+                                   => MethodCall(MethodCall(MethodCall(i2,"-",List(i1)),
+                                                            "+",List(IntConst(1))),
+                                                 "/",List(i3))
+                               }
+                     val v = newvar
+                     Store(st,List(tp),
+                           List(tuple(nds.take(dn.toInt)),
+                                tuple(nds.drop(dn.toInt))),
+                           Comprehension(Tuple(List(tuple(is),Var(v))),
+                                         Generator(TuplePat(List(tuple(vs.map(VarPat)),
+                                                                 VarPat(v))),
+                                                   Lift(st,la))::ps))
+                case tp => throw new Error("Array slicing must be done on tensors only: "
+                                           +la+" (found "+tp+")")
+             }
         case Call(f,args:+x)
             if typeMaps.contains(f)
             => val nargs = args.map(lift_expr(_,env))

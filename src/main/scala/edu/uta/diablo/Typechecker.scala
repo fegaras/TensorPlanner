@@ -266,7 +266,7 @@ object Typechecker {
     def new_names ( n: Int ): List[String]
       = (1 to n).map(i => newvar).toList
 
-    def binary_array_operation ( e: Expr, env: Environment ): Boolean = {
+    def array_operation ( e: Expr, env: Environment ): Boolean = {
       def modify ( ne: Expr ): Boolean = {
         val z = e.asInstanceOf[MethodCall]
         z.obj = ne; z.method = "_@"; z.args = null  // destructive
@@ -285,10 +285,10 @@ object Typechecker {
             case _ => None
           }
       e match {
-        case MethodCall(x,m,null)
+        case MethodCall(x,"t",null)
           => typecheck(x,env) match {
                 case tx   // matrix transpose
-                  if m == "trans" && dims(tx) == Some(2)
+                  if dims(tx) == Some(2)
                   => val vxs = new_names(dims(tx).get)
                      val xv = newvar
                      modify(Comprehension(Tuple(List(Tuple(vxs.map(Var).reverse),Var(xv))),
@@ -343,9 +343,10 @@ object Typechecker {
                      modify(Comprehension(Tuple(List(Tuple(vys.map(Var)),
                                                      MethodCall(x,m,List(Var(yv))))),
                                           List(Generator(tuple(List(tuple(vys.map(VarPat)),VarPat(yv))),y))))
-                  case _ => false
-               }
-        }
+                case _ => false
+             }
+        case _ => false
+      }
     }
 
     def typecheck ( e: Expr, env: Environment ): Type
@@ -354,6 +355,8 @@ object Typechecker {
         else try { val tpe = e match {
           case Var("null")
             => AnyType()
+          case Var("*")
+            => intType
           case Var(v)
             => if (env.contains(v))
                  env(v)
@@ -558,6 +561,9 @@ object Typechecker {
                                   }
                typecheck_call(f,tas)
                  .getOrElse(throw new Error("Wrong function call: "+e+" for type "+tas))
+          case MethodCall(_,_,_)
+            if array_operation(e,env)
+            => typecheck(e,env)  // was modified
           case MethodCall(_,"register",_)
             => intType
           case MethodCall(u,"reduceByKey",Lambda(p@TuplePat(List(VarPat(x),VarPat(y))),b)::_)
@@ -592,9 +598,6 @@ object Typechecker {
           case MethodCall(Var(op),"/",List(u))    // reduction such as max/e
             if is_reduction(op,typecheck(u,env))
             => typecheck(reduce(op,u),env)
-          case MethodCall(x,m,List(y))
-            if binary_array_operation(e,env)
-            => typecheck(e,env)  // was modified
           case MethodCall(u,m,args)
             => // call the Scala typechecker to find method m
                val tu = typecheck(u,env)

@@ -387,7 +387,13 @@ object TiledTranslator {
              val is_array_assign = block_array_assignment.nonEmpty
              val tensor = tile_type(block,tp)
              val (dn,sn) = tensor_dims(tensor)
-             val tbinds = tile_sizes(is,dims,dn,sn)
+             val all_dims = tile_dimensions(dn,dims.head)++tile_dimensions(sn,dims(1))
+             val tbinds = tile_sizes(is,dims,dn,sn) ++
+                              (is zip all_dims).map {
+                                 case (i,d)
+                                   => Predicate(MethodCall(MethodCall(Var(prefix("coord",i)),
+                                                                      "*",List(IntConst(block_dim_size))),
+                                                           "<=",List(d))) }
              val vdims = is.map( v => Var(prefix("size",v)) )
              val tile_dims = List(tuple(vdims.take(dn)),tuple(vdims.takeRight(sn)))
              val tile_coords = is.map( i => Var(prefix("coord",i)) )
@@ -437,8 +443,6 @@ object TiledTranslator {
                              ++ is.map( i => VarPat(prefix("size",i)) ))
                val nc = Comprehension(toExpr(p),
                                       rdd_qualifiers(qs,vars)++tbinds)
-               if (false && trace) println("Parallelizing the in-memory comprehension:\n"
-                                           +Pretty.print(nc))
                val rdd = flatMap(Lambda(p,Seq(List(tuple(List(tuple(tile_coords),tile))))),
                                  MethodCall(Var("spark_context"),
                                             "parallelize",
@@ -469,7 +473,13 @@ object TiledTranslator {
              val N = IntConst(block_dim_size)
              val tensor = tile_type(block,tp)
              val (dn,sn) = tensor_dims(tensor)
-             val tbinds = tile_sizes(vs,dims,dn,sn,true)
+             val all_dims = tile_dimensions(dn,dims.head)++tile_dimensions(sn,dims(1))
+             val tbinds = tile_sizes(vs,dims,dn,sn,true) ++
+                              (vs zip all_dims).map {
+                                 case (v,d)
+                                   => Predicate(MethodCall(MethodCall(Var(v),
+                                                                      "*",List(IntConst(block_dim_size))),
+                                                           "<=",List(d))) }
              val vdims = vs.map( v => Var(prefix("size",v)) )
              val tile_dims = List(tuple(vdims.take(dn)),tuple(vdims.takeRight(sn)))
              def gkeys ( op: String ): List[Expr]
@@ -482,7 +492,6 @@ object TiledTranslator {
                            MethodCall(gk.foldLeft[Expr](k){ case (r,(v,e)) => subst(v,e,r) },
                                       op,List(N))
                       }
-             val all_dims = tile_dimensions(dn,dims.head)++tile_dimensions(sn,dims(1))
              // generate all the unique block coordinates from the current block coordinates
              //   used by the comprehension keys
              val unique_coords

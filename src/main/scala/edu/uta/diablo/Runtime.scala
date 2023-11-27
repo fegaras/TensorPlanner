@@ -88,7 +88,7 @@ object Runtime {
           case PairOpr(x,y)
             => opr_queue.enqueue(x)
                opr_queue.enqueue(y)
-          case ApplyOpr(x,_)
+          case ApplyOpr(x,_,_)
             => opr_queue.enqueue(x)
           case ReduceOpr(s_list,_,_)
             => s_list.foreach(op => opr_queue.enqueue(op))
@@ -179,13 +179,18 @@ object Runtime {
         case LoadOpr(b)
           => opr.status = computed
              cache_data(opr,loadBlocks(b))
-        case ApplyOpr(x,fid)
-          => val f = functions(fid).asInstanceOf[Any=>List[Any]]
+        case ApplyOpr(x,fid,args)
+          => val f = if (args.isInstanceOf[EmptyTuple] || args==())
+                       functions(fid).asInstanceOf[Any=>List[Any]]
+                     else functions(fid).asInstanceOf[Any=>Any=>List[Any]](args)
              if (!hasCachedValue(operations(x)))
                error("missing input in Apply: "+opr_id+" at "+executor_rank)
-             stats.apply_operations += 1
-             opr.status = computed
-             cache_data(opr,f(operations(x).cached).head)
+             val res = f(operations(x).cached)
+             if (res.nonEmpty) {
+               stats.apply_operations += 1
+               opr.status = computed
+               cache_data(opr,res.head)
+             }
         case PairOpr(x,y)
           => def f ( lg_id: OprID ): (Any,Any) = {
                 val lg = operations(lg_id)

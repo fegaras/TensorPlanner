@@ -48,8 +48,10 @@ object inMem {
     val res = e match {
         case LoadOpr(b)
           => Runtime.loadBlocks(b)
-        case ApplyOpr(x,fid)
-          => val f = functions(fid).asInstanceOf[Any=>List[Any]]
+        case ApplyOpr(x,fid,args)
+          => val f = if (args.isInstanceOf[EmptyTuple] || args==())
+                       functions(fid).asInstanceOf[Any=>List[Any]]
+                     else functions(fid).asInstanceOf[Any=>Any=>List[Any]](args)
              mstats.apply_operations += 1
              f(eval(x,tabs+1)).head
         case PairOpr(x,y)
