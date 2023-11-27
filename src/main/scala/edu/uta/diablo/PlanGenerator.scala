@@ -49,6 +49,7 @@ object PlanGenerator {
   @SerialVersionUID(123L)
   sealed abstract
   class Opr ( var node: WorkerID = -1,        // worker node
+              var coord: Any = (),            // block coordinates of the operator
               var size: Int = -1,             // num of blocks in output
               var static_blevel: Int = -1,    // static b-level (bottom level)
               var status: Status = notReady,  // the operation status
@@ -106,6 +107,7 @@ object PlanGenerator {
     for ( opr_id <- operations.indices) {
       val opr = operations(opr_id)
       info(""+opr_id+")  node="+opr.node+"  size="+opr.size
+           +"  cpu_cost="+opr.cpu_cost+"  coords="+opr.coord
            +"  blevel="+opr.static_blevel
            +"   consumers="+opr.consumers+"   "+opr)
     }
@@ -141,6 +143,7 @@ object PlanGenerator {
                           List(Var(tv),
                                function(if (args.isEmpty) f else Lambda(TuplePat(args),f)),
                                Tuple(args.map(toExpr)),
+                               key,
                                IntConst(cpu_cost(f))))
              Some(Seq(List(Tuple(List(key,if (idx.nonEmpty)
                                             Tuple(List(idx.head,t))
@@ -210,7 +213,8 @@ object PlanGenerator {
              val v = newvar
              Comprehension(Tuple(List(Var(i),
                                       Call("loadOpr",
-                                           List(Tuple(List(Var(i),Var(v))))))),
+                                           List(Tuple(List(Var(i),Var(v))),
+                                                Var(i))))),
                            List(Generator(TuplePat(List(VarPat(i),VarPat(v))),
                                           e)))
         case Nth(Var(v),3)
@@ -227,9 +231,10 @@ object PlanGenerator {
                                      TuplePat(List(VarPat(iy),VarPat(ty)))))
              val pair = Call("pairOpr",
                              if (inMemJoin == "join")
-                               List(Var(tx),Var(ty))
+                               List(Var(tx),Var(ty),Var(k))
                              else List(Call("seqOpr",List(Var(tx))),
-                                       Call("seqOpr",List(Var(ty)))))
+                                       Call("seqOpr",List(Var(ty))),
+                                       Var(k)))
              Comprehension(Tuple(List(Var(k),
                                       Tuple(List(Tuple(List(Var(ix),Var(iy))),
                                                  pair)))),
@@ -240,7 +245,8 @@ object PlanGenerator {
              val v = newvar
              MethodCall(Comprehension(Tuple(List(Var(k),
                                                  Call("loadOpr",
-                                                      List(Tuple(List(Var(k),Var(v))))))),
+                                                      List(Tuple(List(Var(k),Var(v))),
+                                                           Var(k))))),
                              List(Generator(p,x),
                                   Generator(TuplePat(List(VarPat(k),VarPat(v))),
                                             b))),
@@ -274,6 +280,7 @@ object PlanGenerator {
                                                      List(Var(gl),
                                                           function(f),
                                                           Tuple(Nil),
+                                                          Var(k),
                                                           IntConst(cpu_cost(f))))))))),
                      xp)
         case MethodCall(x,"reduceByKey",List(op,_))
@@ -283,7 +290,9 @@ object PlanGenerator {
              val rv = Call("reduceOpr",
                            List(flatMap(Lambda(VarPat("x"),Seq(List(Nth(Var("x"),2)))),
                                         Var(s)),
-                                BoolConst(false),function(op),
+                                BoolConst(false),
+                                function(op),
+                                Var(k),
                                 IntConst(cpu_cost(op))))
              flatMap(Lambda(TuplePat(List(VarPat(k),VarPat(s))),
                             Seq(List(Tuple(List(Var(k),rv))))),
@@ -307,6 +316,7 @@ object PlanGenerator {
                                                                makePlan(x,true)),
                                                        BoolConst(true),
                                                        function(op),
+                                                       Tuple(Nil),
                                                        IntConst(cpu_cost(op)))))),
                          elemType(typecheck(x)))
              case _ => apply(e,makePlanExpr)

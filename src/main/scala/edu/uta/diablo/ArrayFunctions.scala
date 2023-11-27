@@ -103,7 +103,9 @@ trait ArrayFunctions {
   val task_table = new mutable.HashMap[Int,OprID]()
 
   // store a new operation when is not duplicate 
-  private def store_opr ( opr: Opr, children: List[OprID], cost: Int ): OprID = {
+  private def store_opr ( opr: Opr, children: List[OprID], coord: Any, cost: Int ): OprID = {
+    opr.coord = coord
+    opr.cpu_cost = cost
     val key = Math.abs(opr.##)
     val entry = task_table.get(key)
     if (entry.nonEmpty && operations(entry.head) == opr)
@@ -122,27 +124,27 @@ trait ArrayFunctions {
     }
   }
 
-  def loadOpr ( block: Any ): OprID = {
-    val loc = store_opr(LoadOpr(loadBlocks.length),Nil,0)
+  def loadOpr ( block: Any, coord: Any ): OprID = {
+    val loc = store_opr(LoadOpr(loadBlocks.length),Nil,coord,0)
     loadBlocks += block
     loc
   }
 
-  def pairOpr ( x: OprID, y: OprID ): OprID
-    = store_opr(PairOpr(x,y),List(x,y),0)
+  def pairOpr ( x: OprID, y: OprID, coord: Any ): OprID
+    = store_opr(PairOpr(x,y),List(x,y),coord,0)
 
-  def applyOpr ( x: OprID, fnc: FunctionID, args: Any, cost: Int ): OprID
-    = store_opr(ApplyOpr(x,fnc,args),List(x),cost)
+  def applyOpr ( x: OprID, fnc: FunctionID, args: Any, coord: Any, cost: Int ): OprID
+    = store_opr(ApplyOpr(x,fnc,args),List(x),coord,cost)
 
-  def reduceOpr ( s: List[OprID], valuep: Boolean, op: FunctionID, cost: Int ): OprID
+  def reduceOpr ( s: List[OprID], valuep: Boolean, op: FunctionID, coord: Any, cost: Int ): OprID
     = s match {
         case List(x) => x
         case _
-          => store_opr(ReduceOpr(s,valuep,op),s,cost)
+          => store_opr(ReduceOpr(s,valuep,op),s,coord,cost)
       }
 
-  def seqOpr ( s: List[OprID] ): OprID
-    = store_opr(SeqOpr(s),s,0)
+  def seqOpr ( s: List[OprID], coord: Any ): OprID
+    = store_opr(SeqOpr(s),s,coord,0)
 
   def textFile ( filename: String ): List[(Int,String)] = {
     import scala.io.Source.fromFile
