@@ -56,6 +56,7 @@ object PlanGenerator {
               var visited: Boolean = false,   // used in BFS traversal
               @transient
               var cached: Any = null,         // cached result blocks
+              var destructor: Int = 0,        // deletes the cached block (C++ only)
               var consumers: List[OprID] = Nil,
               var count: Int = 0,             // = number of local consumers
               var reduced_count: Int = 0,     // # of reduced inputs so far
@@ -66,18 +67,45 @@ object PlanGenerator {
 
   case class LoadOpr ( block: BlockID ) extends Opr {
     override def hashCode (): Int = (1,block).##
+    override def equals ( that: Any ): Boolean
+      = that match {
+          case that: LoadOpr => that.block == block
+          case _ => false
+        }
   }
   case class PairOpr ( x: OprID, y: OprID ) extends Opr {
     override def hashCode (): Int = (2,x,y).##
+    override def equals ( that: Any ): Boolean
+      = that match {
+          case that: PairOpr => that.x == x && that.y == y
+          case _ => false
+        }
   }
   case class ApplyOpr ( x: OprID, fnc: FunctionID, extra_args: Any ) extends Opr {
     override def hashCode (): Int = (3,x,fnc,extra_args).##
+    override def equals ( that: Any ): Boolean
+      = that match {
+          case that: ApplyOpr => that.x == x && that.fnc == fnc
+          case _ => false
+        }
   }
   case class ReduceOpr ( s: List[OprID], valuep: Boolean, op: FunctionID ) extends Opr {
     override def hashCode (): Int = (4,s,valuep,op).##
+    override def equals ( that: Any ): Boolean
+      = that match {
+          case that: ReduceOpr
+            => (that.valuep == valuep && that.op == op
+                && that.s.length == s.length && that.s.toSet == s.toSet)
+          case _ => false
+        }
   }
   case class SeqOpr ( s: List[OprID] ) extends Opr {
     override def hashCode (): Int = (5,s).##
+    override def equals ( that: Any ): Boolean
+      = that match {
+          case that: SeqOpr => that.s == s
+          case _ => false
+        }
   }
 
   // Opr uses OprID for Opr references
@@ -136,15 +164,51 @@ object PlanGenerator {
     }
   }
 
+  def function ( e: Expr ): Expr = {
+    val i = functions.indexOf(e)
+    IntConst(if (i >= 0)
+               i
+             else { functions += e; functions.length-1 })
+  }
+
+  // generate a destructor that removes a block of type tp (used in C++ only)
+  def destructor ( tp: Type, f: Expr ): Expr = {
+    def destr ( e: Expr, tp: Type ): List[Expr]
+      = tp match {
+          case TupleType(ts)
+            => ts.zipWithIndex.flatMap{
+                  case (t,i) => destr(Nth(e,i+1),t)
+               }
+          case ArrayType(_,_)
+            => List(Call("delete_block",List(e)))
+          case SeqType(et)
+            => val v = newvar
+               List(flatMap(Lambda(VarPat(v),Block(destr(Var(v),et))),e))
+          case _ => Nil
+        }
+    def pass_through (): Boolean = cpu_cost(f) == 0
+    if (!cxx_generation || pass_through())
+      return IntConst(-1)
+    val v = newvar
+    val fnc = Lambda(VarPat(v),Block(destr(Var(v),tp):+IntConst(0)))
+    val cfnc = function(fnc)
+    fnc.tpe = FunctionType(tp,intType)
+    cfnc
+  }
+
   def embedApplyOpr ( e: Expr, f: Lambda, tv: String, args: List[Pattern], idx: Option[Expr] ): Option[Expr]
     = e match {
-        case Seq(List(Tuple(List(key,ta))))
-          => val t = Call("applyOpr",
+        case Seq(List(el@Tuple(List(key,ta))))
+          => val tp = typecheck(el)
+             val t = Call("applyOpr",
                           List(Var(tv),
-                               function(if (args.isEmpty) f else Lambda(TuplePat(args),f)),
+                               function(if (args.isEmpty)
+                                          f
+                                        else Lambda(TuplePat(args),f)),
                                Tuple(args.map(toExpr)),
                                key,
-                               IntConst(cpu_cost(f))))
+                               IntConst(cpu_cost(f)),
+                               destructor(tp,f)))
              Some(Seq(List(Tuple(List(key,if (idx.nonEmpty)
                                             Tuple(List(idx.head,t))
                                           else t)))))
@@ -161,20 +225,13 @@ object PlanGenerator {
         case _ => None
       }
 
-  def function ( e: Expr ): Expr = {
-    val i = functions.indexOf(e)
-    IntConst(if (i >= 0)
-               i
-             else { functions += e; functions.length-1 })
-  }
-
   def cpu_cost ( e: Expr ): Int
     = e match {
         case Call("merge_tensors",_)
           => 1
         case flatMap(x,_)
           => 1+cpu_cost(x)
-        case _ => AST.accumulate[Int](e,cpu_cost _,Math.max(_,_),0)
+        case _ => AST.accumulate[Int](e,cpu_cost,Math.max(_,_),0)
       }
 
   def getIndices ( p: Pattern ): Pattern
@@ -229,12 +286,13 @@ object PlanGenerator {
              val iy = newvar; val ty = newvar
              val itp = TuplePat(List(TuplePat(List(VarPat(ix),VarPat(tx))),
                                      TuplePat(List(VarPat(iy),VarPat(ty)))))
+             val tp = elemType(typecheck(e))
              val pair = Call("pairOpr",
                              if (inMemJoin == "join")
-                               List(Var(tx),Var(ty),Var(k))
+                               List(Var(tx),Var(ty),Var(k),IntConst(-1))
                              else List(Call("seqOpr",List(Var(tx))),
                                        Call("seqOpr",List(Var(ty))),
-                                       Var(k)))
+                                       Var(k),IntConst(-1)))
              Comprehension(Tuple(List(Var(k),
                                       Tuple(List(Tuple(List(Var(ix),Var(iy))),
                                                  pair)))),
@@ -274,6 +332,7 @@ object PlanGenerator {
           => val k = newvar
              val gl = newvar
              val xp = makePlan(x,top)
+             val tp = elemType(typecheck(e))
              flatMap(Lambda(TuplePat(List(VarPat(k),VarPat(gl))),
                             Seq(List(Tuple(List(Var(k),
                                                 Call("applyOpr",
@@ -281,19 +340,22 @@ object PlanGenerator {
                                                           function(f),
                                                           Tuple(Nil),
                                                           Var(k),
-                                                          IntConst(cpu_cost(f))))))))),
+                                                          IntConst(cpu_cost(f)),
+                                                          destructor(tp,f)))))))),
                      xp)
         case MethodCall(x,"reduceByKey",List(op,_))
           => val k = newvar
              val s = newvar
              val xp = makePlan(x,false)
+             val tp = elemType(typecheck(e))
              val rv = Call("reduceOpr",
                            List(flatMap(Lambda(VarPat("x"),Seq(List(Nth(Var("x"),2)))),
                                         Var(s)),
                                 BoolConst(false),
                                 function(op),
                                 Var(k),
-                                IntConst(cpu_cost(op))))
+                                IntConst(cpu_cost(op)),
+                                destructor(tp,op)))
              flatMap(Lambda(TuplePat(List(VarPat(k),VarPat(s))),
                             Seq(List(Tuple(List(Var(k),rv))))),
                      Call("groupByKey",List(xp)))

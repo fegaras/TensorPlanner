@@ -52,7 +52,7 @@ package object diablo extends diablo.ArrayFunctions {
 
   private var typeMapsLib = false
 
-  var writer_count = 1
+  var writer: PrintWriter = _
 
   var id_count: Int = 0
 
@@ -139,14 +139,27 @@ package object diablo extends diablo.ArrayFunctions {
     Typechecker.typecheck(ce)
     val to = opt(ComprehensionTranslator.translate(ce,Nil))
     if (trace) println("Compiled comprehension:\n"+Pretty.print(to))
-    if (cxx_generation) {
-      Typechecker.clean(to)
-      Typechecker.typecheck(to)
-      val writer = new PrintWriter(new File("cxxgen_"+writer_count+".cpp"))
-      writer_count += 1
-      writer.println("#include \"tensor.h\"\n")
-      CXXCodeGenerator.makeSparkCode(to,writer)
-      writer.println("\nint main () { return 0; }")
+    if (cxx_generation && asynchronous) {
+      val pc = if (parallel) ComprehensionTranslator.parallelize(to) else to
+      Typechecker.clean(pc)
+      Typechecker.typecheck(pc)
+      val writer = new PrintWriter(new File("cxxgen.cpp"))
+      val pp = PlanGenerator.makePlanExpr(pc)
+      if (trace) println("Pilot plan:\n"+Pretty.print(pp))
+      val ppp = opt(ComprehensionTranslator.translate(pp,Nil))
+      if (trace) println("Optimized pilot plan:\n"+Pretty.print(ppp))
+      PlanGenerator.functions.foreach(x => Typechecker.typecheck(x))
+      Typechecker.clean(ppp)
+      Typechecker.typecheck(ppp)
+      val s = CXXCodeGenerator.genCxxCode(ppp,PlanGenerator.functions.toList,writer)
+      writer.close()
+      context.Expr[Any](q"()")
+    } else if (cxx_generation) {
+      val pc = if (parallel) ComprehensionTranslator.parallelize(to) else to
+      Typechecker.clean(pc)
+      Typechecker.typecheck(pc)
+      val writer = new PrintWriter(new File("cxxgen.cpp"))
+      val s = CXXCodeGenerator.genCxxCode(pc,Nil,writer)
       writer.close()
       context.Expr[Any](q"()")
     } else if (asynchronous) {

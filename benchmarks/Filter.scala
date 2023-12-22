@@ -3,8 +3,8 @@ import scala.util.Random
 
 object Filter {
   def main ( args: Array[String] ) {
-    parami(block_dim_size,1000)
-    val N = 1000
+    parami(block_dim_size,10)
+    val N = 10
     param(asynchronous,true)
     PlanGenerator.trace = false
 
@@ -49,7 +49,7 @@ object Filter {
       }
       if (i > 0) s = s/(i-1)
       if (isCoordinator()) {
-        print("*** %s n=%d m=%d N=%d ".format(name,n,m,N))
+        print("*** %s n=%d m=%d N=%d ".format(name,n,n,N))
         println("tries=%d %.3f secs".format(i,s))
       }
     }

@@ -103,9 +103,10 @@ trait ArrayFunctions {
   val task_table = new mutable.HashMap[Int,OprID]()
 
   // store a new operation when is not duplicate 
-  private def store_opr ( opr: Opr, children: List[OprID], coord: Any, cost: Int ): OprID = {
+  private def store_opr ( opr: Opr, children: List[OprID], coord: Any, cost: Int, destr: Int ): Int = {
     opr.coord = coord
     opr.cpu_cost = cost
+    opr.destructor = destr
     val key = Math.abs(opr.##)
     val entry = task_table.get(key)
     if (entry.nonEmpty && operations(entry.head) == opr)
@@ -124,27 +125,27 @@ trait ArrayFunctions {
     }
   }
 
-  def loadOpr ( block: Any, coord: Any ): OprID = {
-    val loc = store_opr(LoadOpr(loadBlocks.length),Nil,coord,0)
+  def loadOpr ( block: Any, coord: Any ): Int = {
+    val loc = store_opr(LoadOpr(loadBlocks.length),Nil,coord,0,0)
     loadBlocks += block
     loc
   }
 
-  def pairOpr ( x: OprID, y: OprID, coord: Any ): OprID
-    = store_opr(PairOpr(x,y),List(x,y),coord,0)
+  def pairOpr ( x: OprID, y: OprID, coord: Any, destr: Int ): Int
+    = store_opr(PairOpr(x,y),List(x,y),coord,0,destr)
 
-  def applyOpr ( x: OprID, fnc: FunctionID, args: Any, coord: Any, cost: Int ): OprID
-    = store_opr(ApplyOpr(x,fnc,args),List(x),coord,cost)
+  def applyOpr ( x: OprID, fnc: FunctionID, args: Any, coord: Any, cost: Int, destr: Int ): Int
+    = store_opr(ApplyOpr(x,fnc,args),List(x),coord,cost,destr)
 
-  def reduceOpr ( s: List[OprID], valuep: Boolean, op: FunctionID, coord: Any, cost: Int ): OprID
+  def reduceOpr ( s: List[OprID], valuep: Boolean, op: FunctionID, coord: Any, cost: Int, destr: Int ): Int
     = s match {
         case List(x) => x
         case _
-          => store_opr(ReduceOpr(s,valuep,op),s,coord,cost)
+          => store_opr(ReduceOpr(s,valuep,op),s,coord,cost,destr)
       }
 
-  def seqOpr ( s: List[OprID], coord: Any ): OprID
-    = store_opr(SeqOpr(s),s,coord,0)
+  def seqOpr ( s: List[OprID], coord: Any, destr: Int ): Int
+    = store_opr(SeqOpr(s),s,coord,0,destr)
 
   def textFile ( filename: String ): List[(Int,String)] = {
     import scala.io.Source.fromFile
@@ -156,6 +157,9 @@ trait ArrayFunctions {
     }
     b.zipWithIndex.map{ case (s,i) => (i,s) }.toList
   }
+
+  // used in C++ code only (deletes x)
+  def delete_block ( x: Any ): Int = 0
 
   def slice[T] ( array: T, ranges: List[Any] ): T = array
 

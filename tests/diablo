@@ -1,0 +1,38 @@
+#/bin/bash
+
+DIABLO_HOME="$(cd `dirname $0`/..; pwd -P)"
+MPI_HOME=$HOME/openmpi
+
+if [ -z ${SPARK_HOME} ]; then
+   SPARK_HOME=~/spark-3.2.1-bin-hadoop3.2
+fi
+
+JARS=.:${DIABLO_HOME}/lib/diablo.jar:${DIABLO_HOME}/lib/mpi.jar
+for I in ${SPARK_HOME}/jars/*.jar; do
+    JARS=${JARS}:$I
+done
+for I in ${SPARK_HOME}/lib/*.jar; do
+    JARS=${JARS}:$I
+done
+
+
+block_size=1000
+
+echo "import edu.uta.diablo._
+object Test {
+  def main ( args: Array[String] ) {
+    parami(block_dim_size,$block_size)
+    param(asynchronous,true)
+    //param(trace,false)
+    param(cxx_generation,true)
+    q(\"\"\"" >cxxgen.sc
+
+cat $1  >>cxxgen.sc
+
+echo "\"\"\")
+  }
+}" >>cxxgen.sc
+
+scalac -d classes -cp ${JARS} cxxgen.sc >cxxgen.log
+
+g++ -O3 -DNDEBUG cxxgen.cpp -fopenmp -I${DIABLO_HOME}/include -L${DIABLO_HOME}/lib -ldiablo

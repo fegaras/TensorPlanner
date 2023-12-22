@@ -37,7 +37,7 @@ object Typechecker {
     var typecheck_method: ( Type, String, List[Type] ) => Option[Type] = _
     var typecheck_var: String => Option[Type] = _
 
-    val collection_names = List("array","map","List","Iterable",rddClass,datasetClass)
+    val collection_names = List("array","map","List","Iterable","Seq","ParSeq")
 
     val system_functions = List("binarySearch","zero","array2tensor","array2tensor_bool")
 
@@ -56,7 +56,7 @@ object Typechecker {
       = s match { case List(x) => x; case _ => TuplePat(s) }
 
     def isCollection ( f: String ): Boolean
-      = collection_names.contains(f)
+      = f == rddClass || f == datasetClass || collection_names.contains(f.split('.').last)
 
   type Env = Option[Environment]
 
@@ -252,7 +252,7 @@ object Typechecker {
     def is_reduction ( op: String, tp: Type ): Boolean = {
       tp match {
         case SeqType(etp)
-          => typecheck_call(op,List(etp,etp)) == Some(etp)
+          => typecheck_call(op, List(etp, etp)).contains(etp)
         case _ => false
       }
     }
@@ -288,7 +288,7 @@ object Typechecker {
         case MethodCall(x,"t",null)
           => typecheck(x,env) match {
                 case tx   // matrix transpose
-                  if dims(tx) == Some(2)
+                  if dims(tx).contains(2)
                   => val vxs = new_names(dims(tx).get)
                      val xv = newvar
                      modify(Comprehension(Tuple(List(Tuple(vxs.map(Var).reverse),Var(xv))),
@@ -298,7 +298,7 @@ object Typechecker {
         case MethodCall(x,m,List(y))
           => (typecheck(x,env),typecheck(y,env)) match {
                 case (tx,ty)   // matrix-matrix multiplication
-                  if m == "@" && dims(tx) == Some(2) && dims(ty) == Some(2)
+                  if m == "@" && dims(tx).contains(2) && dims(ty).contains(2)
                   => val List(i,k,a,kk,j,b,w) = new_names(7)
                      modify(Comprehension(Tuple(List(Tuple(List(Var(i),Var(j))),reduce("+",Var(w)))),
                                  List(Generator(tuple(List(tuple(List(VarPat(i),VarPat(k))),VarPat(a))),x),
@@ -308,7 +308,7 @@ object Typechecker {
                                       GroupByQual(tuple(List(VarPat(i),VarPat(j))),
                                                   Tuple(List(Var(i),Var(j)))))))
                 case (tx,ty)   // matrix-vector multiplication
-                  if m == "@" && dims(tx) == Some(2) && dims(ty) == Some(1)
+                  if m == "@" && dims(tx).contains(2) && dims(ty).contains(1)
                   => val List(i,k,a,kk,b,w) = new_names(6)
                      modify(Comprehension(Tuple(List(Var(i),reduce("+",Var(w)))),
                                  List(Generator(tuple(List(tuple(List(VarPat(i),VarPat(k))),VarPat(a))),x),
@@ -452,6 +452,8 @@ object Typechecker {
                       => typecheck(d,r)
                          typecheck(u,r)
                          (r,s)
+                    case ((r,s),VarDef(n,at,null))
+                      => ( bindPattern(VarPat(n),at,r), n::s )
                     case ((r,s),VarDef(n,at,u))
                       => val tp = typecheck(u,r)
                          if (!typeMatch(tp,at))
@@ -579,6 +581,8 @@ object Typechecker {
                etp
           case MethodCall(u,"_@",null)
             => typecheck(u,env)
+          case MethodCall(u,"par",null)
+            => typecheck(u,env)
           case MethodCall(u,m,null)
             => // call the Scala typechecker to find method m
                val tu = typecheck(u,env)
@@ -626,7 +630,7 @@ object Typechecker {
                   case _ => throw new Error("Expected a function "+f)
                }
           case Coerce(x,tp)
-            => typecheck(x,env)
+            => //typecheck(x,env)
                tp
           case Lambda(p,b)   // fix: needs type inference
             => def ptype ( p: Pattern ): Type
@@ -706,6 +710,9 @@ object Typechecker {
                  }
           case Block(es)
             => es.foldLeft((AnyType():Type,env)) {
+                  case ((_,r),x@VarDecl(v,at,null))
+                    => global_env = global_env+(v->at)
+                       (at,r + (v->at))
                   case ((_,r),x@VarDecl(v,at,u))
                     => val tp = elemType(typecheck(u,r))  // type of u is concrete
                        if (!typeMatch(tp,at))

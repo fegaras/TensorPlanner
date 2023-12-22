@@ -884,6 +884,14 @@ abstract class CodeGeneration {
         => val bc = codeGen(b,env)
            q"() => $bc"
       case Lambda(p,b)
+        if e.tpe != null
+        => val tq"$tpc => $tpo" = Type2Tree(e.tpe)
+           val nv = newvar
+           val nvc = TermName(nv)
+           val pc = code(p)
+           val bc = codeGen(b,add(p,tpc,env))
+           q"($nvc:$tpc) => $nvc match { case $pc => $bc }"
+      case Lambda(p,b)
         => val tpt = tq""  // empty type
            def patf ( p: Pattern ): c.Tree
              = p match {

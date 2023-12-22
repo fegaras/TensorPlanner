@@ -317,6 +317,9 @@ object ComprehensionTranslator {
           => true
         case Assign(Var(_),_)
           => true
+        case VarDecl(_,ArrayType(_,_),_)
+          if cxx_generation
+          => true
         case _ => accumulate[Boolean](e,has_side_effects,_||_,false)
       }
 
@@ -327,7 +330,10 @@ object ComprehensionTranslator {
             if !has_side_effects(b)
             // parRange doesn't work
             // => MethodCall(flatMap(f,Call("parRange",List(n,m,s))),"toList",null)
-            => MethodCall(flatMap(f,MethodCall(u,"par",null)),"toList",null)
-          case _ => apply(e,parallelize)
+            => if (cxx_generation)
+                 flatMap(f,MethodCall(u,"par",null))
+               else MethodCall(flatMap(f,MethodCall(u,"par",null)),"toList",null)
+          case _
+            => apply(e,(x:Expr) => parallelize(x))
       }
 }

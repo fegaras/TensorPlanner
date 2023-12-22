@@ -105,7 +105,7 @@ object inMem {
     exit_points = s.map(_._2)
     info("Exit points: "+exit_points)
     operations = PlanGenerator.operations.toArray
-    operations.foreach{ x => x.node = 0 }
+    //operations.foreach{ x => x.node = 0 }
     Runtime.operations = operations
     Runtime.loadBlocks = PlanGenerator.loadBlocks.toArray
     for ( x <- operations ) {
