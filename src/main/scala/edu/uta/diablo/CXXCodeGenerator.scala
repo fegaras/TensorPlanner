@@ -365,7 +365,7 @@ object CXXCodeGenerator {
         case Seq(List(x))
           => "elem("+makeC(x,tabs,stmt)+")"
         case Seq(s)
-          => "{ "+s.map(makeC(_,tabs,false)).mkString(", ")+" }"
+          => "new vector({ "+s.map(makeC(_,tabs,false)).mkString(", ")+" })"
         case IfE(p,x,Seq(Nil))
           if stmt
           => "{ assert("+makeC(p,tabs,false)+");\n"+tab(tabs)+makeC(x,tabs+1,stmt)+"; }"

@@ -45,13 +45,21 @@ public:
     copy(other.data,other.data+length,data);
   }
 
-  size_t size () const { return length; }
+  Vec ( vector<T>* x ): length(x->size()), data(new T[length]) {
+    for (int i = 0; i < length; i++ )
+      data[i] = (*x)[i];
+    delete x;
+  }
 
-  T& operator[] ( unsigned int n ) {
+  inline size_t size () const { return length; }
+
+  inline const T* buffer () const { return data; }
+
+  inline T& operator[] ( unsigned int n ) {
     return data[n];
   }
 
-  const T& operator[] ( unsigned int n ) const {
+  inline const T& operator[] ( unsigned int n ) const {
     return data[n];
   }
 
@@ -314,4 +322,130 @@ vector<tuple<int,tuple<T,S>*>*>* join ( vector<tuple<int,T>*>* x,
         a->push_back(new tuple(get<0>(*ey),new tuple(ex,get<1>(*ey))));
   }
   return a;
+}
+
+template< typename T >
+Vec<T>* array_buffer ( int dsize, int ssize, T zero,
+                       tuple<Vec<int>*,Vec<int>*,Vec<T>*>* init = NULL ) {
+  Vec<T>* buffer = new Vec<T>(dsize*ssize);
+  for (int i = 0; i < buffer->size(); i++ )
+    (*buffer)[i] = zero;
+  if (init != NULL) {
+    #pragma omp parallel for
+    for ( int i = 0; i < get<0>(*init)->size()-1; i++ ) {
+      int j = (*get<0>(*init))[i];
+      while (j < (*get<0>(*init))[i+1]) {
+        (*buffer)[i*ssize+(*get<1>(*init))[j]] = (*get<2>(*init))[j];
+        j++;
+      }
+    }
+  }
+  return buffer;
+}
+
+// convert a dense array to a tensor (dense dimensions dn>0 & sparse dimensions sn>0)
+template< typename T >
+tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
+     array2tensor ( int dn, int sn, T zero, Vec<T>* buffer ) {
+  auto dense = new Vec<int>(dn+1);
+  auto sparse = new vector<int>();
+  auto values = new vector<T>();
+  (*dense)[0] = 0;
+  for ( int i = 0; i < dn; i++ ) {
+    for ( int j = 0; j < sn; j++ ) {
+      T v = (*buffer)[i*sn+j];
+      if (v != zero) {
+        sparse->push_back(j);
+        values->push_back(v);
+      }
+    }
+    (*dense)[i+1] = sparse->size();
+  }
+  return new tuple(dense,new Vec<int>(sparse),new Vec<T>(values));
+}
+
+template< typename T >
+tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
+     merge_tensors ( tuple<Vec<int>*,Vec<int>*,Vec<T>*>* x,
+                     tuple<Vec<int>*,Vec<int>*,Vec<T>*>* y,
+                     T(*op)(tuple<T,T>*), T zero ) {
+  int i = 0;
+  int len = min(get<0>(*x)->size(),get<0>(*y)->size())-1;
+  auto dense = new Vec<int>(len+1);
+  auto sparse = new vector<int>();
+  auto values = new vector<T>();
+  (*dense)[0] = 0;
+  while (i < len) {
+    int xn = (*get<0>(*x))[i];
+    int yn = (*get<0>(*y))[i];
+    while (xn < (*get<0>(*x))[i+1] && yn < (*get<0>(*y))[i+1]) {
+      if ((*get<1>(*x))[xn] == (*get<1>(*y))[yn]) {
+        T v = op(new tuple((*get<2>(*x))[xn],(*get<2>(*y))[yn]));
+        if (v != zero) {
+          sparse->push_back((*get<1>(*x))[xn]);
+          values->push_back(v);
+        }
+        xn++; yn++;
+      } else if ((*get<1>(*x))[xn] < (*get<1>(*y))[yn]) {
+        T v = op(new tuple((*get<2>(*x))[xn],zero));
+        if (v != zero) {
+          sparse->push_back((*get<1>(*x))[xn]);
+          values->push_back(v);
+        }
+        xn++;
+      } else {
+        T v = op(new tuple(zero,(*get<2>(*y))[yn]));
+        if (v != zero) {
+          sparse->push_back((*get<1>(*y))[yn]);
+          values->push_back(v);
+        }
+        yn++;
+      }
+    }
+    while (xn < (*get<0>(*x))[i+1]) {
+      T v = op(new tuple((*get<2>(*x))[xn],zero));
+      if (v != zero) {
+        sparse->push_back((*get<1>(*x))[xn]);
+        values->push_back(v);
+      }
+      xn++;
+    }
+    while (yn < (*get<0>(*y))[i+1]) {
+      T v = op(new tuple(zero,(*get<2>(*y))[yn]));
+      if (v != zero) {
+        sparse->push_back((*get<1>(*y))[yn]);
+        values->push_back(v);
+      }
+      yn++;
+    }
+    i++;
+    (*dense)[i] = sparse->size();
+  }
+  return new tuple(dense,new Vec<int>(sparse),new Vec<T>(values));
+}
+
+template< typename T >
+T binarySearch ( int key, int from, int to, Vec<int>* rows, Vec<T>* values, T zero ) {
+  while (from <= to) {
+    int middle = (from+to)/2;
+    if ((*rows)[middle] == key)
+      return (*values)[middle];
+    else if ((*rows)[middle] > key)
+      to = middle-1;
+    else from = middle+1;
+  }
+  return zero;
+}
+
+template< typename T >
+bool binarySearch ( int key, int from, int to, Vec<int>* rows, Vec<T>* values ) {
+  while (from <= to) {
+    int middle = (from+to)/2;
+    if ((*rows)[middle] == key)
+      return true;
+    else if ((*rows)[middle] > key)
+      to = middle-1;
+    else from = middle+1;
+  }
+  return false;
 }

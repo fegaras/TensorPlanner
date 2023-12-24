@@ -39,9 +39,9 @@ static int block_created = 0;
 
 enum Status {notReady,scheduled,ready,computed,completed,removed,locked,zombie};
 
-enum OprType { loadOPR=2, pairOPR=1, applyOPR=0, reduceOPR=3 };
+enum OprType { applyOPR=0, pairOPR=1, loadOPR=2, reduceOPR=3 };
 
-const char* oprNames[] = { "load", "pair", "apply", "reduce" };
+const char* oprNames[] = { "apply", "pair", "load", "reduce" };
 
 static const vector<int>* empty_vector = new vector<int>();
 
@@ -149,7 +149,7 @@ public:
   enum Status status = notReady;
   bool visited = false;
   void* cached = NULL;
-  int destructor = 0;
+  vector<int>* encoded_type = NULL;
   vector<int>* children;
   vector<int>* consumers;
   int count;
@@ -192,11 +192,11 @@ bool compare_opr ( int x, int y ) {
 };
 
 int store_opr ( Opr* opr, const vector<int>* children,
-                void* coord, int cost, int destr ) {
+                void* coord, int cost, vector<int>* encoded_type ) {
   opr->consumers = new vector<int>();
   opr->coord = coord;
   opr->cpu_cost = cost;
-  opr->destructor = destr;
+  opr->encoded_type = encoded_type;
   size_t key = opr->hash();
   auto p = task_table.find(key);
   if (p != task_table.end())
@@ -215,64 +215,64 @@ int store_opr ( Opr* opr, const vector<int>* children,
   return loc;
 }
 
-int loadOpr ( void* block, void* coord ) {
+int loadOpr ( void* block, void* coord, vector<int>* encoded_type ) {
   Opr* o = new Opr();
   o->type = loadOPR;
   o->opr.load_opr = new LoadOpr(loadBlocks.size());
-  int loc = store_opr(o,empty_vector,coord,0,-1);
+  int loc = store_opr(o,empty_vector,coord,0,encoded_type);
   loadBlocks.push_back(block);
   return loc;
 }
 
-int loadOpr ( void* block, int coord ) {
+int loadOpr ( void* block, int coord, vector<int>* encoded_type ) {
   int* cp = new int(coord);
-  int loc = loadOpr(block,cp);
+  int loc = loadOpr(block,cp,encoded_type);
   operations[loc]->int_index = true;
   return loc;
 };
 
-int pairOpr ( int x, int y, void* coord, int destr ) {
+int pairOpr ( int x, int y, void* coord, vector<int>* encoded_type ) {
   Opr* o = new Opr();
   o->type = pairOPR;
   o->opr.pair_opr = new PairOpr(x,y);
-  return store_opr(o,new vector<int>({ x, y }),coord,0,destr);
+  return store_opr(o,new vector<int>({ x, y }),coord,0,encoded_type);
 }
 
-int pairOpr ( int x, int y, int coord, int destr ) {
+int pairOpr ( int x, int y, int coord, vector<int>* encoded_type ) {
   int* cp = new int(coord);
-  int loc = pairOpr(x,y,cp,destr);
+  int loc = pairOpr(x,y,cp,encoded_type);
   operations[loc]->int_index = true;
   return loc;
 };
 
-int applyOpr ( int x, int fnc, void* args, void* coord, int cost, int destr ) {
+int applyOpr ( int x, int fnc, void* args, void* coord, int cost, vector<int>* encoded_type ) {
   Opr* o = new Opr();
   o->type = applyOPR;
   o->opr.apply_opr = new ApplyOpr(x,fnc,args);
-  return store_opr(o,new vector<int>({ x }),coord,cost,destr);
+  return store_opr(o,new vector<int>({ x }),coord,cost,encoded_type);
 }
 
-int applyOpr ( int x, int fnc, void* args, int coord, int cost, int destr ) {
+int applyOpr ( int x, int fnc, void* args, int coord, int cost, vector<int>* encoded_type ) {
   int* cp = new int(coord);
-  int loc = applyOpr(x,fnc,args,cp,cost,destr);
+  int loc = applyOpr(x,fnc,args,cp,cost,encoded_type);
   operations[loc]->int_index = true;
   return loc;
 };
 
 int reduceOpr ( const vector<int>* s, bool valuep, int op,
-                void* coord, int cost, int destr ) {
+                void* coord, int cost, vector<int>* encoded_type ) {
   if (s->size() == 1)
     return (*s)[0];
   Opr* o = new Opr();
   o->type = reduceOPR;
   o->opr.reduce_opr = new ReduceOpr(s,valuep,op);
-  return store_opr(o,s,coord,cost,destr);
+  return store_opr(o,s,coord,cost,encoded_type);
 }
 
 int reduceOpr ( const vector<int>* s, bool valuep, int op,
-                int coord, int cost, int destr ) {
+                int coord, int cost, vector<int>* encoded_type ) {
   int* cp = new int(coord);
-  int loc = reduceOpr(s,valuep,op,cp,cost,destr);
+  int loc = reduceOpr(s,valuep,op,cp,cost,encoded_type);
   operations[loc]->int_index = true;
   return loc;
 };
@@ -316,13 +316,59 @@ void cache_data ( Opr* opr, const void* data ) {
   opr->cached = data;
 }
 
+int delete_array ( void* data, vector<int>* encoded_type, int loc ) {
+  switch ((*encoded_type)[loc]) {
+  case 10: { // tuple
+    if ((*encoded_type)[loc+2] == 0)
+      return loc+(*encoded_type)[loc+1]+2;
+    else {
+      switch ((*encoded_type)[loc+1]) {
+      case 0:
+        return loc+2;
+      case 2: {
+        tuple<void*,void*>* x = data;
+        int l2 = delete_array(get<0>(*x),encoded_type,loc+2);
+        return delete_array(get<1>(*x),encoded_type,l2);
+      }
+      case 3: {
+        tuple<void*,void*,void*>* x = data;
+        int l2 = delete_array(get<0>(*x),encoded_type,loc+2);
+        int l3 = delete_array(get<1>(*x),encoded_type,l2);
+        return delete_array(get<2>(*x),encoded_type,l3);
+      }
+      }
+    }
+  }
+  case 11:  // Vec
+    switch ((*encoded_type)[loc+1]) {
+    case 0: {
+      Vec<int>* x = data;
+      delete x;
+      return loc+2;
+    }
+    case 1: {
+      Vec<long>* x = data;
+      delete x;
+      return loc+2;
+    }
+    case 3: {
+      Vec<double>* x = data;
+      delete x;
+      return loc+2;
+    }
+    }
+  default:
+    return loc+1;
+  }
+}
+
 void delete_array ( int opr_id ) {
   Opr* opr = operations[opr_id];
   if (opr->cached != NULL
       && (opr->type == applyOPR || opr->type == reduceOPR)
-      && opr->destructor >= 0) {
-    functions[opr->destructor](opr->cached);
+      && opr->encoded_type->size() > 0 ) {
     info(0,"    delete block %d (%d/%d)",opr_id,block_count,block_created);
+    delete_array(opr->cached,opr->encoded_type,0);
     opr->status = removed;
   }
 }
@@ -334,14 +380,14 @@ void delete_if_ready ( int opr_id ) {
      if (opr->type == pairOPR) {
        delete_if_ready(opr->opr.pair_opr->x);
        delete_if_ready(opr->opr.pair_opr->y);
-     } else if (opr->type == applyOPR && opr->destructor < 0)
+     } else if (opr->type == applyOPR && opr->encoded_type->size() == 0)
               delete_if_ready(opr->opr.apply_opr->x);
             else delete_array(opr_id);
    }
 }
 
 void check_caches ( int opr_id ) {
-  if (operations[opr_id]->destructor >= 0)
+  if (operations[opr_id]->encoded_type->size() > 0)
     for ( int c: *operations[opr_id]->children )
       delete_if_ready(c);
 }

@@ -56,7 +56,7 @@ object PlanGenerator {
               var visited: Boolean = false,   // used in BFS traversal
               @transient
               var cached: Any = null,         // cached result blocks
-              var destructor: Int = 0,        // deletes the cached block (C++ only)
+              var encoded_type: List[Int] = Nil, // type encoding of the cached block (for C++)
               var consumers: List[OprID] = Nil,
               var count: Int = 0,             // = number of local consumers
               var reduced_count: Int = 0,     // # of reduced inputs so far
@@ -164,36 +164,44 @@ object PlanGenerator {
     }
   }
 
+  // encode the type to a list of Int (used in C++ run-time)
+  def encodeType ( tp: Type ): Expr = {
+    var v = ArrayBuffer[Int]()
+    def et ( tp: Type ) {
+      tp match {
+        case TupleType(ts)
+          => v += 10
+             v += ts.length
+             ts.foreach(et)
+        case ArrayType(_,t)
+          => v += 11
+             et(t)
+        case SeqType(t)
+          => v += 12
+             et(t)
+        case BasicType(_)
+          => if (tp == intType)
+               v += 0
+             else if (tp == longType)
+                    v += 1
+             else if (tp == boolType)
+                    v += 2
+             else if (tp == doubleType)
+                    v += 3
+             else if (tp == stringType)
+                    v += 4
+        case _ => ;
+      }
+    }
+    et(tp)
+    Seq(v.map(IntConst(_)).toList)
+  }
+
   def function ( e: Expr ): Expr = {
     val i = functions.indexOf(e)
     IntConst(if (i >= 0)
                i
              else { functions += e; functions.length-1 })
-  }
-
-  // generate a destructor that removes a block of type tp (used in C++ only)
-  def destructor ( tp: Type, f: Expr ): Expr = {
-    def destr ( e: Expr, tp: Type ): List[Expr]
-      = tp match {
-          case TupleType(ts)
-            => ts.zipWithIndex.flatMap{
-                  case (t,i) => destr(Nth(e,i+1),t)
-               }
-          case ArrayType(_,_)
-            => List(Call("delete_block",List(e)))
-          case SeqType(et)
-            => val v = newvar
-               List(flatMap(Lambda(VarPat(v),Block(destr(Var(v),et))),e))
-          case _ => Nil
-        }
-    def pass_through (): Boolean = cpu_cost(f) == 0
-    if (!cxx_generation || pass_through())
-      return IntConst(-1)
-    val v = newvar
-    val fnc = Lambda(VarPat(v),Block(destr(Var(v),tp):+IntConst(0)))
-    val cfnc = function(fnc)
-    fnc.tpe = FunctionType(tp,intType)
-    cfnc
   }
 
   def embedApplyOpr ( e: Expr, f: Lambda, tv: String, args: List[Pattern], idx: Option[Expr] ): Option[Expr]
@@ -208,7 +216,7 @@ object PlanGenerator {
                                Tuple(args.map(toExpr)),
                                key,
                                IntConst(cpu_cost(f)),
-                               destructor(tp,f)))
+                               encodeType(tp)))
              Some(Seq(List(Tuple(List(key,if (idx.nonEmpty)
                                             Tuple(List(idx.head,t))
                                           else t)))))
@@ -268,10 +276,12 @@ object PlanGenerator {
           // Scala variable bound to an RDD tensor defined outside the macro
           => val i = newvar
              val v = newvar
+             val tp = elemType(typecheck(e))
              Comprehension(Tuple(List(Var(i),
                                       Call("loadOpr",
                                            List(Tuple(List(Var(i),Var(v))),
-                                                Var(i))))),
+                                                Var(i),
+                                                encodeType(tp))))),
                            List(Generator(TuplePat(List(VarPat(i),VarPat(v))),
                                           e)))
         case Nth(Var(v),3)
@@ -289,10 +299,10 @@ object PlanGenerator {
              val tp = elemType(typecheck(e))
              val pair = Call("pairOpr",
                              if (inMemJoin == "join")
-                               List(Var(tx),Var(ty),Var(k),IntConst(-1))
+                               List(Var(tx),Var(ty),Var(k),encodeType(tp))
                              else List(Call("seqOpr",List(Var(tx))),
                                        Call("seqOpr",List(Var(ty))),
-                                       Var(k),IntConst(-1)))
+                                       Var(k),encodeType(tp)))
              Comprehension(Tuple(List(Var(k),
                                       Tuple(List(Tuple(List(Var(ix),Var(iy))),
                                                  pair)))),
@@ -301,10 +311,12 @@ object PlanGenerator {
         case flatMap(Lambda(p,b),MethodCall(_,"parallelize",x::_))
           => val k = newvar
              val v = newvar
+             val tp = elemType(typecheck(e))
              MethodCall(Comprehension(Tuple(List(Var(k),
                                                  Call("loadOpr",
                                                       List(Tuple(List(Var(k),Var(v))),
-                                                           Var(k))))),
+                                                           Var(k),
+                                                           encodeType(tp))))),
                              List(Generator(p,x),
                                   Generator(TuplePat(List(VarPat(k),VarPat(v))),
                                             b))),
@@ -341,7 +353,7 @@ object PlanGenerator {
                                                           Tuple(Nil),
                                                           Var(k),
                                                           IntConst(cpu_cost(f)),
-                                                          destructor(tp,f)))))))),
+                                                          encodeType(tp)))))))),
                      xp)
         case MethodCall(x,"reduceByKey",List(op,_))
           => val k = newvar
@@ -355,7 +367,7 @@ object PlanGenerator {
                                 function(op),
                                 Var(k),
                                 IntConst(cpu_cost(op)),
-                                destructor(tp,op)))
+                                encodeType(tp)))
              flatMap(Lambda(TuplePat(List(VarPat(k),VarPat(s))),
                             Seq(List(Tuple(List(Var(k),rv))))),
                      Call("groupByKey",List(xp)))
@@ -372,6 +384,7 @@ object PlanGenerator {
              case MethodCall(x,"reduce",op::_)
                if isRDD(x)
                => // a total aggregation must be evaluated during the planning stage (eager)
+                  val tp = elemType(typecheck(e))
                   Coerce(Call("evalOpr",List(Call("reduceOpr",
                                                   List(flatMap(Lambda(VarPat("x"),
                                                                       Seq(List(Nth(Var("x"),2)))),
@@ -379,8 +392,9 @@ object PlanGenerator {
                                                        BoolConst(true),
                                                        function(op),
                                                        Tuple(Nil),
-                                                       IntConst(cpu_cost(op)))))),
-                         elemType(typecheck(x)))
+                                                       IntConst(cpu_cost(op)),
+                                                       encodeType(tp))))),
+                         tp)
              case _ => apply(e,makePlanExpr)
            }
 }

@@ -2,7 +2,6 @@
 GC_HOME = ${HOME}/system/gc-8.2.2
 
 all:
-	#g++ -O3 -fopenmp -fpermissive -w -DNDEBUG -Iinclude -I${GC_HOME}/include -c src/main/cpp/*.cpp
 	g++ -O3 -fopenmp -fpermissive -w -DNDEBUG -Iinclude -c src/main/cpp/*.cpp
 	ar rcs lib/libdiablo.a *.o
 	rm *.o

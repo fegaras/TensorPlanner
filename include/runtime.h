@@ -22,17 +22,17 @@ vector<int>* range ( long n1, long n2, long n3 );
 
 bool inRange ( long i, long n1, long n2, long n3 );
 
-int loadOpr ( void* block, void* coord );
-int loadOpr ( void* block, int coord );
+int loadOpr ( void* block, void* coord, vector<int>* encoded_type );
+int loadOpr ( void* block, int coord, vector<int>* encoded_type );
 
-int pairOpr ( int x, int y, void* coord, int destr );
-int pairOpr ( int x, int y, int coord, int destr );
+int pairOpr ( int x, int y, void* coord, vector<int>* encoded_type );
+int pairOpr ( int x, int y, int coord, vector<int>* encoded_typer );
 
-int applyOpr ( int x, int fnc, void* args, void* coord, int cost, int destr );
-int applyOpr ( int x, int fnc, void* args, int coord, int cost, int destr );
+int applyOpr ( int x, int fnc, void* args, void* coord, int cost, vector<int>* encoded_type );
+int applyOpr ( int x, int fnc, void* args, int coord, int cost, vector<int>* encoded_type );
 
-int reduceOpr ( const vector<int>* s, bool valuep, int op, void* coord, int cost, int destr );
-int reduceOpr ( const vector<int>* s, bool valuep, int op, int coord, int cost, int destr );
+int reduceOpr ( const vector<int>* s, bool valuep, int op, void* coord, int cost, vector<int>* encoded_type );
+int reduceOpr ( const vector<int>* s, bool valuep, int op, int coord, int cost, vector<int>* encoded_type );
 
 void* evalTopDown ( void* plan );
 
