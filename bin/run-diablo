@@ -1,6 +1,6 @@
 #/bin/bash
 
-DIABLO_HOME=$HOME/TensorPlanner
+DIABLO_HOME="$(cd `dirname $0`/..; pwd -P)"
 MPI_HOME=$HOME/openmpi
 
 export PATH="$MPI_HOME/bin:$PATH"

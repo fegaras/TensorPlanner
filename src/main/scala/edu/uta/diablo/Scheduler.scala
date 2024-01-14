@@ -1,5 +1,5 @@
 /*
- * Copyright © 2023 University of Texas at Arlington
+ * Copyright © 2024-2024 University of Texas at Arlington
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -62,14 +62,7 @@ object Scheduler {
         x.static_blevel += size(x)
   }
 
-  def cpu_cost ( opr: Opr ): Int
-    = children(opr).map{ c => val copr = operations(c)
-                              copr match {
-                                case LoadOpr(_) => 0
-                                case SeqOpr(_) => 0
-                                case PairOpr(_,_) => 0
-                                case _ => size(copr)
-                              } }.sum
+  def cpu_cost ( opr: Opr ): Int = opr.cpu_cost
 
   def communication_cost ( opr: Opr, node: WorkerID ): Int
     = children(opr).map{ c => val copr = operations(c)
@@ -161,7 +154,9 @@ object Scheduler {
       if (trace && isCoordinator())
         info("schedule opr "+c+" on node "+w.id+" (work = "+work(w.id)+")")
       // add more ready nodes
-      for { c <- opr.consumers } {
+      for { c <- opr.consumers } 
+      if (operations(c).status == notReady)
+      {
         val copr = operations(c)
         in_degree(c) -= 1
         if (in_degree(c) == 0) {

@@ -40,15 +40,13 @@ object Test {
       var Cz = tensor*(N,M)[ ((i,j),4.5) | i <-0..(N-1), j<-0..(M-1) ];
       //var V = tensor*(N)[ (i,2.3) | i <-0..(N-1) ];
 
-
-
       //tensor*(N,M)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
 
 
       //Az = Az+Bz-3.5*Cz;
       //Az
 
-      //tensor*(N)[ (i,+/v) | (i,v) <- V, ((ii,j),a) <- Az, ii==i, let v = a+v, group by i ];
+      tensor*(N)[ (i,+/v) | (i,v) <- V, ((ii,j),a) <- Az, ii==i, let v = a+v, group by i ];
 
       //tensor*(N,M)[ ((i,j),v+a) | (i,v) <- V, ((ii,j),a) <- Az, ii==i ];
 
@@ -64,7 +62,7 @@ object Test {
 
       //tensor*(N,M)[ ((i,j),m+n+k) | ((i,j),m) <= Az, ((ii,jj),n) <= Bz, ((iii,jjj),k) <- Cz, ii==i, jj==j, iii==i, jjj==j ];
 
-      tensor*(N,M)[ ((i,j),+/v) | ((i,k),a) <= Az, ((kk,l),b) <= Bz, ((ll,j),c) <- Cz, kk==k, ll==l, let v = a*b*c, group by (i,j) ];
+      //tensor*(N,M)[ ((i,j),+/v) | ((i,k),a) <= Az, ((kk,l),b) <= Bz, ((ll,j),c) <- Cz, kk==k, ll==l, let v = a*b*c, group by (i,j) ];
 
       //tensor*(N,M)[ (((i+1)%N,j),a) | ((i,j),a) <- Az ];
 

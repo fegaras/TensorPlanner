@@ -1,0 +1,34 @@
+#!/bin/bash
+#SBATCH -A uot166
+#SBATCH --job-name="diablo"
+#SBATCH --output="run.log"
+#SBATCH --partition=compute
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=128
+#SBATCH --mem=249208M
+#SBATCH --export=ALL
+#SBATCH --time=30    # time limit in minutes
+
+module purge
+#module load slurm cpu/0.17.3b  gcc/10.2.0/npcyll4 openmpi/4.1.3
+module load slurm cpu/0.17.3b gcc/10.2.0/npcyll4
+
+SW=/expanse/lustre/projects/uot166/fegaras
+DIABLO_HOME=/home/$USER/TensorPlanner
+export SCALA_HOME=$SW/scala-2.12.3
+export SPARK_HOME=$SW/spark-3.1.2-bin-hadoop3.2
+export OPENMPI_HOME=$SW/openmpi
+
+export PATH="$OPENMPI_HOME/bin:$SCALA_HOME/bin:$DIABLO_HOME/bin:$PATH"
+export LD_LIBRARY_PATH="$OPENMPI_HOME/lib:$LD_LIBRARY_PATH"
+
+files="a.diablo"
+for f in $files; do
+    echo compiling $f ...
+    diablo $f
+done
+
+ulimit -l unlimited
+
+# for each expanse node: 2 sockets, 1 executor per socket, 64 threads per executor
+mpirun -N 2 --bind-to socket --mca btl_openib_allow_ib true a.out 10000 10

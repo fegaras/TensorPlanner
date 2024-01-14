@@ -1,5 +1,5 @@
 /*
- * Copyright © 2020-2023 University of Texas at Arlington
+ * Copyright © 2020-2024 University of Texas at Arlington
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -258,14 +258,16 @@ object ComprehensionTranslator {
       case MethodCall(Store("rdd",tps,args,x),"reduce",f)
         => MethodCall(translate(x,vars),"reduce",f)
       case reduce(op,Comprehension(h,qs))
-        // don't use: total aggregation for in-memory comprehension
-        if false && !is_rdd_comprehension(qs)
+        // total aggregation for in-memory comprehension
+        if !is_rdd_comprehension(qs)
         => val nv = newvar
            val nr = qs:+AssignQual(Var(nv),mcall(op,Var(nv),h))
-           val etp = typecheck(h)      // typecheck error
+           val etp = typecheck(h)
            val zero = zeroValue(op,etp)
            translate(Block(List(VarDecl(nv,etp,Seq(List(zero))),
-                                Comprehension(ignore,nr),Var(nv))),vars)
+                                Comprehension(ignore,nr),
+                                Var(nv))),
+                     vars)
       case Store(f,tps,args,u)
         // if no special rule applies, return storage of u: inv(u)
         => val su = optimize(store(f,tps,args,u))
@@ -308,7 +310,7 @@ object ComprehensionTranslator {
   def has_side_effects ( e: Expr ): Boolean
     = e match {
         case MethodCall(_,op,_)
-          if List("+=","append","update").contains(op)
+          if List("+=","append","update","reduce").contains(op)
           => true
         case Call(op,_)
           if List("arraySet").contains(op)
@@ -320,18 +322,20 @@ object ComprehensionTranslator {
         case VarDecl(_,ArrayType(_,_),_)
           if cxx_generation
           => true
+        case reduce(_,_)
+          => true
         case _ => accumulate[Boolean](e,has_side_effects,_||_,false)
       }
 
   /* parallelize first range flatMap */
   def parallelize ( e: Expr ): Expr
     = e match {
-          case flatMap(f@Lambda(_,b),u@Range(n,m,s))
+          case flatMap(f@Lambda(p,b),u@Range(n,m,s))
             if !has_side_effects(b)
             // parRange doesn't work
             // => MethodCall(flatMap(f,Call("parRange",List(n,m,s))),"toList",null)
             => if (cxx_generation)
-                 flatMap(f,MethodCall(u,"par",null))
+                 flatMap(Lambda(p,b),MethodCall(u,"par",null))
                else MethodCall(flatMap(f,MethodCall(u,"par",null)),"toList",null)
           case _
             => apply(e,(x:Expr) => parallelize(x))

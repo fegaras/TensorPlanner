@@ -1,5 +1,5 @@
 /*
- * Copyright © 2023 University of Texas at Arlington
+ * Copyright © 2024-2024 University of Texas at Arlington
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -122,7 +122,7 @@ object CXXCodeGenerator {
               Coerce(Call("new vector<"+tc+">",Nil),tp)
          case StorageType(_,_,_)
            => makeZero(unfold_storage_type(tp))
-         case _ => Var("NULL")
+         case _ => Var("nullptr")
       }
 
   def unnestBlocks ( e: Expr, stmt: Boolean ): (List[Expr],Expr) = {
@@ -298,6 +298,27 @@ object CXXCodeGenerator {
 
   def tab ( n: Int ): String = "   "*n
 
+
+  def get_arrays ( e: Expr, exclude: List[String] ): Map[String,Expr]
+    = e match {
+        case Index(a,i)
+          if freevars(a).intersect(exclude).isEmpty
+          => Map(new_var() -> a)
+        case _ => accumulate[Map[String,Expr]](e,get_arrays(_,exclude),_++_,Map())
+      }
+
+  def get_arrays ( e: Expr ): Map[String,Expr] = {
+    def excl ( e: Expr ): List[String]
+      = e match {
+          case Let(VarPat(v),x,u)
+            => v::excl(x)++excl(u)
+          case VarDecl(v,_,u)
+            => v::excl(u)
+          case _ => accumulate[List[String]](e,excl,_++_,Nil)
+        }
+    get_arrays(e,excl(e))
+  }
+
   def makeC ( e: Expr, tabs: Int, stmt: Boolean ): String
     = e match {
         case Var(v) => v
@@ -306,6 +327,8 @@ object CXXCodeGenerator {
         case BoolConst(n) => n.toString
         case Nth(x,n)
           => "get<"+(n-1)+">(*"+makeC(x,tabs,false)+")"
+        case Index(Var(v),List(n))
+          => v+"["+makeC(n,tabs,false)+"]"
         case Index(x,List(n))
           => "(*"+makeC(x,tabs,false)+")["+makeC(n,tabs,false)+"]"
         case MethodCall(x,op,List(y))
@@ -316,7 +339,8 @@ object CXXCodeGenerator {
         case Call("vector",List(n,v))
           => val nc = makeC(n,tabs,false)
              val vc = makeC(v,tabs,false)
-             "new vector("+nc+","+vc+")"
+             val tc = makeCtype(exprType(v))
+             "new vector<"+tc+">("+nc+","+vc+")"
         case MethodCall(x,"length",null)
           => makeC(x,tabs,false)+".size()"
         case MethodCall(x,"toInt",null)
@@ -338,10 +362,13 @@ object CXXCodeGenerator {
                          genCfun(f,TupleType(List(tp,tp)),tp),
                          makeC(zero,tabs,false)))
         case Call("for",List(VarDecl(i,tp,MethodCall(Range(n1,n2,n3),"par",null)),b))
-          => "#pragma omp parallel for\n" +
+          => val m = get_arrays(b)
+             val nb = m.foldLeft[Expr](b){ case (r,(v,u)) => subst(u,Var(v),r) }
+             "{ "+m.map{ case (v,u) => "auto "+v+" = "+makeC(u,tabs,false)+"->buffer(); " }.mkString("")+"\n"+
+              tab(tabs-1)+"#pragma omp parallel for\n" +
               tab(tabs-1)+"for ( int "+i+" = "+makeC(n1,tabs,false)+"; "+i+
                  " <= "+makeC(n2,tabs,false)+"; "+i+" += "+makeC(n3,tabs,false)+" )\n"+
-                 tab(tabs)+makeC(b,tabs+1,true)
+                 tab(tabs)+makeC(nb,tabs+1,true)+" }"
         case Call("for",List(VarDecl(i,tp,Range(n1,n2,n3)),b))
           => "for ( int "+i+" = "+makeC(n1,tabs,false)+"; "+i+
                  " <= "+makeC(n2,tabs,false)+"; "+i+" += "+makeC(n3,tabs,false)+" )\n"+
@@ -359,13 +386,15 @@ object CXXCodeGenerator {
         case Tuple(List(x))
           => makeC(x,tabs,false)
         case Tuple(s)
-          => s.map(makeC(_,tabs,false)).mkString("new tuple(",",",")")
+          => val ts = s.map( x => makeCtype(exprType(x)) ).mkString("<",",",">")
+             s.map(makeC(_,tabs,false)).mkString("new tuple"+ts+"(",",",")")
         case Seq(Nil)
-          => "NULL"
+          => "nullptr"
         case Seq(List(x))
           => "elem("+makeC(x,tabs,stmt)+")"
         case Seq(s)
-          => "new vector({ "+s.map(makeC(_,tabs,false)).mkString(", ")+" })"
+          => val tc = makeCtype(exprType(s.head))
+             "new vector<"+tc+">({ "+s.map(makeC(_,tabs,false)).mkString(", ")+" })"
         case IfE(p,x,Seq(Nil))
           if stmt
           => "{ assert("+makeC(p,tabs,false)+");\n"+tab(tabs)+makeC(x,tabs+1,stmt)+"; }"
@@ -469,11 +498,8 @@ object CXXCodeGenerator {
                 => val v = new_var()
                    val t = new_var()
                    val f = new_var()
-                   main_block = main_block + "auto "+t+" = high_resolution_clock::now();\n" +
-                                    "for ( auto "+v+": *"+f+"() ) eval("+v+");\n" +
-                                    "cout << \" "+f+" time: \" << (duration_cast<milliseconds>" +
-                                    "(high_resolution_clock::now()-"+t+
-                                    ")).count()/1000.0 << \" secs\" << endl;\n"
+                   main_block = main_block + "for ( auto "+v+": *"+f+"() ) { schedule("+
+                                    v+"); eval("+v+"); collect("+v+"); }\n"
                    writer.println("auto "+f+" () {\n   return "+makeC(se,0,false)+";\n}\n\n")
            }
     }
@@ -482,10 +508,10 @@ object CXXCodeGenerator {
 
   def genCxxCode ( e: Expr, functions: List[Expr], print_writer: PrintWriter ) {
     writer = print_writer
-    writer.println("#include \"runtime.h\"\n#include <chrono>\nusing namespace std::chrono;\n")
+    writer.println("#include \"runtime.h\"\n")
     val s = makeCxxCode(e)
     val fs = functions.map(f => "functions.push_back((void*(*)(void*))"
                                 +makeC(f,0,false)+");\n").mkString("")
-    writer.println(s"int main ( int argc, char* argv[] ) {\n$fs${s}return 0;\n}")
+    writer.println(s"int main ( int argc, char* argv[] ) {\nmpi_startup(argc,argv);\n$fs${s}mpi_finalize();\nreturn 0;\n}")
   }
 }

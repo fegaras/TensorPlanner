@@ -1,5 +1,5 @@
 /*
- * Copyright © 2020-2023 University of Texas at Arlington
+ * Copyright © 2020-2024 University of Texas at Arlington
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -333,14 +333,14 @@ object Typechecker {
                   if operations.contains(m) && dims(tx).nonEmpty && List("Int","Long","Double").contains(tp)
                   => val vxs = new_names(dims(tx).get)
                      val xv = newvar
-                     modify(Comprehension(Tuple(List(Tuple(vxs.map(Var)),
+                     modify(Comprehension(Tuple(List(tuple(vxs.map(Var)),
                                                      MethodCall(Var(xv),m,List(y)))),
                                           List(Generator(tuple(List(tuple(vxs.map(VarPat)),VarPat(xv))),x))))
                 case (BasicType(tp),ty)  // value operated on array cells
                   if operations.contains(m) && dims(ty).nonEmpty && List("Int","Long","Double").contains(tp)
                   => val vys = new_names(dims(ty).get)
                      val yv = newvar
-                     modify(Comprehension(Tuple(List(Tuple(vys.map(Var)),
+                     modify(Comprehension(Tuple(List(tuple(vys.map(Var)),
                                                      MethodCall(x,m,List(Var(yv))))),
                                           List(Generator(tuple(List(tuple(vys.map(VarPat)),VarPat(yv))),y))))
                 case _ => false
@@ -576,6 +576,7 @@ object Typechecker {
                tp
           case MethodCall(u,"reduce",Lambda(p,b)::_)
             => val etp = elemType(typecheck(u,env))
+               clean(b)
                if (!typeMatch(typecheck(b,bindPattern(p,TupleType(List(etp,etp)),env)),etp))
                  throw new Error("Wrong reduce op: "+b)
                etp

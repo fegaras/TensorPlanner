@@ -1,5 +1,5 @@
 /*
- * Copyright © 2023 University of Texas at Arlington
+ * Copyright © 2024-2024 University of Texas at Arlington
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -190,7 +190,12 @@ object PlanGenerator {
                     v += 3
              else if (tp == stringType)
                     v += 4
-        case _ => ;
+             else if (tp == emptyTupleType) {
+                      v += 10
+                      v += 0
+                    }
+             else v += -2
+        case _ => v += -1
       }
     }
     et(tp)
@@ -384,7 +389,7 @@ object PlanGenerator {
              case MethodCall(x,"reduce",op::_)
                if isRDD(x)
                => // a total aggregation must be evaluated during the planning stage (eager)
-                  val tp = elemType(typecheck(e))
+                  val tp = typecheck(e)
                   Coerce(Call("evalOpr",List(Call("reduceOpr",
                                                   List(flatMap(Lambda(VarPat("x"),
                                                                       Seq(List(Nth(Var("x"),2)))),

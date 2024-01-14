@@ -1,0 +1,12 @@
+#/bin/bash
+
+DIABLO_HOME="$(cd `dirname $0`/..; pwd -P)"
+
+MPI_HOME=$HOME/openmpi
+
+export LD_LIBRARY_PATH="$MPI_HOME/lib/:$LD_LIBRARY_PATH"
+
+# max available memory in GB
+mem=`awk '/MemFree/ { printf "%.0f", $2/1024/1024 }' /proc/meminfo`
+
+scala -classpath classes:${DIABLO_HOME}/lib/diablo.jar:${MPI_HOME}/lib/mpi.jar -J-Xmx${mem}g -J-Xms2g -J-Xss100m $*

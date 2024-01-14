@@ -1,5 +1,5 @@
 /*
- * Copyright © 2020-2023 University of Texas at Arlington
+ * Copyright © 2020-2024 University of Texas at Arlington
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -360,7 +360,7 @@ object Normalizer {
                                     Seq(List(Tuple(List(Var(kv),Seq(List(Var(nv)))))))),
                              groupBy(x)))
       case reduce(m,Comprehension(reduce(n,Comprehension(u,qs)),ps))
-        if m == n
+        if false && m == n  // need the opposite
         => normalize(reduce(m,Comprehension(u,ps++qs)))
       case reduce(m,Seq(List(x)))
         => normalize(x)

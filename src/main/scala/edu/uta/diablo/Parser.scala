@@ -1,5 +1,5 @@
 /*
- * Copyright © 2020-2023 University of Texas at Arlington
+ * Copyright © 2020-2024 University of Texas at Arlington
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -384,9 +384,9 @@ object Parser extends StandardTokenParsers {
           { case _~p~_~e~_~s => ForeachS(p,e,s) }
         | "while" ~ "(" ~ expr ~ ")" ~ stmt ^^
           { case _~_~p~_~s => WhileS(p,s) }
-        | "if" ~ "(" ~ expr ~ ")" ~ stmt ~ opt( ";" ~ "else" ~ stmt ) ^^
-          { case _~_~p~_~st~None => IfS(p,st,BlockS(Nil))
-            case _~_~p~_~st~Some(_~_~se) => IfS(p,st,se) }
+        | "if" ~ "(" ~ expr ~ ")" ~ stmt ~ sem ~ opt( "else" ~ stmt ) ^^
+          { case _~_~p~_~st~_~None => IfS(p,st,BlockS(Nil))
+            case _~_~p~_~st~_~Some(_~se) => IfS(p,st,se) }
         | "def" ~ ident ~ "(" ~ repsep( ident ~ ":" ~ stype, "," ) ~ ")" ~ ":" ~ stype ~ opt("=") ~ stmt ^^
           { case _~f~_~params~_~_~tp~_~body
               => DefS(f,params.map{ case v~_~t => (v,t) },tp,body) }

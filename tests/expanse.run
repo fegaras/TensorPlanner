@@ -5,7 +5,7 @@
 #SBATCH --partition=compute
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=128
-#SBATCH --mem=249325M
+#SBATCH --mem=249208M
 #SBATCH --export=ALL
 #SBATCH --time=30    # time limit in minutes
 
@@ -36,7 +36,7 @@ for f in $scala_files; do
     scalac -d classes -cp $JARS $f >/dev/null
 done
 
-ulimit -m unlimited
+ulimit -l unlimited
 
 # for each expanse node: 2 sockets, 1 executor per socket, 64 Java threads per executor
 mpirun -N 2 --bind-to socket --mca btl_openib_allow_ib true \

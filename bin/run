@@ -1,6 +1,9 @@
 #/bin/bash
 
-DIABLO_HOME=$HOME/TensorPlanner
+if [ -z ${DIABLO_HOME} ]; then
+   DIABLO_HOME="$(cd `dirname $0`/..; pwd -P)"
+fi
+
 MPI_HOME=$HOME/openmpi
 
 export PATH="$MPI_HOME/bin:$PATH"
@@ -13,8 +16,7 @@ mem=`awk '/MemFree/ { printf "%.0f", $2/1024/1024 }' /proc/meminfo`
 # max available memory in GB per executor
 mem=$[$mem/$executors]
 
-# run on 2 nodes: localhost and milos
-#disable firewall, enable passwordless ssh to localhost and to each other, must have the same TensorPlanner code
+# run on 2 nodes: localhost and milos (disable firewall, enable passwordless ssh to localhost and to each other, must have the same TensorPlanner code)
 #mpirun -N $executors --bind-to socket --host localhost:-1,milos:-1 --use-hwthread-cpus -quiet scala -classpath classes:${DIABLO_HOME}/lib/diablo.jar:${MPI_HOME}/lib/mpi.jar -J-Xmx${mem}g -J-Xms2g -J-Xss100m $*
 
 # run on localhost

@@ -1,5 +1,5 @@
 /*
- * Copyright © 2023 University of Texas at Arlington
+ * Copyright © 2023-2024 University of Texas at Arlington
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,6 +26,9 @@ using namespace std;
 
 extern int block_count;
 extern int block_created;
+extern int max_blocks;
+
+void abort ();
 
 /* Array blocks are C arrays with length */
 template< typename T >
@@ -35,25 +38,36 @@ private:
   T* data;
 
 public:
-  Vec ( size_t len = 0 ): length(len), data((len == 0) ? nullptr : new T[len]) {
+  Vec ( size_t len = 0 ): length(len) {
+    try {
+      data = (len == 0) ? nullptr : new T[len];
+    } catch ( bad_alloc &ex ) {
+      cerr << "*** cannot allocate " << (len*sizeof(T)) << " bytes" << endl;
+      abort();
+    }
     block_count++;
     block_created++;
+    max_blocks = max(max_blocks,block_count);
   }
 
-  Vec ( const Vec<T> &other ): length(other.length),
-                               data((length == 0) ? nullptr : new T[length]) {
-    copy(other.data,other.data+length,data);
-  }
-
-  Vec ( vector<T>* x ): length(x->size()), data(new T[length]) {
+  Vec ( vector<T>* x ): length(x->size()) {
+    try {
+      data = (length == 0) ? nullptr : new T[length];
+    } catch ( bad_alloc &ex ) {
+      cerr << "*** cannot allocate " << (length*sizeof(T)) << " bytes" << endl;
+      abort();
+    }
     for (int i = 0; i < length; i++ )
       data[i] = (*x)[i];
+    block_count++;
+    block_created++;
+    max_blocks = max(max_blocks,block_count);
     delete x;
   }
 
   inline size_t size () const { return length; }
 
-  inline const T* buffer () const { return data; }
+  inline T* buffer () const { return data; }
 
   inline T& operator[] ( unsigned int n ) {
     return data[n];
@@ -76,32 +90,31 @@ public:
 
   ~Vec () {
     block_count--;
+    max_blocks = max(max_blocks,block_count);
     delete[] data;
   }
 };
 
 template< typename T >
-void delete_block ( Vec<T>* &x ) {
-  if (x != nullptr)
-    delete x;
-  x = NULL;
-}
-
-template< typename T >
 Vec<T>* array_buffer_dense ( size_t dsize, const T zero ) {
   Vec<T>* a = new Vec<T>(dsize);
-  #pragma omp parallel for
+  T* av = a->buffer();
+  //#pragma omp parallel for
   for ( int i = 0; i < dsize; i++ )
-    (*a)[i] = zero;
+    av[i] = zero;
   return a;
 }
 
 template< typename T >
 Vec<T>* merge_tensors ( const Vec<T>* x, const Vec<T>* y, T(*op)(tuple<T,T>*), const T zero ) {
   Vec<T>* a = new Vec<T>(x->size());
+  T* av = a->buffer();
+  T* xv = x->buffer();
+  T* yv = y->buffer();
+  int len = min(x->size(),y->size());
   #pragma omp parallel for
-  for ( int i = 0; i < min(x->size(),y->size()); i++ )
-    (*a)[i] = op(new tuple((*x)[i],(*y)[i]));
+  for ( int i = 0; i < len; i++ )
+    av[i] = op(new tuple<T,T>(xv[i],yv[i]));
   return a;
 }
 
@@ -160,8 +173,8 @@ vector<tuple<K*,tuple<T,S>*>*>* join_nl ( vector<tuple<K*,T>*>* x,
   for ( tuple<K*,T>* ex: *x )
     for ( tuple<K*,S>* ey: *y )
       if (*get<0>(*ex) == *get<0>(*ey))
-        a->push_back(new tuple(get<0>(*ex),
-                           new tuple(get<1>(*ex),get<1>(*ey))));
+        a->push_back(new tuple<K*,tuple<T,S>*>(get<0>(*ex),
+                           new tuple<T,S>(get<1>(*ex),get<1>(*ey))));
   return a;
 }
 
@@ -172,7 +185,8 @@ vector<tuple<int,tuple<T,S>*>*>* join_nl ( vector<tuple<int,T>*>* x,
   for ( tuple<int,T>* ex: *x )
     for ( tuple<int,S>* ey: *y )
       if (get<0>(*ex) == get<0>(*ey))
-        a->push_back(new tuple(get<0>(*ex),new tuple(get<1>(*ex),get<1>(*ey))));
+        a->push_back(new tuple<int,tuple<T,S>*>(get<0>(*ex),
+                           new tuple<T,S>(get<1>(*ex),get<1>(*ey))));
   return a;
 }
 
@@ -184,7 +198,7 @@ vector<tuple<K*,T>*>* reduceByKey ( vector<tuple<K*,T>*>* x, T(*op)(tuple<T,T>*)
     auto p = h.find(*get<0>(*e));
     if (p == h.end())
       h.emplace(*get<0>(*e),e);
-    else get<1>(*p->second) = op(new tuple(get<1>(*e),get<1>(*p->second)));
+    else get<1>(*p->second) = op(new tuple<T,T>(get<1>(*e),get<1>(*p->second)));
   }
   for ( auto e: h )
     a->push_back(e.second);
@@ -199,10 +213,10 @@ vector<tuple<int,T>*>* reduceByKey ( vector<tuple<int,T>*>* x, T(*op)(tuple<T,T>
     auto p = h.find(get<0>(*e));
     if (p == h.end())
       h.emplace(get<0>(*e),get<1>(*e));
-    else p->second = op(new tuple(get<1>(*e),p->second));
+    else p->second = op(new tuple<T,T>(get<1>(*e),p->second));
   }
   for ( auto e: h )
-    a->push_back(new tuple(e.first,e.second));
+    a->push_back(new tuple<int,T>(e.first,e.second));
   return a;
 }
 
@@ -213,7 +227,7 @@ vector<tuple<K*,vector<T>*>*>* groupByKey ( vector<tuple<K*,T>*>* x ) {
   for ( tuple<K*,T>* e: *x ) {
     auto p = h.find(*get<0>(*e));
     if (p == h.end())
-      h.emplace(*get<0>(*e),new tuple(get<0>(*e),elem(get<1>(*e))));
+      h.emplace(*get<0>(*e),new tuple<K*,vector<T>*>(get<0>(*e),elem(get<1>(*e))));
     else get<1>(*p->second)->push_back(get<1>(*e));
   }
   for ( auto e: h )
@@ -232,7 +246,7 @@ vector<tuple<int,vector<T>*>*>* groupByKey ( vector<tuple<int,T>*>* x ) {
     else p->second->push_back(get<1>(*e));
   }
   for ( auto e: h )
-    a->push_back(new tuple(e.first,e.second));
+    a->push_back(new tuple<int,vector<T>*>(e.first,e.second));
   return a;
 }
 
@@ -245,18 +259,18 @@ vector<tuple<K*,tuple<vector<T>*,vector<S>*>*>*>* cogroup ( vector<tuple<K*,T>*>
     auto p = h.find(*get<0>(*e));
     if (p == h.end())
       h.emplace(*get<0>(*e),
-                new tuple(elem(get<1>(*e)),new vector<S>()));
+                new tuple<vector<T>*,vector<S>*>(elem(get<1>(*e)),new vector<S>()));
     else get<0>(p->second)->push_back(get<1>(*e));
   }
   for ( tuple<K*,S>* e: *y ) {
     auto p = h.find(*get<0>(*e));
     if (p == h.end())
       h.emplace(*get<0>(*e),
-                new tuple(new vector<T>(),elem(get<1>(*e))));
+                new tuple<vector<T>*,vector<S>*>(new vector<T>(),elem(get<1>(*e))));
     else get<1>(p->second)->push_back(get<1>(*e));
   }
   for ( auto e: h )
-    a->push_back(new tuple(&e.first,e.second));
+    a->push_back(new tuple<K*,tuple<vector<T>*,vector<S>*>*>(&e.first,e.second));
   return a;
 }
 
@@ -269,18 +283,18 @@ vector<tuple<int,tuple<vector<T>*,vector<S>*>*>*>* cogroup ( vector<tuple<int,T>
     auto p = h.find(get<0>(*e));
     if (p == h.end())
       h.emplace(get<0>(*e),
-                new tuple(elem(get<1>(*e)),new vector<S>()));
+                new tuple<vector<T>*,vector<S>*>(elem(get<1>(*e)),new vector<S>()));
     else get<0>(p->second)->push_back(get<1>(*e));
   }
   for ( tuple<int,S>* e: *y ) {
     auto p = h.find(get<0>(*e));
     if (p == h.end())
       h.emplace(get<0>(*e),
-                new tuple(new vector<T>(),elem(get<1>(*e))));
+                new tuple<vector<T>*,vector<S>*>(new vector<T>(),elem(get<1>(*e))));
     else get<1>(p->second)->push_back(get<1>(*e));
   }
   for ( auto e: h )
-    a->push_back(new tuple(e.first,e.second));
+    a->push_back(new tuple<int,tuple<vector<T>*,vector<S>*>*>(e.first,e.second));
   return a;
 }
 
@@ -299,7 +313,7 @@ vector<tuple<K*,tuple<T,S>*>*>* join ( vector<tuple<K*,T>*>* x,
     auto p = h.find(*get<0>(*ey));
     if (p != h.end())
       for ( T ex: *p->second )
-        a->push_back(new tuple(get<0>(*ey),new tuple(ex,get<1>(*ey))));
+        a->push_back(new tuple<K*,tuple<T,S>*>(get<0>(*ey),new tuple<T,S>(ex,get<1>(*ey))));
   }
   return a;
 }
@@ -319,18 +333,18 @@ vector<tuple<int,tuple<T,S>*>*>* join ( vector<tuple<int,T>*>* x,
     auto p = h.find(get<0>(*ey));
     if (p != h.end())
       for ( T ex: *p->second )
-        a->push_back(new tuple(get<0>(*ey),new tuple(ex,get<1>(*ey))));
+        a->push_back(new tuple<int,tuple<T,S>*>(get<0>(*ey),new tuple<T,S>(ex,get<1>(*ey))));
   }
   return a;
 }
 
 template< typename T >
 Vec<T>* array_buffer ( int dsize, int ssize, T zero,
-                       tuple<Vec<int>*,Vec<int>*,Vec<T>*>* init = NULL ) {
+                       tuple<Vec<int>*,Vec<int>*,Vec<T>*>* init = nullptr ) {
   Vec<T>* buffer = new Vec<T>(dsize*ssize);
   for (int i = 0; i < buffer->size(); i++ )
     (*buffer)[i] = zero;
-  if (init != NULL) {
+  if (init != nullptr) {
     #pragma omp parallel for
     for ( int i = 0; i < get<0>(*init)->size()-1; i++ ) {
       int j = (*get<0>(*init))[i];
@@ -361,7 +375,7 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
     }
     (*dense)[i+1] = sparse->size();
   }
-  return new tuple(dense,new Vec<int>(sparse),new Vec<T>(values));
+  return new tuple<Vec<int>*,Vec<int>*,Vec<T>*>(dense,new Vec<int>(sparse),new Vec<T>(values));
 }
 
 template< typename T >
@@ -380,21 +394,21 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
     int yn = (*get<0>(*y))[i];
     while (xn < (*get<0>(*x))[i+1] && yn < (*get<0>(*y))[i+1]) {
       if ((*get<1>(*x))[xn] == (*get<1>(*y))[yn]) {
-        T v = op(new tuple((*get<2>(*x))[xn],(*get<2>(*y))[yn]));
+        T v = op(new tuple<T,T>((*get<2>(*x))[xn],(*get<2>(*y))[yn]));
         if (v != zero) {
           sparse->push_back((*get<1>(*x))[xn]);
           values->push_back(v);
         }
         xn++; yn++;
       } else if ((*get<1>(*x))[xn] < (*get<1>(*y))[yn]) {
-        T v = op(new tuple((*get<2>(*x))[xn],zero));
+        T v = op(new tuple<T,T>((*get<2>(*x))[xn],zero));
         if (v != zero) {
           sparse->push_back((*get<1>(*x))[xn]);
           values->push_back(v);
         }
         xn++;
       } else {
-        T v = op(new tuple(zero,(*get<2>(*y))[yn]));
+        T v = op(new tuple<T,T>(zero,(*get<2>(*y))[yn]));
         if (v != zero) {
           sparse->push_back((*get<1>(*y))[yn]);
           values->push_back(v);
@@ -403,7 +417,7 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
       }
     }
     while (xn < (*get<0>(*x))[i+1]) {
-      T v = op(new tuple((*get<2>(*x))[xn],zero));
+      T v = op(new tuple<T,T>((*get<2>(*x))[xn],zero));
       if (v != zero) {
         sparse->push_back((*get<1>(*x))[xn]);
         values->push_back(v);
@@ -411,7 +425,7 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
       xn++;
     }
     while (yn < (*get<0>(*y))[i+1]) {
-      T v = op(new tuple(zero,(*get<2>(*y))[yn]));
+      T v = op(new tuple<T,T>(zero,(*get<2>(*y))[yn]));
       if (v != zero) {
         sparse->push_back((*get<1>(*y))[yn]);
         values->push_back(v);
@@ -421,7 +435,7 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
     i++;
     (*dense)[i] = sparse->size();
   }
-  return new tuple(dense,new Vec<int>(sparse),new Vec<T>(values));
+  return new tuple<Vec<int>*,Vec<int>*,Vec<T>*>(dense,new Vec<int>(sparse),new Vec<T>(values));
 }
 
 template< typename T >

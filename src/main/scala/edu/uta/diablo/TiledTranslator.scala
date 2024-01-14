@@ -1,5 +1,5 @@
 /*
- * Copyright © 2020-2023 University of Texas at Arlington
+ * Copyright © 2020-2024 University of Texas at Arlington
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -805,7 +805,8 @@ object TiledTranslator {
           // total aggregation on tiled comprehensions
           => val tile_value = reduce(op,Comprehension(h,tile_qualifiers(qs,vars)))
              val nq = rdd_qualifiers(qs,vars)
-             val Comprehension(nhs,nqs) = optimize(Comprehension(tile_value,nq))
+             val xxx@Comprehension(nhs,nqs) = optimize(Comprehension(tile_value,nq))
+println("@@@ "+Pretty.print(xxx))
              if (data_frames)
                translate_sql(nhs,nqs,op)
              else reduce(op,translate_tiled(Comprehension(nhs,nqs),vars))

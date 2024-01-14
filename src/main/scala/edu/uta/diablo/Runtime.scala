@@ -1,5 +1,5 @@
 /*
- * Copyright © 2023 University of Texas at Arlington
+ * Copyright © 2024-2024 University of Texas at Arlington
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -152,11 +152,8 @@ object Runtime {
       info("Scheduling time: %.5f secs".format((System.currentTimeMillis()-t)/1000.0))
     val time = wtime()
     broadcast_plan()
-    for ( x <- operations ) {
-      x.status = notReady
-      x.cached = null
+    for ( x <- operations )
       initialize_opr(x)
-    }
     for ( opr_id <- operations.indices )
       set_closest_local_descendants(opr_id)
     if (isCoordinator())
@@ -260,8 +257,8 @@ object Runtime {
   }
 
   def enqueue_reduce_opr ( opr_id: OprID, c: OprID ) {
-    val opr = operations(opr_id)
-    val copr = operations(c)
+    val opr = operations(opr_id)  // child of copr
+    val copr = operations(c)      // ReduceOpr
     copr match {
       case ReduceOpr(s,valuep,fid)  // partial reduce
         if enable_partial_reduce
@@ -330,7 +327,7 @@ object Runtime {
           => enqueue_reduce_opr(opr_id,c)
         case _
           => // enqueue the local consumers that are ready
-             if (copr.node == executor_rank
+             if (copr.node == executor_rank && copr.status == notReady
                  && !hasCachedValue(copr)
                  && children(copr).map(operations(_)).forall(hasCachedValue)
                  && !ready_queue.contains(c))
@@ -338,7 +335,8 @@ object Runtime {
       }
     }
     // if there is no consumer on the same node, garbage collect the task cache
-    if (opr.node == executor_rank && !exit_points.contains(opr_id)
+    if (opr.node == executor_rank && opr.consumers.length > 0
+//&& !exit_points.contains(opr_id)
         && opr.consumers.forall( c => operations(c).node != executor_rank ))
       gc(opr_id)
     if (opr.status != locked)
@@ -474,8 +472,9 @@ object Runtime {
     eval(plan)
     val opr = operations(opr_id)
     opr.status = computed
-    cache_data(opr,broadcast(opr_id,operations(opr_id).cached))
-    opr.cached.asInstanceOf[(Any,Any)]._2
+    cache_data(opr,broadcast(opr_id,opr.cached))
+    opr.cached = opr.cached.asInstanceOf[(Any,Any)]._2
+    opr.cached
   }
 
   // collect the results of an evaluated plan at the coordinator

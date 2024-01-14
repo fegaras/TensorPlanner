@@ -1,5 +1,5 @@
 /*
- * Copyright © 2023 University of Texas at Arlington
+ * Copyright © 2023-2024 University of Texas at Arlington
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,56 +18,193 @@
 #include <tuple>
 #include <queue>
 #include <cassert>
+#include <sstream>
 #include <chrono>
 #include <algorithm>
+#include <thread>
 #include <stdarg.h>
+#include <unistd.h>
+#include "mpi.h"
+#include "omp.h"
 #include "tensor.h"
-
-class Opr;
+#include "opr.h"
+#include "comm.h"
 
 const bool trace = true;
+const bool trace_delete = false;
+bool delete_arrays = true;
+const bool enable_partial_reduce = true;
 
-static vector<Opr*> operations;
+vector<Opr*> operations;
 vector<void*(*)(void*)> functions;
+
 static map<size_t,int> task_table;
 static vector<void*> loadBlocks;
 static vector<int>* exit_points;
-static int executor_rank = 0;
+extern int executor_rank;
+extern int num_of_executors;
 
 static int block_count = 0;
 static int block_created = 0;
-
-enum Status {notReady,scheduled,ready,computed,completed,removed,locked,zombie};
-
-enum OprType { applyOPR=0, pairOPR=1, loadOPR=2, reduceOPR=3 };
-
-const char* oprNames[] = { "apply", "pair", "load", "reduce" };
-
-static const vector<int>* empty_vector = new vector<int>();
+static int max_blocks = 0;
 
 
-bool compare_opr ( int x, int y );
-auto cmp = [] ( int x, int y ) { return compare_opr(x,y); };
-static priority_queue<int,vector<int>,decltype(cmp)> ready_queue(cmp);
+// used for comparing task priorities in the run-time queue
+class task_cmp {
+  int priority ( const int opr_id ) const {
+    Opr* opr = operations[opr_id];
+    if (opr->type == applyOPR) return 9-opr->cpu_cost;
+    else if (opr->type == reduceOPR) return 10;
+    else if (opr->type == pairOPR) return 8;
+    else return 1;
+  }
+public:
+  task_cmp () {}
+  bool operator() ( const int &lhs, const int &rhs ) const {
+    return priority(lhs) < priority(rhs);
+  }
+};
 
+static priority_queue<int,vector<int>,task_cmp> ready_queue;
 
-static char buffer[256];
-void info ( int tabs, const char *fmt, ... ) {
+// tasks waiting to send data
+static queue<tuple<int,int>> send_queue;
+
+// tracing info
+void info ( const char *fmt, ... ) {
   using namespace std::chrono;
+  static char* cbuffer = new char[2000];
   if (trace) {
     auto millis = duration_cast<milliseconds>(system_clock::now()
                                   .time_since_epoch()).count() % 1000;
     time_t now = time(0);
     tm* t = localtime(&now);
     va_list args;
-    va_start(args,tabs);
-    for ( int i = 0; i < tabs*3; i++ )
-      buffer[i] = ' ';
-    vsprintf(buffer+3*tabs,fmt,args);
+    va_start(args,fmt);
+    cbuffer[0] = 0;
+    vsprintf(cbuffer,fmt,args);
     va_end(args);
-    printf("[%02d:%02d:%02d:%03d] %s\n",
-           t->tm_hour,t->tm_min,t->tm_sec,millis,buffer);
+    printf("[%02d:%02d:%02d:%03d%3d]   %s\n",t->tm_hour,t->tm_min,
+           t->tm_sec,millis,executor_rank,cbuffer);
   }
+}
+
+// print a vector
+string sprint ( vector<int> v ) {
+  ostringstream out;
+  out << "(";
+  auto it = v.begin();
+  if (v.size() > 0) {
+    out << *(it++);
+    for ( ; it != v.end(); it++ )
+      out << "," << *it;
+  }
+  out << ")";
+  return out.str();
+}
+
+// print the task name, producers, and consumers
+string sprint ( Opr* opr ) {
+  return string(oprNames[opr->type])
+    .append(sprint(*opr->children))
+    .append("->")
+    .append(sprint(*opr->consumers));
+}
+
+// print the task data
+int print_block ( ostringstream &out, const void* data,
+                  vector<int>* encoded_type, int loc ) {
+  switch ((*encoded_type)[loc]) {
+  case 10: { // tuple
+    if ((*encoded_type)[loc+1] == 2
+        && (*encoded_type)[loc+2] == 0
+        && (*encoded_type)[loc+3] == 10) {
+      tuple<int,void*>* x = data;
+      out << "(" << get<0>(*x) << ",";
+      int l = print_block(out,get<1>(*x),encoded_type,loc+3);
+      out << ")";
+      return l;
+    }
+    if ((*encoded_type)[loc+1] > 0 && (*encoded_type)[loc+2] == 0) {
+      switch ((*encoded_type)[loc+1]) {
+      case 1: {
+        tuple<int>* x = data;
+        out << get<0>(*x);
+        break;
+      }
+      case 2: {
+        tuple<int,int>* x = data;
+        out << "(" << get<0>(*x) << "," << get<1>(*x) << ")";
+        break;
+      }
+      case 3: {
+        tuple<int,int,int>* x = data;
+        out << "(" << get<0>(*x) << "," << get<1>(*x) << "," << get<2>(*x) << ")";
+        break;
+      }
+      case 4: {
+        tuple<int,int,int,int>* x = data;
+        out << "(" << get<0>(*x) << "," << get<1>(*x) << ","
+            << get<2>(*x) << "," << get<3>(*x) << ")";
+        break;
+      }
+      }
+      return loc+(*encoded_type)[loc+1]+2;
+    } else {
+      switch ((*encoded_type)[loc+1]) {
+      case 0:
+        out << "()";
+        return loc+2;
+      case 2: {
+        out << "(";
+        tuple<void*,void*>* x = data;
+        int l2 = print_block(out,get<0>(*x),encoded_type,loc+2);
+        out << ",";
+        int l3 = print_block(out,get<1>(*x),encoded_type,l2);
+        out << ")";
+        return l3;
+      }
+      case 3: {
+        tuple<void*,void*,void*>* x = data;
+        out << "(";
+        int l2 = print_block(out,get<0>(*x),encoded_type,loc+2);
+        out << ",";
+        int l3 = print_block(out,get<1>(*x),encoded_type,l2);
+        out << ",";
+        int l4 = print_block(out,get<2>(*x),encoded_type,l3);
+        out << ")";
+        return l4;
+      }
+      }
+    }
+  }
+  case 11:  // data block
+    switch ((*encoded_type)[loc+1]) {
+    case 0: {
+      Vec<int>* x = data;
+      out << "Vec<int>(" << x->size() << ")";
+    }
+    case 1: {
+      Vec<long>* x = data;
+      out << "Vec<long>(" << x->size() << ")";
+    }
+    case 3: {
+      Vec<double>* x = data;
+      out << "Vec<double>(" << x->size() << ")";
+    }
+    }
+    return loc+2;
+  default:
+    return loc+1;
+  }
+}
+
+string print_block ( Opr* opr ) {
+  if (!trace)
+    return string("");
+  ostringstream out;
+  print_block(out,opr->cached,opr->encoded_type,0);
+  return out.str();
 }
 
 vector<int>* range ( long n1, long n2, long n3 ) {
@@ -76,120 +213,6 @@ vector<int>* range ( long n1, long n2, long n3 ) {
     a->push_back(i);
   return a;
 }
-
-bool inRange ( long i, long n1, long n2, long n3 ) {
-  return i>=n1 && i<= n2 && (i-n1)%n3 == 0;
-}
-
-class LoadOpr {
-public:
-  int block;
-  LoadOpr ( int block ) { this->block = block; }
-  size_t hash () { return (block << 2) ^ 1; }
-  bool operator== ( const LoadOpr& o ) const {
-    return o.block == block;
-  }
-};
-
-class PairOpr {
-public:
-  int x;
-  int y;
-  PairOpr ( int x, int y ) { this->x = x; this->y = y; }
-  size_t hash () { return (x << 2) ^ (y << 3) ^ 2; }
-  bool operator== ( const PairOpr& o ) const {
-    return o.x == x && o.y == y;
-  }
-};
-
-class ApplyOpr {
-public:
-  int x;
-  int fnc;
-  void* extra_args;
-  ApplyOpr ( int x, int fnc, void* extra_args ) {
-    this->x = x;
-    this->fnc = fnc;
-    this->extra_args = extra_args;
-  }
-  size_t hash () { return (x << 2) ^ (fnc << 3) ^ 4; }
-  bool operator== ( const ApplyOpr& o ) const {
-    return o.x == x && o.fnc == fnc;
-  }
-};
-
-class ReduceOpr {
-public:
-  vector<int>* s;
-  bool valuep;
-  int op;
-  ReduceOpr ( vector<int>* s, bool valuep, int op ) {
-    this->s = s;
-    this->valuep = valuep;
-    this->op = op;
-  }
-  size_t hash () {
-    size_t h = 0;
-    for ( int i: *s )
-      h = i ^ (h << 1);
-    return h ^ (op << 2) ^ 2;
-  }
-  bool operator== ( const ReduceOpr& o ) const {
-    return o.op == op && o.valuep == valuep && *o.s == *s;
-  }
-};
-
-class Opr {
-public:
-  int node = -1;
-  void* coord = NULL;
-  bool int_index = false;
-  int size = -1;
-  int static_blevel = -1;
-  enum Status status = notReady;
-  bool visited = false;
-  void* cached = NULL;
-  vector<int>* encoded_type = NULL;
-  vector<int>* children;
-  vector<int>* consumers;
-  int count;
-  int reduced_count;
-  int cpu_cost;
-  vector<int>* os;
-  int oc;
-  enum OprType type;
-  union {
-    LoadOpr* load_opr;
-    PairOpr* pair_opr;
-    ApplyOpr* apply_opr;
-    ReduceOpr* reduce_opr;
-  } opr;
-  Opr () {}
-  size_t hash () {
-    switch (type) {
-    case loadOPR: return opr.load_opr->hash();
-    case pairOPR: return opr.pair_opr->hash();
-    case applyOPR: return opr.apply_opr->hash();
-    case reduceOPR: return opr.reduce_opr->hash();
-    default: return 0;
-    }
-  }
-  bool operator== ( const Opr& o ) const {
-    if (o.type == type)
-      return false;
-    switch (type) {
-    case loadOPR: return *opr.load_opr == *o.opr.load_opr;
-    case pairOPR: return *opr.pair_opr == *o.opr.pair_opr;
-    case applyOPR: return *opr.apply_opr == *o.opr.apply_opr;
-    case reduceOPR: return *opr.reduce_opr == *o.opr.reduce_opr;
-    default: return false;
-    }
-  }
-};
-
-bool compare_opr ( int x, int y ) {
-  return operations[x]->type > operations[y]->type;
-};
 
 int store_opr ( Opr* opr, const vector<int>* children,
                 void* coord, int cost, vector<int>* encoded_type ) {
@@ -277,6 +300,7 @@ int reduceOpr ( const vector<int>* s, bool valuep, int op,
   return loc;
 };
 
+// apply f to every task in the workflow starting with s using breadth-first search 
 void BFS ( const vector<int>* s, void(*f)(int) ) {
   for ( Opr* x: operations )
     x->visited = false;
@@ -316,14 +340,27 @@ void cache_data ( Opr* opr, const void* data ) {
   opr->cached = data;
 }
 
-int delete_array ( void* data, vector<int>* encoded_type, int loc ) {
+bool member ( int n, vector<int>* v ) {
+  return find(v->begin(),v->end(),n) != v->end();
+}
+
+int delete_array ( void* &data, vector<int>* encoded_type, int loc ) {
+  if (!delete_arrays)
+    return 0;
   switch ((*encoded_type)[loc]) {
   case 10: { // tuple
-    if ((*encoded_type)[loc+2] == 0)
+    if ((*encoded_type)[loc+1] == 2
+        && (*encoded_type)[loc+2] == 0
+        && (*encoded_type)[loc+3] == 10) {
+      tuple<int,void*>* x = data;
+      int l2 = delete_array(get<1>(*x),encoded_type,loc+3);
+      return l2;
+    }
+    if ((*encoded_type)[loc+1] > 0 && (*encoded_type)[loc+2] == 0)
       return loc+(*encoded_type)[loc+1]+2;
     else {
       switch ((*encoded_type)[loc+1]) {
-      case 0:
+      case 0: case 1:
         return loc+2;
       case 2: {
         tuple<void*,void*>* x = data;
@@ -339,21 +376,24 @@ int delete_array ( void* data, vector<int>* encoded_type, int loc ) {
       }
     }
   }
-  case 11:  // Vec
+  case 11:  // data block
     switch ((*encoded_type)[loc+1]) {
     case 0: {
       Vec<int>* x = data;
       delete x;
+      data = nullptr;
       return loc+2;
     }
     case 1: {
       Vec<long>* x = data;
       delete x;
+      data = nullptr;
       return loc+2;
     }
     case 3: {
       Vec<double>* x = data;
       delete x;
+      data = nullptr;
       return loc+2;
     }
     }
@@ -362,34 +402,156 @@ int delete_array ( void* data, vector<int>* encoded_type, int loc ) {
   }
 }
 
+// delete the cache of a task
 void delete_array ( int opr_id ) {
+  if (!delete_arrays)
+    return;
   Opr* opr = operations[opr_id];
-  if (opr->cached != NULL
-      && (opr->type == applyOPR || opr->type == reduceOPR)
-      && opr->encoded_type->size() > 0 ) {
-    info(0,"    delete block %d (%d/%d)",opr_id,block_count,block_created);
-    delete_array(opr->cached,opr->encoded_type,0);
-    opr->status = removed;
+  if (trace_delete)
+    cout << executor_rank << " " << "delete array " << opr_id << " "
+         << opr->status << " " << opr->cached << " " << opr->count << endl;
+  if (opr->cached != nullptr
+      && (opr->type == applyOPR || opr->type == reduceOPR) ) {
+    if (opr->status == locked) {
+      opr->status = zombie;
+      info("    postpone delete block %d",opr_id);
+    } else {
+      delete_array(opr->cached,opr->encoded_type,0);
+      opr->cached = nullptr;
+      info("    delete block %d (%d/%d)",opr_id,block_count,block_created);
+    }
+  }
+}
+
+void delete_completed_dependents ( int opr_id ) {
+  Opr* opr = operations[opr_id];
+  for ( int c: *opr->dependents ) {
+    Opr* copr = operations[c];
+    copr->count--;
+    if (trace_delete)
+      cout << executor_rank << " " << "decrement count " << c
+           << " " << copr->count << endl;
+    if (copr->count <= 0)
+      delete_array(c);
+  }
+}
+
+bool sends_msgs_only ( Opr* opr ) {
+  bool sends_msgs = true;
+  for ( int c: *opr->consumers )
+    sends_msgs = sends_msgs && operations[c]->node != opr->node;
+  return sends_msgs;
+}
+
+// delete the caches of the task and its descendants
+void delete_ready_dependents ( int opr_id ) {
+  Opr* opr = operations[opr_id];
+  if ((opr->cpu_cost > 0 || opr->node != executor_rank)
+      && (opr->type == applyOPR
+          || (opr->type == reduceOPR && !enable_partial_reduce))) {
+    if (trace_delete)
+      cout << executor_rank << " " << "delete ready dependents " << opr_id << endl;
+    delete_completed_dependents(opr_id);
   }
 }
 
 void delete_if_ready ( int opr_id ) {
   Opr* opr = operations[opr_id];
-  opr->count--;
-   if (opr->count <= 0) {
-     if (opr->type == pairOPR) {
-       delete_if_ready(opr->opr.pair_opr->x);
-       delete_if_ready(opr->opr.pair_opr->y);
-     } else if (opr->type == applyOPR && opr->encoded_type->size() == 0)
-              delete_if_ready(opr->opr.apply_opr->x);
-            else delete_array(opr_id);
-   }
+  if (opr->count <= 0 && !member(opr_id,exit_points)) {
+    if (trace_delete)
+      cout << executor_rank << " " << "delete if ready " << opr_id << endl;
+    delete_array(opr_id);
+  }
 }
 
-void check_caches ( int opr_id ) {
-  if (operations[opr_id]->encoded_type->size() > 0)
-    for ( int c: *operations[opr_id]->children )
-      delete_if_ready(c);
+vector<int>* set_dependents ( Opr* x ) {
+  vector<int>* ds = new vector<int>();
+  for ( int c: *x->children ) {
+    Opr* copr = operations[c];
+    if (copr->type != loadOPR
+        && (copr->cpu_cost > 0 || copr->node != executor_rank))
+      ds->push_back(c);
+    else if (copr->dependents != nullptr)
+      append(ds,copr->dependents);
+    else append(ds,set_dependents(copr));
+  }
+  if (ds->size() == 0) {
+    delete ds;
+    ds = empty_vector;
+  }
+  x->dependents = ds;
+  return ds;
+}
+
+vector<int>* get_dependents ( Opr* opr ) {
+  vector<int>* ds = new vector<int>();
+  for ( int c: *opr->children ) {
+    Opr* copr = operations[c];
+    if (copr->cpu_cost > 0 || copr->node != executor_rank
+        || sends_msgs_only(copr))
+      ds->push_back(c);
+    else append(ds,get_dependents(copr));
+  }
+  if (ds->size() == 0) {
+    delete ds;
+    return empty_vector;
+  } else return ds;
+}
+
+void initialize_opr ( Opr* x ) {
+  x->status = notReady;
+  x->cached = nullptr;
+  // a Load opr is cached in the coordinator too
+  if (isCoordinator() && x->type == loadOPR)
+    cache_data(x,loadBlocks[x->opr.load_opr->block]);
+  // initial count is the number of local consumers
+  x->count = 0;
+  if (x->node == executor_rank && (sends_msgs_only(x) || x->cpu_cost > 0))
+    x->dependents = get_dependents(x);
+  else x->dependents = empty_vector;
+  if (x->type == reduceOPR) {
+    // used for partial reduction
+    x->reduced_count = 0;
+    for ( int c: *x->opr.reduce_opr->s )
+      if (operations[c]->node == executor_rank)
+        x->reduced_count++;
+    if (x->node == executor_rank) {
+      vector<int> s;
+      for ( int c: *x->opr.reduce_opr->s ) {
+        int cnode = operations[c]->node;
+        if (cnode != executor_rank
+            && find(s.begin(),s.end(),cnode) == s.end())
+          s.push_back(cnode);
+      }
+      x->reduced_count += s.size();
+    }
+  }
+}
+
+void schedule_plan ( void* plan );
+
+void schedule ( void* plan ) {
+  auto time = MPI_Wtime();
+  tuple<void*,void*,vector<tuple<void*,int>*>*>* p = plan;
+  schedule_plan(plan);
+  for ( Opr* x: operations )
+    initialize_opr(x);
+  for ( Opr* x: operations )
+    for ( int c: *x->dependents )
+      operations[c]->count++;
+  if (trace && isCoordinator()) {
+    cout << "Plan:" << endl;
+    for ( int i = 0; i < operations.size(); i++ ) {
+      Opr* opr = operations[i];
+      if (trace_delete)
+        printf("%d    %d:%s at %d cost %d    %d %s\n",
+               executor_rank,i,sprint(opr).c_str(),opr->node,opr->cpu_cost,
+               opr->count,sprint(*opr->dependents).c_str());
+      else printf("    %d:%s at %d\n",i,sprint(opr).c_str(),opr->node);
+    }
+    printf("Scheduling time: %.3f secs\n",MPI_Wtime()-time);
+  }
+  barrier();
 }
 
 void* inMemEval ( int id, int tabs );
@@ -413,11 +575,11 @@ void* inMemEvalPair ( int lg, int tabs ) {
       if (operations[x]->int_index) {
         tuple<int,void*>* gtx = gx;
         xx = (operations[x]->type == pairOPR) ? gx : get<1>(*gtx);
-        return new tuple<int,void*>(get<0>(*gtx),new tuple(xx,yy));
+        return new tuple<int,void*>(get<0>(*gtx),new tuple<void*,void*>(xx,yy));
       } else {
         tuple<void*,void*>* gtx = gx;
         xx = (operations[x]->type == pairOPR) ? gx : get<1>(*gtx);
-        return new tuple<void*,void*>(get<0>(*gtx),new tuple(xx,yy));
+        return new tuple<void*,void*>(get<0>(*gtx),new tuple<void*,void*>(xx,yy));
       }
     }
     default: return inMemEval(lg,tabs+1);
@@ -428,8 +590,8 @@ void* inMemEval ( int id, int tabs ) {
   Opr* e = operations[id];
   if (hasCachedValue(e))
     return e->cached;
-  info(tabs,"*** %d: %d %s %p",tabs,id,oprNames[e->type],e);
-  void* res = NULL;
+  info("*** %d: %d %s %p",tabs,id,oprNames[e->type],e);
+  void* res = nullptr;
   switch (e->type) {
     case loadOPR:
       res = loadBlocks[e->opr.load_opr->block];
@@ -451,13 +613,13 @@ void* inMemEval ( int id, int tabs ) {
           sv->push_back(v);
         }
         void*(*op)(tuple<void*,void*>*) = functions[e->opr.reduce_opr->op];
-        void* av = NULL;
+        void* av = nullptr;
         for ( tuple<int,void*>* v: *sv ) {
-          if (av == NULL)
+          if (av == nullptr)
             av = get<1>(*v);
           else av = op(new tuple<void*,void*>(av,get<1>(*v)));
         }
-        res = new tuple(get<0>(*(*sv)[0]),av);
+        res = new tuple<int,void*>(get<0>(*(*sv)[0]),av);
       } else {
         vector<tuple<void*,void*>*>* sv = new vector<tuple<void*,void*>*>();
         for ( int x: *rs ) {
@@ -465,18 +627,18 @@ void* inMemEval ( int id, int tabs ) {
           sv->push_back(v);
         }
         void*(*op)(tuple<void*,void*>*) = functions[e->opr.reduce_opr->op];
-        void* av = NULL;
+        void* av = nullptr;
         for ( tuple<void*,void*>* v: *sv ) {
-          if (av == NULL)
+          if (av == nullptr)
             av = get<1>(*v);
           else av = op(new tuple<void*,void*>(av,get<1>(*v)));
         }
-        res = new tuple(get<0>(*(*sv)[0]),av);
+        res = new tuple<void*,void*>(get<0>(*(*sv)[0]),av);
       }
       break;
     }
   }
-  info(tabs,"*-> %d: %s %p",tabs,oprNames[e->type],res);
+  info("*-> %d: %s %p",tabs,oprNames[e->type],res);
   e->cached = res;
   e->status = completed;
   return res;
@@ -491,7 +653,7 @@ void* evalTopDown ( void* plan ) {
     tuple<void*,void*>* v = inMemEval(get<1>(*d),0);
     res->push_back(v);
   }
-  return new tuple(get<0>(*p),get<1>(*p),res);
+  return new tuple<void*,void*,void*>(get<0>(*p),get<1>(*p),res);
 }
 
 void* compute ( int lg_id );
@@ -499,7 +661,7 @@ void* compute ( int lg_id );
 void* computePair ( int lg_id ) {
   Opr* lg = operations[lg_id];
   if (hasCachedValue(lg)) {
-    assert(lg->cached !- NULL);
+    assert(lg->cached != nullptr);
     return lg->cached;
   }
   switch (lg->type) {
@@ -521,26 +683,27 @@ void* computePair ( int lg_id ) {
       if (operations[x]->int_index) {
         tuple<int,void*>* gtx = gx;
         xx = (operations[x]->type == pairOPR) ? gx : get<1>(*gtx);
-        data = new tuple<int,void*>(get<0>(*gtx),new tuple(xx,yy));
+        data = new tuple<int,void*>(get<0>(*gtx),new tuple<void*,void*>(xx,yy));
       } else {
         tuple<void*,void*>* gtx = gx;
         xx = (operations[x]->type == pairOPR) ? gx : get<1>(*gtx);
-        data = new tuple<void*,void*>(get<0>(*gtx),new tuple(xx,yy));
+        data = new tuple<void*,void*>(get<0>(*gtx),new tuple<void*,void*>(xx,yy));
       }
       cache_data(lg,data);
       lg->status = completed;
       return data;
     }
     default:
-      assert(lg->cached !- NULL);
+      assert(lg->cached != nullptr);
       return lg->cached;
   }
 }
 
 void* compute ( int opr_id ) {
   Opr* opr = operations[opr_id];
-  info(0,"*** computing %d: %s %p",opr_id,oprNames[opr->type],opr);
-  void* res = NULL;
+  info("*** computing %d:%s",opr_id,oprNames[opr->type]);
+  void* res = nullptr;
+try {
   switch (opr->type) {
     case loadOPR:
       opr->status = computed;
@@ -562,90 +725,231 @@ void* compute ( int opr_id ) {
       vector<int>* rs = opr->opr.reduce_opr->s;
       void*(*op)(tuple<void*,void*>*) = functions[opr->opr.reduce_opr->op];
       if (operations[(*rs)[0]]->int_index) {
-        void* acc = NULL;
+        void* acc = nullptr;
         int key = 0;
         for ( int x: *rs ) {
           tuple<int,void*>* v = operations[x]->cached;
-          if (acc == NULL) {
+          if (acc == nullptr) {
             key = get<0>(*v);
             acc = get<1>(*v);
           } else acc = op(new tuple<void*,void*>(get<1>(*v),acc));
         }
         opr->status = completed;
-        res = new tuple(key,acc);
+        res = new tuple<int,void*>(key,acc);
         cache_data(opr,res);
       } else {
-        void* acc = NULL;
+        void* acc = nullptr;
         void* key = 0;
         for ( void* x: *rs ) {
           tuple<void*,void*>* v = operations[x]->cached;
-          if (acc == NULL) {
+          if (acc == nullptr) {
             key = get<0>(*v);
             acc = get<1>(*v);
           } else acc = op(new tuple<void*,void*>(get<1>(*v),acc));
         }
         opr->status = completed;
-        res = new tuple(key,acc);
+        res = new tuple<void*,void*>(key,acc);
         cache_data(opr,res);
       }
       break;
     }
   }
-  info(0,"*-> result of opr %d: %s %p",opr_id,oprNames[opr->type],res);
+  info("*-> result of opr %d:%s  %s",opr_id,
+       oprNames[opr->type],print_block(opr).c_str());
+} catch ( const exception &ex ) {
+  info("*** fatal error: computing the operation %d",opr_id);
+  abort();
+}
   return res;
 }
 
 void enqueue_ready_operations ( int opr_id );
 
-void enqueue_reduce_opr ( int opr_id, int c ) {
-  Opr* opr = operations[opr_id];  // child of copr
-  Opr* copr = operations[c];      // ReduceOpr
-  // partial reduce opr inside the copr ReduceOpr
-  void*(*op)(tuple<void*,void*>*) = functions[copr->opr.reduce_opr->op];
-  if (copr->cached == NULL)
-    copr->cached = opr->cached;
-  else if (operations[(*copr->opr.reduce_opr->s)[0]]->int_index) {
-    tuple<int,void*>* x = copr->cached;
-    tuple<int,void*>* y = opr->cached;
-    get<1>(*x) = op(new tuple<void*,void*>(get<1>(*x),get<1>(*y)));
-    delete_if_ready(opr_id);
-  } else {
-    tuple<void*,void*>* x = copr->cached;
-    tuple<void*,void*>* y = opr->cached;
-    get<1>(*x) = op(new tuple<void*,void*>(get<1>(*x),get<1>(*y)));
-    delete_if_ready(opr_id);
+void delete_reduce_input ( int opr_id ) {
+  Opr* opr = operations[opr_id];
+  opr->count--;
+  if (opr->count <= 0) {
+    if (opr->cpu_cost > 0) {
+      if (trace_delete)
+        cout << executor_rank << " " << "delete reduce input " << opr_id << endl;
+      delete_array(opr_id);
+    }
+    // needed because it is not done in enqueue_opr
+    delete_completed_dependents(opr_id);
   }
-  copr->reduced_count--;
-  if (copr->reduced_count == 0) {
-    info(0,"    completed reduce of opr %d",c);
-    copr->status = computed;
-    enqueue_ready_operations(c);
+}
+
+void delete_reduce_input ( int opr_id, int rid ) {
+  Opr* reduce_opr = operations[rid];
+  // delete the first reduced
+  if (delete_arrays && reduce_opr->first_reduced_input >= 0) {
+    info("    delete first input block %d of %d",
+         reduce_opr->first_reduced_input,rid);
+    delete_reduce_input(reduce_opr->first_reduced_input);
+    reduce_opr->first_reduced_input = -1;
+  }
+  delete_reduce_input(opr_id);
+}
+
+void enqueue_reduce_opr ( int opr_id, int rid ) {
+  Opr* opr = operations[opr_id];      // child of reduce_opr
+  Opr* reduce_opr = operations[rid];  // Reduce operation
+  // partial reduce inside reduce opr
+  void*(*op)(tuple<void*,void*>*) = functions[reduce_opr->opr.reduce_opr->op];
+  if (reduce_opr->cached == nullptr) {
+    // first reduction (may delete later)
+    info("    set reduce opr %d to the first input opr %d",rid,opr_id);
+    reduce_opr->cached = opr->cached;
+    reduce_opr->first_reduced_input = opr_id;
+  } else if (reduce_opr->opr.reduce_opr->valuep)
+    // total aggregation
+    reduce_opr->cached = op(new tuple<void*,void*>(reduce_opr->cached,opr->cached));
+  else if (operations[(*reduce_opr->opr.reduce_opr->s)[0]]->int_index) {
+    tuple<int,void*>* x = reduce_opr->cached;
+    tuple<int,void*>* y = opr->cached;
+    // merge the current state with the partially reduced data
+    info("    merge reduce opr %d with input opr %d",rid,opr_id);
+    reduce_opr->cached = new tuple<int,void*>(get<0>(*x),op(new tuple<void*,void*>(get<1>(*x),get<1>(*y))));
+    // when reduce_opr is done with input opr => check if we can delete opr
+    delete_reduce_input(opr_id,rid);
+  } else {
+    tuple<void*,void*>* x = reduce_opr->cached;
+    tuple<void*,void*>* y = opr->cached;
+    // merge the current state with the partially reduced data
+    info("    merge reduce opr %d with input opr %d",rid,opr_id);
+    reduce_opr->cached = new tuple<void*,void*>(get<0>(*x),op(new tuple<void*,void*>(get<1>(*x),get<1>(*y))));
+    // when reduce_opr is done with input opr => check if we can delete opr
+    delete_reduce_input(opr_id,rid);
+  }
+  reduce_opr->reduced_count--;
+  if (reduce_opr->reduced_count == 0) {
+    if (reduce_opr->node == executor_rank) {
+      // completed final reduce
+      info("    completed reduce opr %d",rid);
+      reduce_opr->status = computed;
+      enqueue_ready_operations(rid);
+    } else {
+      // completed local reduce => send it to the reduce owner
+      info("    sending partial reduce result of opr %d to %d",
+           rid,reduce_opr->node);
+      send_data(reduce_opr->node,reduce_opr->cached,rid,1);
+      delete_array(rid);
+    }
+    if (delete_arrays && reduce_opr->first_reduced_input >= 0) {
+      info("    delete first input block %d of %d",
+           reduce_opr->first_reduced_input,rid);
+      delete_reduce_input(reduce_opr->first_reduced_input);
+      reduce_opr->first_reduced_input = -1;
+    }
+  }
+}
+
+void delete_after_send ( int opr_id ) {
+  Opr* opr = operations[opr_id];
+  opr->count--;
+  if (sends_msgs_only(opr) && opr->count <= 0) {
+    if (opr->cpu_cost > 0) {
+      if (trace_delete)
+        cout << executor_rank << " " << "delete self " << opr_id << endl;
+      delete_array(opr_id);
+    } else delete_completed_dependents(opr_id);
   }
 }
 
 // After opr is computed, check its consumers to see if anyone is ready to enqueue
 void enqueue_ready_operations ( int opr_id ) {
   Opr* opr = operations[opr_id];
+  if (opr->node == executor_rank) {
+    // send the opr cached result to the non-local consumers (must be done first)
+    vector<int> nodes_to_send_data;
+    for ( int c: *opr->consumers ) {
+      Opr* copr = operations[c];
+      if (copr->node != executor_rank
+          && copr->node >= 0
+          && (!enable_partial_reduce
+              || copr->type != reduceOPR)
+          && !member(copr->node,&nodes_to_send_data))
+        nodes_to_send_data.push_back(copr->node);
+    }
+    for ( int c: nodes_to_send_data ) {
+      opr->count++;
+      send_queue.push(tuple<int,int>(c,opr_id));
+    }
+  }
   for ( int c: *opr->consumers ) {
     Opr* copr = operations[c];
-    switch (copr->type) {
-    case reduceOPR: {
-      enqueue_reduce_opr(opr_id,c);
-      break;
-    }
-    default:
-      if (!hasCachedValue(copr)) {
-        bool cv = true;
-        for ( int c: *copr->children )
-          cv = cv && hasCachedValue(operations[c]);
-        if (cv && copr->status != ready) {
-          copr->status = ready;
-          ready_queue.push(c);
+    if (copr->node >= 0) {
+      switch (copr->type) {  // partial reduce
+      case reduceOPR:
+        if (enable_partial_reduce) {
+          enqueue_reduce_opr(opr_id,c);
+          return;
+        }
+      default:
+        // enqueue the local consumers that are ready
+        if (copr->node == executor_rank
+            && !hasCachedValue(copr)) {
+          bool cv = true;
+          for ( int c: *copr->children )
+            cv = cv && hasCachedValue(operations[c]);
+          if (cv && copr->status == notReady) {
+            copr->status = ready;
+            ready_queue.push(c);
+          }
         }
       }
     }
   }
+  // delete the completed descendants
+  delete_ready_dependents(opr_id);
   opr->status = completed;
+}
+
+// exit when the queues of all executors are empty and exit points have been computed
+bool exit_poll () {
+  bool b = ready_queue.empty() && send_queue.empty();
+  for ( int x: *exit_points )
+    b = b && (operations[x]->node != executor_rank
+              || hasCachedValue(operations[x]));
+  return wait_all(b);
+}
+
+bool stop_sender = false;
+extern bool stop_receiver;
+
+void run_sender () {
+  while (!stop_sender) {
+    if (!send_queue.empty()) {
+      auto x = send_queue.front();
+      send_queue.pop();
+      int opr_id = get<1>(x);
+      Opr* opr = operations[opr_id];
+      send_data(get<0>(x),opr->cached,opr_id,0);
+      delete_after_send(opr_id);
+    } else this_thread::sleep_for(chrono::milliseconds(1));
+  }
+}
+
+void work () {
+  bool exit = false;
+  int count = 0;
+  while (!exit) {
+    count = (count+1)%100;
+    if (count == 0)
+      exit = exit_poll();
+    float t = MPI_Wtime();
+    if (!ready_queue.empty()) {
+      int opr_id = ready_queue.top();
+      ready_queue.pop();
+      compute(opr_id);
+      enqueue_ready_operations(opr_id);
+      t = MPI_Wtime();
+    } else if (MPI_Wtime()-t > 10.0) {
+      info("... starving");
+      t = MPI_Wtime();
+    }
+  }
+  info("Executor %d has finished execution",executor_rank);
 }
 
 vector<int>* entry_points ( const vector<int>* es ) {
@@ -653,65 +957,96 @@ vector<int>* entry_points ( const vector<int>* es ) {
   BFS(es,
       [] ( int c ) {
         Opr* copr = operations[c];
-        if (copr->type == loadOPR) {
-          bool member = false;
-          for ( int x: *b )
-            member = member || x == c;
-          if (!member)
+        if (copr->type == loadOPR && copr->node == executor_rank)
+          if (!member(c,b))
             b->push_back(c);
-        }
       });
   return b;
 }
 
-void initialize_opr ( Opr* x ) {
-  x->status = notReady;
-  x->cached = NULL;
-  if (x->type == loadOPR)
-    cache_data(x,loadBlocks[x->opr.load_opr->block]);
-  x->count = 0;
-  for ( int c: *x->consumers )
-    x->count++;
-  if (x->type == reduceOPR) {
-    x->reduced_count = 0;
-    for ( int c: *x->opr.reduce_opr->s )
-      x->reduced_count++;
-  }
-}
-
 void* eval ( void* plan ) {
-  if (trace) {
-    cout << "Plan:" << endl;
-    for ( int i = 0; i < operations.size(); i++ ) {
-      Opr* opr = operations[i];
-      cout << "   " << i << ":" << oprNames[opr->type] << "(";
-      for ( int c: *opr->children )
-        cout << " " << c;
-      cout << " ) consumers: (";
-      for ( int c: *opr->consumers )
-        cout << " " << c;
-      cout << " )" << endl;
-    }
-  }
+  auto time = MPI_Wtime();
   tuple<void*,void*,vector<tuple<void*,int>*>*>* p = plan;
   exit_points = new vector<int>();
-  for ( Opr* x: operations )
-    initialize_opr(x);
   for ( auto x: *get<2>(*p) )
     exit_points->push_back(get<1>(*x));
+  if (trace && isCoordinator())
+    printf("Exit points: %s\n",sprint(*exit_points).c_str());
   vector<int>* entries = entry_points(exit_points);
   for ( int x: *entries )
     ready_queue.push(x);
-  while (!ready_queue.empty()) {
-    int opr_id = ready_queue.top();
-    ready_queue.pop();
-    compute(opr_id);
-    enqueue_ready_operations(opr_id);
-    if (operations[opr_id]->type != pairOPR)
-      check_caches(opr_id);
-  }
+  info("Queue on %d: %s",executor_rank,sprint(*entries).c_str());
+  barrier();
+  thread rrp(run_receiver);
+  thread rsp(run_sender);
+  work();
+  barrier();
+  stop_receiver = true;
+  stop_sender = true;
+  kill_receiver();
+  rrp.join();
+  rsp.join();
   vector<tuple<void*,void*>*>* res = new vector<tuple<void*,void*>*>();
   for ( tuple<void*,int>* d: *get<2>(*p) )
-    res->push_back(new tuple(get<0>(*d),operations[get<1>(*d)]->cached));
-  return new tuple(get<0>(*p),get<1>(*p),res);
+    res->push_back(new tuple<void*,void*>(get<0>(*d),operations[get<1>(*d)]->cached));
+  if (isCoordinator())
+    info("Evaluation time: %.3f secs",MPI_Wtime()-time);
+  info("Executor %d:  final blocks: %d,  max blocks: %d,  created blocks: %d",
+       executor_rank,block_count,max_blocks,block_created);
+  if (trace_delete) // unclaimed blocks
+    for ( int i = 0; i < operations.size(); i++ ) {
+      Opr* opr = operations[i];
+      if (opr->cached != nullptr && opr->type != loadOPR
+          && ((opr->type == applyOPR && opr->cpu_cost > 0)
+              || opr->type == reduceOPR
+              || opr->node != executor_rank)
+          && !member(i,exit_points))
+        cout << "Unclaimed block at " << executor_rank << ": "
+             << i << ":" << sprint(opr) << endl;
+    }
+  return new tuple<void*,void*,void*>(get<0>(*p),get<1>(*p),res);
+}
+
+void* evalOpr ( int opr_id ) {
+  auto plan = new tuple<int,nullptr_t,vector<tuple<int,int>*>*>(1,nullptr,
+                          new vector<tuple<int,int>*>({new tuple<int,int>(0,opr_id)}));
+  schedule(plan);
+  eval(plan);
+  Opr* opr = operations[opr_id];
+  opr->status = computed;
+  tuple<void*,void*>* res = opr->cached;
+  return get<1>(*res);
+}
+
+void* collect ( void* plan ) {
+  tuple<void*,void*,vector<tuple<void*,int>*>*>* p = plan;
+  vector<tuple<void*,int>*>* es = get<2>(*p);
+  if (isCoordinator()) {
+    info("Collecting the task blocks at the coordinator");
+    stop_receiver = false;
+    thread rrp(run_receiver);
+    bool b = false;
+    while (!b) {
+      this_thread::sleep_for(chrono::milliseconds(100));
+      b = true;
+      for ( auto x: *es )
+        b = b && hasCachedValue(operations[get<1>(*x)]);
+    }
+    vector<void*>* blocks = new vector<void*>();
+    for ( auto x: *es )
+      blocks->push_back(operations[get<1>(*x)]->cached);
+    stop_receiver = true;
+    kill_receiver();
+    rrp.join();
+    barrier();
+    return new tuple<void*,void*,void*>(get<0>(*p),get<1>(*p),blocks);
+  } else {
+    for ( auto x: *es ) {
+      Opr* opr = operations[get<1>(*x)];
+      if (opr->node == executor_rank)
+        send_data(getCoordinator(),opr->cached,get<1>(*x),2);
+    }
+    barrier();
+    return new tuple<void*,void*,void*>(get<0>(*p),get<1>(*p),nullptr);
+  }
 }

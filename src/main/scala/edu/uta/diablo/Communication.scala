@@ -1,5 +1,5 @@
 /*
- * Copyright © 2023 University of Texas at Arlington
+ * Copyright © 2024-2024 University of Texas at Arlington
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -277,7 +277,7 @@ object Executor {
  
   def broadcast_plan () {
     try {
-      if (Communication.isCoordinator()) {
+      if (isCoordinator()) {
         val bs = new ByteArrayOutputStream(10000)
         val os = new ObjectOutputStream(bs)
         os.writeInt(loadBlocks.length)
@@ -327,7 +327,7 @@ object Executor {
   def broadcast ( value: Any ): Any = {
     var result = value
     try {
-      if (Communication.isCoordinator()) {
+      if (isCoordinator()) {
         val bs = new ByteArrayOutputStream(10000)
         val os = new ObjectOutputStream(bs)
         os.writeObject(value)
@@ -355,7 +355,7 @@ object Executor {
   }
 
   def broadcast_exit_points ( es: List[OprID] ): List[OprID] = {
-    exit_points = broadcast(if (Communication.isCoordinator()) es else null).asInstanceOf[List[OprID]]
+    exit_points = broadcast(if (isCoordinator()) es else null).asInstanceOf[List[OprID]]
     exit_points
   }
 

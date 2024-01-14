@@ -1,5 +1,5 @@
 /*
- * Copyright © 2023 University of Texas at Arlington
+ * Copyright © 2023-2024 University of Texas at Arlington
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,12 +15,15 @@
  */
 
 #include "tensor.h"
+#include "comm.h"
 
 extern vector<void*(*)(void*)> functions;
 
 vector<int>* range ( long n1, long n2, long n3 );
 
-bool inRange ( long i, long n1, long n2, long n3 );
+inline bool inRange ( long i, long n1, long n2, long n3 ) {
+  return i>=n1 && i<= n2 && (i-n1)%n3 == 0;
+}
 
 int loadOpr ( void* block, void* coord, vector<int>* encoded_type );
 int loadOpr ( void* block, int coord, vector<int>* encoded_type );
@@ -36,4 +39,10 @@ int reduceOpr ( const vector<int>* s, bool valuep, int op, int coord, int cost, 
 
 void* evalTopDown ( void* plan );
 
+void schedule ( void* plan );
+
 void* eval ( void* plan );
+
+void* evalOpr ( int opr_id );
+
+void* collect ( void* plan );
