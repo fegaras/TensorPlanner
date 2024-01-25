@@ -4,8 +4,8 @@ object Test {
   def main ( args: Array[String] ) {
 
     parami(block_dim_size,10)
-    param(asynchronous,true)
-    PlanGenerator.trace = true
+    //param(asynchronous,true)
+    //PlanGenerator.trace = true
     //Runtime.enable_gc = true
     //Runtime.enable_partial_reduce = false
 
@@ -40,13 +40,15 @@ object Test {
       var Cz = tensor*(N,M)[ ((i,j),4.5) | i <-0..(N-1), j<-0..(M-1) ];
       //var V = tensor*(N)[ (i,2.3) | i <-0..(N-1) ];
 
+      Az = Az@(Bz+Cz);
+Az;
       //tensor*(N,M)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
 
 
       //Az = Az+Bz-3.5*Cz;
       //Az
 
-      tensor*(N)[ (i,+/v) | (i,v) <- V, ((ii,j),a) <- Az, ii==i, let v = a+v, group by i ];
+      //tensor*(N)[ (i,+/v) | (i,v) <- V, ((ii,j),a) <- Az, ii==i, let v = a+v, group by i ];
 
       //tensor*(N,M)[ ((i,j),v+a) | (i,v) <- V, ((ii,j),a) <- Az, ii==i ];
 

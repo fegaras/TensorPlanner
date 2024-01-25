@@ -1,20 +1,8 @@
 #/bin/bash
 
-DIABLO_HOME="$(cd `dirname $0`/..; pwd -P)"
-MPI_HOME=$HOME/openmpi
-
-export PATH="$MPI_HOME/bin:$PATH"
-export LD_LIBRARY_PATH="$MPI_HOME/lib/:$LD_LIBRARY_PATH"
-
-if [ -z ${SPARK_HOME} ]; then
-   SPARK_HOME=~/spark-3.2.1-bin-hadoop3.2
-fi
-
 export HADOOP_CONF_DIR=
-
-jar cf test.jar -C classes .
 
 # max available memory in GB
 mem=`awk '/MemFree/ { printf "%.0f", $2/1024/1024 }' /proc/meminfo`
 
-${SPARK_HOME}/bin/spark-submit --jars ${DIABLO_HOME}/lib/diablo.jar,${DIABLO_HOME}/lib/mpi.jar --class $1 --driver-memory ${mem}g --executor-memory ${mem}g --conf spark.logLineage=true --conf "spark.executor.extraJavaOptions='-Xss512m'" --driver-java-options "-Xss512m" --master local[*] test.jar $2 $3 $4 $5 $6 $7
+${SPARK_HOME}/bin/spark-submit --jars ${DIABLO_HOME}/lib/diablo.jar,${MPI_HOME}/lib/mpi.jar --class $1 --driver-memory ${mem}g --executor-memory ${mem}g --conf spark.logLineage=true --conf "spark.executor.extraJavaOptions='-Xss512m'" --driver-java-options "-Xss512m" --master local[*] test.jar $2 $3 $4 $5 $6 $7

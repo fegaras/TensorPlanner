@@ -18,7 +18,7 @@ import scala.annotation.tailrec
 
 object Optimizer {
   import AST._
-  import Normalizer.{normalizeAll,comprVars,inverse}
+  import Normalizer._
   import ComprehensionTranslator.{isBlockTensor,isTensor,qual_vars}
 
   /* general span for comprehensions; if a qualifier matches, split there and continue with cont */
@@ -173,6 +173,11 @@ object Optimizer {
                     => matchQ(s,{ case LetBinding(p,u) => u == e; case _ => false },
                                 { case lb::_ => Some(List(c,lb))
                                   case _ => None })
+                  case _ => None })
+
+  def unfoldSimpleLet ( qs: List[Qualifier] ): Option[List[Qualifier]]
+    = matchQ(qs,{ case LetBinding(p,Var(_)) => true; case _ => false },
+                { case lb::_ => Some(List(lb))
                   case _ => None })
 
   /* true if the group-by key is a constant; then there will be just one group */
@@ -332,6 +337,15 @@ object Optimizer {
                             lb@LetBinding(p,w)))
                => val nqs = replace(lb,LetBinding(p,Var(v)),qs)
                   optimize(Comprehension(h,nqs))
+             case _ => apply(e,optimize)
+           }
+      case Comprehension(h,qs)
+        if false && { QLcache = unfoldSimpleLet(qs); QLcache.nonEmpty }
+        => // not nedded (unfold a let-binding with simple domain)
+           QLcache match {
+             case Some(List(lb@LetBinding(p,u)))
+               => optimize(substE(Comprehension(h,replace(lb,Predicate(BoolConst(true)),qs)),
+                                  bindEnv(p,u)))
              case _ => apply(e,optimize)
            }
       case Comprehension(h,qs)

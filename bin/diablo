@@ -1,22 +1,6 @@
 #/bin/bash
 
-if [ -z ${DIABLO_HOME} ]; then
-  DIABLO_HOME="$(cd `dirname $0`/..; pwd -P)"
-fi
-
-if [ -z ${SPARK_HOME} ]; then
-   SPARK_HOME=~/spark-3.2.1-bin-hadoop3.2
-fi
-
-JARS=.:${DIABLO_HOME}/lib/diablo.jar:${DIABLO_HOME}/lib/mpi.jar
-for I in ${SPARK_HOME}/jars/*.jar; do
-    JARS=${JARS}:$I
-done
-for I in ${SPARK_HOME}/lib/*.jar; do
-    JARS=${JARS}:$I
-done
-
-block_size=10
+block_size=1000
 
 echo "import edu.uta.diablo._
 object Test {
@@ -35,6 +19,4 @@ echo "\"\"\")
 
 scalac -d classes -cp ${JARS} cxxgen.sc >cxxgen.log
 
-#export OMPI_CXX=g++-10
-
-mpic++ -O3 -DNDEBUG cxxgen.cpp -fopenmp -I${DIABLO_HOME}/include -L${DIABLO_HOME}/lib -ldiablo
+mpic++ -O3 -I${GC_HOME}/include -DNDEBUG cxxgen.cpp -fopenmp -I${DIABLO_HOME}/include -L${DIABLO_HOME}/lib -ldiablo ${GC_HOME_LIB}/libgc.so

@@ -1,10 +1,6 @@
 #/bin/bash
 
-DIABLO_HOME="$(cd `dirname $0`/..; pwd -P)"
-
-MPI_HOME=$HOME/openmpi
-
-export LD_LIBRARY_PATH="$MPI_HOME/lib/:$LD_LIBRARY_PATH"
+../setup.sh
 
 # max available memory in GB
 mem=`awk '/MemFree/ { printf "%.0f", $2/1024/1024 }' /proc/meminfo`

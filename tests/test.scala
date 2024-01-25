@@ -36,15 +36,15 @@ object Test {
 
       Az = [ ((i,j),m+n) | ((i,j),m) <= Az, ((ii,jj),n) <= Bz, ii==i, jj==j ];
 
-      Az = [ ((i,j),m+n+k) | ((i,j),m) <= Az, ((ii,jj),n) <= Bz, ((iii,jjj),k) <- Cz, ii==i, jj==j, iii==i, jjj==j ];
+      //Az = [ ((i,j),m+n+k) | ((i,j),m) <= Az, ((ii,jj),n) <= Bz, ((iii,jjj),k) <- Cz, ii==i, jj==j, iii==i, jjj==j ];
 
-      Az = [ ((i,j),+/v) | ((i,k),a) <= Az, ((kk,l),b) <= Bz, ((ll,j),c) <- Cz, kk==k, ll==l, let v = a*b*c, group by (i,j) ];
+      //Az = [ ((i,j),+/v) | ((i,k),a) <= Az, ((kk,l),b) <= Bz, ((ll,j),c) <- Cz, kk==k, ll==l, let v = a*b*c, group by (i,j) ];
 
       // slicing
-      var D = Az[12:19,5:11:2];
+      //var D = Az[12:19,5:11:2];
 
       // NumPy-style - @ is matrix-matrix multiplication
-      Az = (Az-Cz)@(Bz*2+3)@(Cz*Az-1);
+      //Az = (Az-Cz)@(Bz*2+3)@(Cz*Az-1);
 
       // rotate a matrix
       Az = [ (((i+1)%N,j),a) | ((i,j),a) <- Az ];
@@ -55,14 +55,14 @@ object Test {
         for i = 0, N-1 do
             for j = 0, M-1 do
                Cz[i,j] = Az[i,j]+Bz[i,j];
-
+/*
         for i = 0, N-1 do
             for j = 0, M-1 do {
                Cz[i,j] = 0.0;
                for k = 0, N-1 do
                   Cz[i,j] += Az[i,k]*Bz[k,j];
             };
-
+*/
       for i = 0, 20 do
          Az = [ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
 

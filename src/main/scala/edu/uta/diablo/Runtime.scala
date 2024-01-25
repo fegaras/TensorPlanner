@@ -232,7 +232,7 @@ object Runtime {
   // garbage-collect the opr block
   def gc ( opr_id: OprID ) {
     val opr = operations(opr_id)
-    if (enable_gc && opr.cached != null) {
+    if (enable_gc && opr.cached != null && !opr.isInstanceOf[LoadOpr]) {
       if (opr.status == locked)
         opr.status = zombie
       else {
@@ -240,7 +240,8 @@ object Runtime {
                +opr_id+" at exec "+executor_rank)
           stats.cached_blocks -= 1
           opr.status = removed
-          opr.cached = null   // make the cached block available to the garbage collector
+          // make the cached block available to the garbage collector
+          opr.cached = null
       }
     }
   }
@@ -256,44 +257,53 @@ object Runtime {
     }
   }
 
-  def enqueue_reduce_opr ( opr_id: OprID, c: OprID ) {
-    val opr = operations(opr_id)  // child of copr
-    val copr = operations(c)      // ReduceOpr
-    copr match {
+  def delete_reduce_input ( opr_id: OprID ) {
+    val opr = operations(opr_id)
+    opr.count -= 1
+    if (opr.count <= 0)
+      gc(opr_id)
+  }
+
+  def enqueue_reduce_opr ( opr_id: OprID, rid: OprID ) {
+    val opr = operations(opr_id)      // child of ReduceOpr
+    val reduce_opr = operations(rid)  // ReduceOpr
+    reduce_opr match {
       case ReduceOpr(s,valuep,fid)  // partial reduce
         if enable_partial_reduce
         => val op = functions(fid).asInstanceOf[((Any,Any))=>Any]
-           // partial reduce opr inside the copr ReduceOpr
-           if (copr.cached == null) {
+           // partial reduce opr inside the ReduceOpr
+           if (reduce_opr.cached == null) {
              stats.cached_blocks += 1
              stats.max_cached_blocks = Math.max(stats.max_cached_blocks,
                                                 stats.cached_blocks)
-             copr.cached = opr.cached
+             reduce_opr.cached = opr.cached
+             delete_reduce_input(opr_id)
            } else if (valuep)
                     // total aggregation
-                    copr.cached = op((copr.cached,opr.cached))
-             else { val x = copr.cached.asInstanceOf[(Any,Any)]
+                    reduce_opr.cached = op((reduce_opr.cached,opr.cached))
+             else { val x = reduce_opr.cached.asInstanceOf[(Any,Any)]
                     val y = opr.cached.asInstanceOf[(Any,Any)]
                     // merge the current state with the partially reduced data
-                    copr.cached = (x._1,op((x._2,y._2)))
+                    reduce_opr.cached = (x._1,op((x._2,y._2)))
+                    delete_reduce_input(opr_id)
                   }
-           copr.reduced_count -= 1
-           if (copr.reduced_count == 0) {
-             if (copr.node == executor_rank) {
+           reduce_opr.reduced_count -= 1
+           if (reduce_opr.reduced_count == 0) {
+             if (reduce_opr.node == executor_rank) {
                // completed ReduceOpr
-               info("    completed reduce of opr "+c+" at "+executor_rank)
+               info("    completed reduce of opr "+rid+" at "+executor_rank)
                stats.reduce_operations += 1
-               copr.status = computed
-               enqueue_ready_operations(c)
+               reduce_opr.status = computed
+               enqueue_ready_operations(rid)
              } else {
                // completed local reduce => send it to the reduce owner
-               info("    sending partial reduce result of opr "+c+" from "
-                    +executor_rank+" to "+copr.node)
-               send_data(List(copr.node),copr.cached,c,1)
-               gc(c)
+               info("    sending partial reduce result of opr "+rid+" from "
+                    +executor_rank+" to "+reduce_opr.node)
+               send_data(List(reduce_opr.node),reduce_opr.cached,rid,1)
+               gc(rid)
              }
            }
-           // copr is done with opr => check if we can GC opr
+           // reduce_opr is done with opr => check if we can GC opr
            opr.count -= 1
            if (opr.count <= 0)
              gc(opr_id)
@@ -330,16 +340,18 @@ object Runtime {
              if (copr.node == executor_rank && copr.status == notReady
                  && !hasCachedValue(copr)
                  && children(copr).map(operations(_)).forall(hasCachedValue)
-                 && !ready_queue.contains(c))
+                 && !ready_queue.contains(c)) {
+               copr.status = ready
                this.synchronized { ready_queue.offer(c) }
+             }
       }
     }
     // if there is no consumer on the same node, garbage collect the task cache
     if (opr.node == executor_rank && opr.consumers.length > 0
-//&& !exit_points.contains(opr_id)
+        && !exit_points.contains(opr_id)
         && opr.consumers.forall( c => operations(c).node != executor_rank ))
       gc(opr_id)
-    if (opr.status != locked)
+    if (opr.status != locked && opr.status != zombie)
       opr.status = completed
   }
 
@@ -387,12 +399,11 @@ object Runtime {
           val opr = operations(opr_id)
           send_data(dest,opr.cached,opr_id,0)
           if (opr.status == zombie) {
-            info("    delayed discard the cached block of "
-                 +opr_id+" at exec "+executor_rank)
             stats.cached_blocks -= 1
-            opr.status = removed
-            opr.cached = null     // allow gc to reclaim it
-          }
+            opr.status = computed
+            gc(opr_id)
+          } else if (opr.status == locked)
+            opr.status = computed
         } else Thread.sleep(1)
       }
     }
@@ -454,12 +465,15 @@ object Runtime {
     barrier()
     receiver.stop()
     sender.stop()
-    if (PlanGenerator.trace) {
-      if (isCoordinator())
-        info("Evaluation time: %.3f secs".format(wtime()-time))
-      val cbs = operations.indices.filter(x => operations(x).cached != null)
-      info("Cached blocks at "+executor_rank+": ("+cbs.length+") "+cbs)
-    }
+    if (isCoordinator())
+      info("Evaluation time: %.3f secs".format(wtime()-time))
+    val unclaimed = operations.zipWithIndex.filter {
+                        case (opr,opr_id)
+                          => (opr.cached != null && !opr.isInstanceOf[LoadOpr]
+                              && !exit_points.contains(opr_id))
+                    }.map(_._2).toList
+    info("There are "+unclaimed.length+" unclaimed blocks by GC in executor "
+         +executor_rank+": "+unclaimed)
     plan
   }
 
@@ -483,7 +497,7 @@ object Runtime {
     var receiver: ReceiverThread = new ReceiverThread()
     receiver.start()
     if (isCoordinator()) {
-        info("Collecting the blocks of tasks "+es+" at the coordinator")
+        info("Collecting the task blocks at the coordinator")
         while (es.exists{ case (_,opr_id) => !hasCachedValue(operations(opr_id)) })
           Thread.sleep(100)
         barrier()

@@ -184,13 +184,29 @@ object Normalizer {
         case _ => None
       }
 
+  def generator_num ( c: Comprehension ): Int
+    = c match {
+        case Comprehension(_,qs)
+          if notGrouped(qs)
+          => qs.map {
+                case Generator(_,cc:Comprehension)
+                  => generator_num(cc)
+                case Generator(_,_) => 1
+                case _ => 0
+             }.sum
+        case _ => 1
+      }
+
+  def is_simple_compr ( c: Comprehension ): Boolean
+    = generator_num(c) <= 1   // notGrouped(qs)
+
   /** Normalize a comprehension */
   def normalize ( head: Expr, qs: List[Qualifier], env: Map[String,Expr], opts: Map[String,Expr] ): List[Qualifier] =
     qs match {
       case Nil
         => List(LetBinding(VarPat("@result"),normalize(substE(head,env))))
       case Generator(p,c@Comprehension(_,s))::r
-        if notGrouped(s)
+        if notGrouped(s) && (notGrouped(qs) || is_simple_compr(c))
         => val Comprehension(h,s) = renameVars(c)
            normalize(head,(s:+LetBinding(p,h))++r,env,opts)
       case Generator(p,Seq(List(u)))::r
@@ -278,10 +294,10 @@ object Normalizer {
         => Seq(List(normalize(h)))
       case Comprehension(h,Predicate(p)::qs)
         => IfE(p,Comprehension(h,qs),Seq(Nil))
-      case Comprehension(h,Generator(p,c@Comprehension(_,ql))::qs)
-        if notGrouped(ql)
-        => val Comprehension(h2,s) = renameVars(c)
-           normalize(Comprehension(h,(s:+LetBinding(p,h2))++qs))
+      case Comprehension(h,Generator(p,c@Comprehension(_,s))::qs)
+        if notGrouped(s) && (notGrouped(qs) || is_simple_compr(c))
+        => val Comprehension(h2,ss) = renameVars(c)
+           normalize(Comprehension(h,(ss:+LetBinding(p,h2))++qs))
       case Comprehension(h,qs)
         => normalize(h,qs,Map(),Map()) match {
              case nqs:+LetBinding(VarPat("@result"),nh)

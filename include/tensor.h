@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#define GC_THREADS
+#include <gc.h>
 #include <cassert>
 #include <cstdlib>
 #include <vector>
@@ -25,7 +27,7 @@
 using namespace std;
 
 extern int block_count;
-extern int block_created;
+extern int blocks_created;
 extern int max_blocks;
 
 void abort ();
@@ -37,30 +39,34 @@ private:
   size_t length;
   T* data;
 
+static void finalizer ( void* obj, void* client_data ) {
+  block_count--;
+}
+
 public:
   Vec ( size_t len = 0 ): length(len) {
-    try {
-      data = (len == 0) ? nullptr : new T[len];
-    } catch ( bad_alloc &ex ) {
-      cerr << "*** cannot allocate " << (len*sizeof(T)) << " bytes" << endl;
+    data = (len == 0) ? nullptr : (T*)GC_MALLOC_ATOMIC_IGNORE_OFF_PAGE(len*sizeof(T));
+    if (data == nullptr) {
+      cerr << "Cannot allocate " << len*sizeof(T) << " bytes\n";
       abort();
     }
+    GC_register_finalizer(data,&finalizer,nullptr,nullptr,nullptr);
     block_count++;
-    block_created++;
+    blocks_created++;
     max_blocks = max(max_blocks,block_count);
   }
 
   Vec ( vector<T>* x ): length(x->size()) {
-    try {
-      data = (length == 0) ? nullptr : new T[length];
-    } catch ( bad_alloc &ex ) {
-      cerr << "*** cannot allocate " << (length*sizeof(T)) << " bytes" << endl;
+    data = (length == 0) ? nullptr : (T*)GC_MALLOC_ATOMIC_IGNORE_OFF_PAGE(length*sizeof(T));
+    if (data == nullptr) {
+      cerr << "Cannot allocate " << length*sizeof(T) << " bytes\n";
       abort();
     }
+    GC_register_finalizer(data,&finalizer,nullptr,nullptr,nullptr);
     for (int i = 0; i < length; i++ )
       data[i] = (*x)[i];
     block_count++;
-    block_created++;
+    blocks_created++;
     max_blocks = max(max_blocks,block_count);
     delete x;
   }
@@ -91,7 +97,6 @@ public:
   ~Vec () {
     block_count--;
     max_blocks = max(max_blocks,block_count);
-    delete[] data;
   }
 };
 
@@ -179,13 +184,13 @@ vector<tuple<K*,tuple<T,S>*>*>* join_nl ( vector<tuple<K*,T>*>* x,
 }
 
 template< typename T, typename S >
-vector<tuple<int,tuple<T,S>*>*>* join_nl ( vector<tuple<int,T>*>* x,
-                                           vector<tuple<int,S>*>* y ) {
-  vector<tuple<int,tuple<T,S>*>*>* a = new vector<tuple<int,tuple<T,S>*>*>();
-  for ( tuple<int,T>* ex: *x )
-    for ( tuple<int,S>* ey: *y )
+vector<tuple<long,tuple<T,S>*>*>* join_nl ( vector<tuple<long,T>*>* x,
+                                            vector<tuple<long,S>*>* y ) {
+  vector<tuple<long,tuple<T,S>*>*>* a = new vector<tuple<long,tuple<T,S>*>*>();
+  for ( tuple<long,T>* ex: *x )
+    for ( tuple<long,S>* ey: *y )
       if (get<0>(*ex) == get<0>(*ey))
-        a->push_back(new tuple<int,tuple<T,S>*>(get<0>(*ex),
+        a->push_back(new tuple<long,tuple<T,S>*>(get<0>(*ex),
                            new tuple<T,S>(get<1>(*ex),get<1>(*ey))));
   return a;
 }
@@ -206,17 +211,17 @@ vector<tuple<K*,T>*>* reduceByKey ( vector<tuple<K*,T>*>* x, T(*op)(tuple<T,T>*)
 }
 
 template< typename T >
-vector<tuple<int,T>*>* reduceByKey ( vector<tuple<int,T>*>* x, T(*op)(tuple<T,T>*) ) {
-  vector<tuple<int,T>*>* a = new vector<tuple<int,T>*>();
-  map<int,T> h;
-  for ( tuple<int,T>* e: *x ) {
+vector<tuple<long,T>*>* reduceByKey ( vector<tuple<long,T>*>* x, T(*op)(tuple<T,T>*) ) {
+  vector<tuple<long,T>*>* a = new vector<tuple<long,T>*>();
+  map<long,T> h;
+  for ( tuple<long,T>* e: *x ) {
     auto p = h.find(get<0>(*e));
     if (p == h.end())
       h.emplace(get<0>(*e),get<1>(*e));
     else p->second = op(new tuple<T,T>(get<1>(*e),p->second));
   }
   for ( auto e: h )
-    a->push_back(new tuple<int,T>(e.first,e.second));
+    a->push_back(new tuple<long,T>(e.first,e.second));
   return a;
 }
 
@@ -236,17 +241,17 @@ vector<tuple<K*,vector<T>*>*>* groupByKey ( vector<tuple<K*,T>*>* x ) {
 }
 
 template< typename T >
-vector<tuple<int,vector<T>*>*>* groupByKey ( vector<tuple<int,T>*>* x ) {
-  vector<tuple<int,vector<T>*>*>* a = new vector<tuple<int,vector<T>*>*>();
-  map<int,vector<T>*> h;
-  for ( tuple<int,T>* e: *x ) {
+vector<tuple<long,vector<T>*>*>* groupByKey ( vector<tuple<long,T>*>* x ) {
+  vector<tuple<long,vector<T>*>*>* a = new vector<tuple<long,vector<T>*>*>();
+  map<long,vector<T>*> h;
+  for ( tuple<long,T>* e: *x ) {
     auto p = h.find(get<0>(*e));
     if (p == h.end())
       h.emplace(get<0>(*e),elem(get<1>(*e)));
     else p->second->push_back(get<1>(*e));
   }
   for ( auto e: h )
-    a->push_back(new tuple<int,vector<T>*>(e.first,e.second));
+    a->push_back(new tuple<long,vector<T>*>(e.first,e.second));
   return a;
 }
 
@@ -275,18 +280,18 @@ vector<tuple<K*,tuple<vector<T>*,vector<S>*>*>*>* cogroup ( vector<tuple<K*,T>*>
 }
 
 template< typename T, typename S >
-vector<tuple<int,tuple<vector<T>*,vector<S>*>*>*>* cogroup ( vector<tuple<int,T>*>* x,
-                                                             vector<tuple<int,S>*>* y ) {
-  vector<tuple<int,tuple<vector<T>*,vector<S>*>>>* a = new vector<tuple<int,tuple<vector<T>*,vector<S>*>>>();
-  map<int,tuple<vector<T>*,vector<S>>*> h;
-  for ( tuple<int,T>* e: *x ) {
+vector<tuple<long,tuple<vector<T>*,vector<S>*>*>*>* cogroup ( vector<tuple<long,T>*>* x,
+                                                              vector<tuple<long,S>*>* y ) {
+  vector<tuple<long,tuple<vector<T>*,vector<S>*>>>* a = new vector<tuple<long,tuple<vector<T>*,vector<S>*>>>();
+  map<long,tuple<vector<T>*,vector<S>>*> h;
+  for ( tuple<long,T>* e: *x ) {
     auto p = h.find(get<0>(*e));
     if (p == h.end())
       h.emplace(get<0>(*e),
                 new tuple<vector<T>*,vector<S>*>(elem(get<1>(*e)),new vector<S>()));
     else get<0>(p->second)->push_back(get<1>(*e));
   }
-  for ( tuple<int,S>* e: *y ) {
+  for ( tuple<long,S>* e: *y ) {
     auto p = h.find(get<0>(*e));
     if (p == h.end())
       h.emplace(get<0>(*e),
@@ -294,7 +299,7 @@ vector<tuple<int,tuple<vector<T>*,vector<S>*>*>*>* cogroup ( vector<tuple<int,T>
     else get<1>(p->second)->push_back(get<1>(*e));
   }
   for ( auto e: h )
-    a->push_back(new tuple<int,tuple<vector<T>*,vector<S>*>*>(e.first,e.second));
+    a->push_back(new tuple<long,tuple<vector<T>*,vector<S>*>*>(e.first,e.second));
   return a;
 }
 
@@ -319,21 +324,21 @@ vector<tuple<K*,tuple<T,S>*>*>* join ( vector<tuple<K*,T>*>* x,
 }
 
 template< typename T, typename S >
-vector<tuple<int,tuple<T,S>*>*>* join ( vector<tuple<int,T>*>* x,
-                                        vector<tuple<int,S>*>* y ) {
-  vector<tuple<int,tuple<T,S>*>*>* a = new vector<tuple<int,tuple<T,S>*>*>();
-  map<int,vector<T>*> h;
-  for ( tuple<int,T>* ex: *x ) {
+vector<tuple<long,tuple<T,S>*>*>* join ( vector<tuple<long,T>*>* x,
+                                         vector<tuple<long,S>*>* y ) {
+  vector<tuple<long,tuple<T,S>*>*>* a = new vector<tuple<long,tuple<T,S>*>*>();
+  map<long,vector<T>*> h;
+  for ( tuple<long,T>* ex: *x ) {
     auto p = h.find(get<0>(*ex));
     if (p == h.end())
       h.emplace(get<0>(*ex),elem(get<1>(*ex)));
     else p->second->push_back(get<1>(*ex));
   }
-  for ( tuple<int,S>* ey: *y ) {
+  for ( tuple<long,S>* ey: *y ) {
     auto p = h.find(get<0>(*ey));
     if (p != h.end())
       for ( T ex: *p->second )
-        a->push_back(new tuple<int,tuple<T,S>*>(get<0>(*ey),new tuple<T,S>(ex,get<1>(*ey))));
+        a->push_back(new tuple<long,tuple<T,S>*>(get<0>(*ey),new tuple<T,S>(ex,get<1>(*ey))));
   }
   return a;
 }

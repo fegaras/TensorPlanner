@@ -265,27 +265,30 @@ object CXXCodeGenerator {
              "&"+f
       }
 
-  def makeCtype ( tp: Type ): String
+  def makeCtype ( tp: Type, in_coords: Boolean = false ): String
     = tp match {
          case BasicType("edu.uta.diablo.EmptyTuple")
            => "nullptr_t"
          case BasicType(nm)
            if nm == oprIDtype
            => "int"
+         case BasicType("Int")
+           if in_coords
+           => "long"
          case BasicType(nm)
            => nm.toLowerCase
          case TupleType(Nil)
            => "nullptr_t"
          case TupleType(List(t))
-           => makeCtype(t)
+           => makeCtype(t,true)
          case TupleType(ts)
-           => ts.map(makeCtype).mkString("tuple<",",",">*")
+           => ts.map(makeCtype(_,true)).mkString("tuple<",",",">*")
          case StorageType(_,_,_)
            => makeCtype(unfold_storage_type(tp))
          case SeqType(etp)
-           => "vector<"+makeCtype(etp)+">*"
+           => "vector<"+makeCtype(etp,true)+">*"
          case ParametricType(_,List(etp))
-           => "vector<"+makeCtype(etp)+">*"
+           => "vector<"+makeCtype(etp,true)+">*"
          case ArrayType(n,etp)
            => "Vec<"+makeCtype(etp)+">*"
          case _ if tp != null => tp.toString
@@ -339,7 +342,7 @@ object CXXCodeGenerator {
         case Call("vector",List(n,v))
           => val nc = makeC(n,tabs,false)
              val vc = makeC(v,tabs,false)
-             val tc = makeCtype(exprType(v))
+             val tc = makeCtype(exprType(v),true)
              "new vector<"+tc+">("+nc+","+vc+")"
         case MethodCall(x,"length",null)
           => makeC(x,tabs,false)+".size()"
@@ -386,14 +389,14 @@ object CXXCodeGenerator {
         case Tuple(List(x))
           => makeC(x,tabs,false)
         case Tuple(s)
-          => val ts = s.map( x => makeCtype(exprType(x)) ).mkString("<",",",">")
+          => val ts = s.map( x => makeCtype(exprType(x),true) ).mkString("<",",",">")
              s.map(makeC(_,tabs,false)).mkString("new tuple"+ts+"(",",",")")
         case Seq(Nil)
           => "nullptr"
         case Seq(List(x))
           => "elem("+makeC(x,tabs,stmt)+")"
         case Seq(s)
-          => val tc = makeCtype(exprType(s.head))
+          => val tc = makeCtype(exprType(s.head),false)
              "new vector<"+tc+">({ "+s.map(makeC(_,tabs,false)).mkString(", ")+" })"
         case IfE(p,x,Seq(Nil))
           if stmt
@@ -421,7 +424,7 @@ object CXXCodeGenerator {
                   (if (s.isEmpty) "" else (";\n"+tab(tabs)))+makeC(x,tabs+1,false)+"; })"
         case VarDecl(v,tp@SeqType(et),null)
           => env = env + ((v,tp))
-             makeCtype(tp)+" "+v+" = new vector<"+makeCtype(et)+">()"
+             makeCtype(tp)+" "+v+" = new vector<"+makeCtype(et,true)+">()"
         case VarDecl(v,tp,null)
           => env = env + ((v,tp))
              makeCtype(tp)+"  "+v

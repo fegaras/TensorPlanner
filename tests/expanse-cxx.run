@@ -14,13 +14,21 @@ module purge
 module load slurm cpu/0.17.3b gcc/10.2.0/npcyll4
 
 SW=/expanse/lustre/projects/uot166/fegaras
-DIABLO_HOME=/home/$USER/TensorPlanner
+export DIABLO_HOME=/home/$USER/TensorPlanner
+export GC_HOME=$SW/gc-8.2.2
+export GC_HOME_LIB=$GC_HOME/.libs/
 export SCALA_HOME=$SW/scala-2.12.3
 export SPARK_HOME=$SW/spark-3.1.2-bin-hadoop3.2
-export OPENMPI_HOME=$SW/openmpi
+export MPI_HOME=$SW/openmpi
 
-export PATH="$OPENMPI_HOME/bin:$SCALA_HOME/bin:$DIABLO_HOME/bin:$PATH"
-export LD_LIBRARY_PATH="$OPENMPI_HOME/lib:$LD_LIBRARY_PATH"
+JARS=classes:$DIABLO_HOME/lib/diablo.jar:$MPI_HOME/lib/mpi.jar
+for I in `ls $SPARK_HOME/jars/*.jar -I *unsafe*`; do
+    JARS=$JARS:$I
+done
+export JARS=${JARS}
+
+export PATH="$SCALA_HOME/bin:$MPI_HOME/bin:$DIABLO_HOME/bin:$SPARK_HOME/bin:$PATH"
+export LD_LIBRARY_PATH="$MPI_HOME/lib:$GC_HOME_LIB:$LD_LIBRARY_PATH"
 
 files="a.diablo"
 for f in $files; do
@@ -31,4 +39,4 @@ done
 ulimit -l unlimited
 
 # for each expanse node: 2 sockets, 1 executor per socket, 64 threads per executor
-mpirun -N 2 --bind-to socket --mca btl_openib_allow_ib true a.out 10000 10
+mpirun -N 2 --bind-to socket --mca btl_openib_allow_ib true a.out 10000 1

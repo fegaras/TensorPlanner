@@ -5,38 +5,47 @@
 DIABLO depends on Scala 2.12.15, open-mpi, Spark 3.2.1, JDK 11, and sbt 1.6.2.
 
 Download and install open-mpi from [https://www.open-mpi.org/software/](https://www.open-mpi.org/software/).
-Set `$JAVA_HOME` to point to your Java instalation. For example:
-```bash
-export JAVA_HOME=/usr/lib/jvm/java-1.11.0-openjdk-amd64
-```
+Set `$JAVA_HOME` to point to your Java instalation.
 Go to the Open MPI extracted directory and do:
 ```bash
 ./configure --enable-mpi-threads --enable-mpi-java --with-slurm --without-ucx --without-hcol --prefix="$HOME/openmpi"
 make all install
 ```
-Copy `$HOME/openmpi/lib/mpi.jar` into `TensorPlaner/lib/` and compile TensorPlanner using:
+Edit the file `setup.sh` to point to your installation directories and run it using:
+```bash
+source setup.sh
+```
+Compile TensorPlanner using:
 ```bash
 sbt package
 ```
-Make sure you can ssh to localhost or any other computer used in MPI without password.
-On top of your `.bashrc` file, you should have:
-```bash
-MPI_HOME=$HOME/openmpi
-export PATH="$MPI_HOME/bin:$PATH"
-export LD_LIBRARY_PATH="$MPI_HOME/lib/:$LD_LIBRARY_PATH"
-```
+Make sure you can ssh to localhost and any other computer used in MPI without password.
+
 Go to `TensorPlaner/tests/` and do:
 ```bash
-./build test.scala
-./run Test
+build test.scala
+run Test
 ```
 To test using Spark:
 ```bash
-export SPARK_HOME= ... path to Spark home ...
-cd tests/
-./build-diablo Multiply-diablo.scala
-./run-diablo Multiply 1234 2345
+build-diablo Multiply-diablo.scala
+run-diablo Multiply 1234 2345
 ```
+
+### C++ Code Generation
+
+Download, build, and install the Boehm-Demers-Weiser Garbage Collector from  [https://github.com/ivmai/bdwgc/](https://github.com/ivmai/bdwgc/).
+Change the GC_HOME in `setup.sh`. Build the system:
+```bash
+source setup.sh
+make
+```
+Go to `tests` and do:
+```bash
+diablo test.diablo
+crun a.out
+```
+
 ## Data Model
 
 ### Abstract Types
@@ -99,6 +108,7 @@ q("""
      tensor*(n,n)[ ((i,j),+/v) | ((i,k),a) <- A, ((kk,j),b) <- B, kk == k, let v = a*b, group by (i,j) ];
  """)
 ```
+or just use `A@B`.
 
 ## Matrix addition using array comprehensions:
   
