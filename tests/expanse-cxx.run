@@ -14,13 +14,13 @@ module purge
 module load slurm cpu/0.17.3b gcc/10.2.0/npcyll4
 
 SW=/expanse/lustre/projects/uot166/fegaras
-DIABLO_HOME=/home/$USER/TensorPlanner
+export DIABLO_HOME=/home/$USER/TensorPlanner
 export SCALA_HOME=$SW/scala-2.12.3
 export SPARK_HOME=$SW/spark-3.1.2-bin-hadoop3.2
-export OPENMPI_HOME=$SW/openmpi
+export MPI_HOME=$SW/openmpi
 
-export PATH="$OPENMPI_HOME/bin:$SCALA_HOME/bin:$DIABLO_HOME/bin:$PATH"
-export LD_LIBRARY_PATH="$OPENMPI_HOME/lib:$LD_LIBRARY_PATH"
+export PATH="$MPI_HOME/bin:$SCALA_HOME/bin:$DIABLO_HOME/bin:$PATH"
+export LD_LIBRARY_PATH="$MPI_HOME/lib:$LD_LIBRARY_PATH"
 
 files="a.diablo"
 for f in $files; do

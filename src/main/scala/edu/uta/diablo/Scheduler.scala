@@ -79,92 +79,95 @@ object Scheduler {
     b.toList
   }
 
-  case class Worker ( workDone: Int, numTasks: Int, id: WorkerID )
-
-  object MinWorkerOrder extends Ordering[Worker] {
-    def compare(x:Worker, y:Worker) = {
-      if(x.workDone == y.workDone)
-        y.numTasks compare x.numTasks
-      else 
-        y.workDone compare x.workDone
+  def get_worker_node( coord: Any, n: Int, m: Int) = {
+    val num_exec = Communication.num_of_executors
+    val row_cnt = (Math.sqrt(num_exec)).toInt
+    val col_cnt = (num_exec/row_cnt).toInt
+    val row_sz = (Math.ceil(n.toDouble/row_cnt)).toInt
+    val row_sz1 = (Math.ceil(n.toDouble/Math.min(n,num_exec))).toInt
+    val col_sz = (Math.ceil(m.toDouble/col_cnt)).toInt
+    coord match {
+      case i:Int => (i/row_sz1)
+      case (i:Int,j:Int) => (i/row_sz)*col_cnt + j/col_sz
+      case _ => Math.abs(coord.##) % num_exec
     }
   }
 
-  // priority queue of work done at each processor
-  var workerQueue: PriorityQueue[Worker] = PriorityQueue.empty(MinWorkerOrder)
-
-  def schedule[I] ( e: Plan[I] ) {
+  def schedule[I] ( e: Plan[I]) {
     set_sizes()
     set_blevel(e)
-    var task_queue: Queue[OprID] = Queue()
-    work = 0.until(Communication.num_of_executors).map(w => 0).toArray
-    tasks = 0.until(Communication.num_of_executors).map(w => 0).toArray
+    var taskQueue: Queue[OprID] = Queue()
     var in_degree: Array[Int] = Array.ofDim[Int](operations.size)
     for(op <- operations) {
       for(c <- op.consumers) {
         in_degree(c) += 1
       }
     }
-    var ep: ListBuffer[OprID] = ListBuffer[OprID]()
+    var entry_p: ListBuffer[OprID] = ListBuffer[OprID]()
     for(i <- 0 until in_degree.size) {
       if(in_degree(i) == 0)
-        ep += i
+        entry_p += i
     }
     if (isCoordinator()) {
-      info("Entry points: "+ep)
+      println("Entry points: size:["+entry_p.length+"]: "+entry_p)
     }
-    for (op <- ep) {
-      task_queue.enqueue(op)
-    }
-    for(i <- 0 until Communication.num_of_executors)
-      workerQueue.enqueue(Worker(0,0,i))
-    var total_time = 0.0
-    var worker_time = 0.0
-    val k = Math.min(Communication.num_of_executors,
-                     Math.sqrt(Communication.num_of_executors).toInt+1)
-    while (task_queue.nonEmpty) {
-      val c = task_queue.dequeue
-      val opr = operations(c)
-      var tmp_workers: ListBuffer[Worker] = ListBuffer()
-      var w = Worker(0,0,0)
-      var min_comm_cost = Int.MaxValue
-      for(i <- 0 until k) {
-        var tmp_worker = workerQueue.dequeue()
-        tmp_workers += tmp_worker
-        val tmp_cost = communication_cost(opr,tmp_worker.id)
-        if(tmp_cost < min_comm_cost) {
-          w = tmp_worker
-          min_comm_cost = tmp_cost
-        }
+    var n = entry_p.map{case ep => {
+      operations(ep).coord match {
+        case i: Int => i
+        case (i:Int,j:Int) => i
+        case (i:Int,j:Int,k:Int) => i
       }
-      for(tw <- tmp_workers) {
-        if(tw.id != w.id)
-          workerQueue.enqueue(tw)
+    }}.max+1
+    var m = entry_p.map{case ep => {
+      operations(ep).coord match {
+        case i: Int => i
+        case (i:Int,j:Int) => j
+        case (i:Int,j:Int,k:Int) => j
       }
-      // opr is allocated to worker w
+    }}.max+1
+    for ( opr_id <- operations.indices) {
+      val opr = operations(opr_id)
       opr match {
-        case ReduceOpr(_,true,_)  // total aggregation result is on coordinator
-          => opr.node = Executor.coordinator
-        case _ => opr.node = w.id
+        case PairOpr(_,_)
+          => val p_opr = operations(opr.consumers(0))
+            val w = opr.coord match {
+              case i:Int
+                => i%Communication.num_of_executors
+              case _ => Math.abs(opr.coord.##)%Communication.num_of_executors
+            }
+            if(p_opr.consumers.length > 0) {
+              val gp_opr = operations(p_opr.consumers(0))
+              opr.node = gp_opr match {
+                case ReduceOpr(_,false,_)
+                  => get_worker_node(p_opr.coord,n,m)
+                case _ => w
+              }
+            }
+            else opr.node = w
+            if(opr.node != -1) taskQueue.enqueue(opr_id)
+        case LoadOpr(_)
+         => taskQueue.enqueue(opr_id)
+         opr.node = get_worker_node(opr.coord,n,m)
+        case _ => ;
       }
-      val work_done = cpu_cost(opr) + communication_cost(opr,w.id)
-      workerQueue.enqueue(Worker(w.workDone + work_done, w.numTasks+1, w.id))
-      work(w.id) += work_done
-      tasks(w.id) += 1
-      if (trace && isCoordinator())
-        info("schedule opr "+c+" on node "+w.id+" (work = "+work(w.id)+")")
+    }
+    while (taskQueue.nonEmpty) {
+      val cur_task = taskQueue.dequeue()
+      val opr = operations(cur_task)
       // add more ready nodes
-      for { c <- opr.consumers } 
-      if (operations(c).status == notReady)
-      {
-        val copr = operations(c)
-        in_degree(c) -= 1
-        if (in_degree(c) == 0) {
-          task_queue.enqueue(c)
+      for { op <- (opr.consumers ++ children(opr)).distinct } {
+        var copr =  operations(op)
+        if(copr.node == -1) {
+          copr match {
+            case ReduceOpr(_,true,_)  // total aggregation result is on coordinator
+              => copr.node = Executor.coordinator
+            case _ => copr.node = opr.node
+          }
+          if (trace && isCoordinator())
+            info("schedule opr "+op+" on node "+copr.node)
+          taskQueue.enqueue(op)
         }
       }
     }
-    if (trace && isCoordinator())
-      print_plan(e)
   }
 }

@@ -27,6 +27,8 @@ object TiledTranslator {
   import Lifting.{store,lift,getTypeMap}
   import ComprehensionTranslator._
 
+  val block_dim = IntConst(block_dim_size)
+
   /* Is this generator domain a Tiled RDD? Generator domains have been lifted by the Lifter */
   def isTiled ( e: Expr ): Boolean
     = e match {
@@ -211,10 +213,10 @@ object TiledTranslator {
                           IfE(MethodCall(MethodCall(MethodCall(Var(if (shuffle) i
                                                                    else prefix("coord",i)),
                                                                "+",List(IntConst(1))),
-                                                    "*",List(IntConst(block_dim_size))),
+                                                    "*",List(block_dim)),
                                          ">",List(d)),
-                              MethodCall(d,"%",List(IntConst(block_dim_size))),
-                              IntConst(block_dim_size)))
+                              MethodCall(d,"%",List(block_dim)),
+                              block_dim))
     }
   }
 
@@ -252,8 +254,8 @@ object TiledTranslator {
             => List(q)
           case Generator(VarPat(i),Range(n1,n2,n3))
             => List(Generator(VarPat(prefix("coord",i)),
-                              Range(MethodCall(n1,"/",List(IntConst(block_dim_size))),
-                                    MethodCall(n2,"/",List(IntConst(block_dim_size))),
+                              Range(MethodCall(n1,"/",List(block_dim)),
+                                    MethodCall(n2,"/",List(block_dim)),
                                     n3)))
           case Generator(TuplePat(List(p,pv)),Lift(tensor,e))
             if isTensor(tensor)
@@ -268,7 +270,7 @@ object TiledTranslator {
                                         Range(IntConst(0),
                                               MethodCall(MethodCall(dim,
                                                                     "-",List(IntConst(1))),
-                                                         "/",List(IntConst(block_dim_size))),
+                                                         "/",List(block_dim)),
                                               IntConst(1))) }
           case LetBinding(p,e)
             if freevars(e).toSet.intersect(local_vars).isEmpty
@@ -281,12 +283,12 @@ object TiledTranslator {
             if unique_is.contains(i) && freevars(e).toSet.subsetOf(local_vars)
                && freevars(e).intersect(unique_is).isEmpty
             => List(Predicate(MethodCall(Var(prefix("coord",i)),
-                         "==",List(MethodCall(e,"/",List(IntConst(block_dim_size)))))))
+                         "==",List(MethodCall(e,"/",List(block_dim))))))
           case Predicate(MethodCall(e,"==",List(Var(i))))
             if unique_is.contains(i) && freevars(e).toSet.subsetOf(local_vars)
                && freevars(e).intersect(unique_is).isEmpty
             => List(Predicate(MethodCall(Var(prefix("coord",i)),
-                          "==",List(MethodCall(e,"/",List(IntConst(block_dim_size)))))))
+                          "==",List(MethodCall(e,"/",List(block_dim))))))
           case Predicate(MethodCall(Var(i),"==",List(e)))
             if unique_is.contains(i) && tile_index(e) != ""
             => List(Predicate(MethodCall(Var(prefix("coord",i)),
@@ -340,7 +342,7 @@ object TiledTranslator {
                                  case (i,k)
                                    => LetBinding(VarPat(i),
                                                  MethodCall(MethodCall(Var(prefix("coord",i)),
-                                                                       "*",List(IntConst(block_dim_size))),
+                                                                       "*",List(block_dim)),
                                                             "+",List(Var(prefix("tile",i)))))
                             }
                (if (shuffle)
@@ -358,14 +360,14 @@ object TiledTranslator {
                                     IntConst(1))),
                     LetBinding(VarPat(i),
                                MethodCall(MethodCall(Var(prefix("coord",i)),
-                                                     "*",List(IntConst(block_dim_size))),
+                                                     "*",List(block_dim)),
                                           "+",List(Var(prefix("tile",i))))))
           case Generator(TuplePat(List(p,pv)),Lift(tensor,e))
             if isTensor(tensor)
             => Generator(TuplePat(List(p,pv)),Lift(tensor,e))::
                     patvars(p).map( i => Predicate(MethodCall(Var(prefix("coord",i)),"==",
                                                 List(MethodCall(Var(i),
-                                                        "/",List(IntConst(block_dim_size)))))) )
+                                                        "/",List(block_dim))))) )
           case Generator(_,u)
             if !isRDD(u)
             => List(q)
@@ -392,13 +394,13 @@ object TiledTranslator {
                               (is zip all_dims).map {
                                  case (i,d)
                                    => Predicate(MethodCall(MethodCall(Var(prefix("coord",i)),
-                                                                      "*",List(IntConst(block_dim_size))),
+                                                                      "*",List(block_dim)),
                                                            "<=",List(d))) }
              val vdims = is.map( v => Var(prefix("size",v)) )
              val tile_dims = List(tuple(vdims.take(dn)),tuple(vdims.takeRight(sn)))
              val tile_coords = is.map( i => Var(prefix("coord",i)) )
              val tile_indices = tuple(is.map{ i => MethodCall(Var(i),"%",
-                                                     List(IntConst(block_dim_size))) })
+                                                     List(block_dim)) })
              val tc = Comprehension(Tuple(List(tile_indices,e)),
                                     tile_qualifiers(qs,vars))
              val tile = Store(tensor,List(tp),tile_dims,tc)
@@ -470,7 +472,7 @@ object TiledTranslator {
           => val ks = p match { case Tuple(ks) => ks; case _ => List(p) }
              val vs = ks.map{ _ => newvar }
              val fs = tile_indices(qs)
-             val N = IntConst(block_dim_size)
+             val N = block_dim
              val tensor = tile_type(block,tp)
              val (dn,sn) = tensor_dims(tensor)
              val all_dims = tile_dimensions(dn,dims.head)++tile_dimensions(sn,dims(1))
@@ -478,7 +480,7 @@ object TiledTranslator {
                               (vs zip all_dims).map {
                                  case (v,d)
                                    => Predicate(MethodCall(MethodCall(Var(v),
-                                                                      "*",List(IntConst(block_dim_size))),
+                                                                      "*",List(block_dim)),
                                                            "<=",List(d))) }
              val vdims = vs.map( v => Var(prefix("size",v)) )
              val tile_dims = List(tuple(vdims.take(dn)),tuple(vdims.takeRight(sn)))
@@ -640,7 +642,7 @@ object TiledTranslator {
                                }))
                        }
                    if (isDatasetTensor(block)) {
-                       val N = IntConst(block_dim_size)
+                       val N = block_dim
                        val sdims = List(Tuple(1.to(dn).map( i => N ).toList),
                                         Tuple(1.to(sn).map( i => N ).toList))
                        // empty tile:
@@ -728,13 +730,15 @@ object TiledTranslator {
                                 List(IntConst(1),
                                      MethodCall(MethodCall(Var("Math"),"ceil",
                                         List(MethodCall(left_rows,"/",
-                                                List(DoubleConst(block_dim_size*grid_dim*1.0))))),
+                                                List(MethodCall(block_dim,"*",
+                                                                List(DoubleConst(grid_dim*1.0))))))),
                                                 "toInt",null)))
            val right_blocks = MethodCall(Var("Math"),"max",
                                 List(IntConst(1),
                                      MethodCall(MethodCall(Var("Math"),"ceil",
                                         List(MethodCall(right_cols,"/",
-                                                List(DoubleConst(block_dim_size*grid_dim*1.0))))),
+                                                List(MethodCall(block_dim,"*",
+                                                                List(DoubleConst(grid_dim*1.0))))))),
                                                 "toInt",null)))
            val kv = newvar
            // replicate each tensor grid_dim times (sent to different grid cells)
@@ -805,8 +809,7 @@ object TiledTranslator {
           // total aggregation on tiled comprehensions
           => val tile_value = reduce(op,Comprehension(h,tile_qualifiers(qs,vars)))
              val nq = rdd_qualifiers(qs,vars)
-             val xxx@Comprehension(nhs,nqs) = optimize(Comprehension(tile_value,nq))
-println("@@@ "+Pretty.print(xxx))
+             val Comprehension(nhs,nqs) = optimize(Comprehension(tile_value,nq))
              if (data_frames)
                translate_sql(nhs,nqs,op)
              else reduce(op,translate_tiled(Comprehension(nhs,nqs),vars))

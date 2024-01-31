@@ -14,226 +14,33 @@
  * limitations under the License.
  */
 
+#include "tensor.h"
 #include <sstream>
 #include <cstring>
-#include <vector>
-#include <tuple>
-#include <thread>
 #include <chrono>
 #include <unistd.h>
-#include "mpi.h"
-#include "omp.h"
-#include "tensor.h"
 #include "opr.h"
-
-void info ( const char *fmt, ... );
-
-void put_int ( ostringstream &out, const int i ) {
-  out.write((const char*)&i,sizeof(int));
-}
-
-int serialize ( ostringstream &out, const void* data, vector<int>* encoded_type, int loc ) {
-  switch ((*encoded_type)[loc]) {
-  case 10: { // tuple
-    if ((*encoded_type)[loc+1] == 2
-        && (*encoded_type)[loc+2] == 0
-        && (*encoded_type)[loc+3] == 10) {
-      tuple<int,void*>* x = data;
-      put_int(out,get<0>(*x));
-      return serialize(out,get<1>(*x),encoded_type,loc+3);
-    }
-    if ((*encoded_type)[loc+1] > 0 && (*encoded_type)[loc+2] == 0) {
-      switch ((*encoded_type)[loc+1]) {
-      case 1: {
-        tuple<int>* x = data;
-        put_int(out,get<0>(*x));
-        break;
-      }
-      case 2: {
-        tuple<int,int>* x = data;
-        put_int(out,get<0>(*x));
-        put_int(out,get<1>(*x));
-        break;
-      }
-      case 3: {
-        tuple<int,int,int>* x = data;
-        put_int(out,get<0>(*x));
-        put_int(out,get<1>(*x));
-        put_int(out,get<2>(*x));
-        break;
-      }
-      case 4: {
-        tuple<int,int,int,int>* x = data;
-        put_int(out,get<0>(*x));
-        put_int(out,get<1>(*x));
-        put_int(out,get<2>(*x));
-        put_int(out,get<3>(*x));
-        break;
-      }
-      }
-      return loc+(*encoded_type)[loc+1]+2;
-    } else {
-      switch ((*encoded_type)[loc+1]) {
-      case 0:
-        return loc+2;
-      case 2: {
-        tuple<void*,void*>* x = data;
-        int l2 = serialize(out,get<0>(*x),encoded_type,loc+2);
-        return serialize(out,get<1>(*x),encoded_type,l2);
-      }
-      case 3: {
-        tuple<void*,void*,void*>* x = data;
-        int l2 = serialize(out,get<0>(*x),encoded_type,loc+2);
-        int l3 = serialize(out,get<1>(*x),encoded_type,l2);
-        return serialize(out,get<2>(*x),encoded_type,l3);
-      }
-      }
-    }
-  }
-  case 11:  // Vec
-    switch ((*encoded_type)[loc+1]) {
-    case 0: {
-      Vec<int>* x = data;
-      put_int(out,x->size());
-      out.write((const char*)x->buffer(),sizeof(int)*x->size());
-      return loc+2;
-    }
-    case 1: {
-      Vec<long>* x = data;
-      put_int(out,x->size());
-      out.write((const char*)x->buffer(),sizeof(long)*x->size());
-      return loc+2;
-    }
-    case 3: {
-      Vec<double>* x = data;
-      put_int(out,x->size());
-      out.write((const char*)x->buffer(),sizeof(double)*x->size());
-      return loc+2;
-    }
-    }
-  default:
-    return loc+1;
-  }
-}
-
-int serialize ( void* data, char* buffer, vector<int>* encoded_type ) {
-  ostringstream out;
-  serialize(out,data,encoded_type,0);
-  memcpy(buffer,out.str().c_str(),out.tellp());
-  return out.tellp();
-}
-
-int get_int ( istringstream &in ) {
-  int n;
-  in.read((const char*)&n,sizeof(int));
-  return n;
-}
-
-int deserialize ( istringstream &in, void* &data, vector<int>* encoded_type, int loc ) {
-  switch ((*encoded_type)[loc]) {
-  case 10: { // tuple
-    if ((*encoded_type)[loc+1] == 2
-        && (*encoded_type)[loc+2] == 0
-        && (*encoded_type)[loc+3] == 10) {
-      int n = get_int(in);
-      void* x;
-      int l2 = deserialize(in,x,encoded_type,loc+3);
-      data = new tuple<int,void*>(n,x);
-      return l2;
-    }
-    if ((*encoded_type)[loc+1] > 0 && (*encoded_type)[loc+2] == 0) {
-      switch ((*encoded_type)[loc+1]) {
-      case 1: {
-        data = new tuple<int>(get_int(in));
-        break;
-      }
-      case 2: {
-        data = new tuple<int,int>(get_int(in),get_int(in));
-        break;
-      }
-      case 3: {
-        data = new tuple<int,int,int>(get_int(in),get_int(in),get_int(in));
-        break;
-      }
-      case 4: {
-        data = new tuple<int,int,int,int>(get_int(in),get_int(in),get_int(in),get_int(in));
-        break;
-      }
-      }
-      return loc+(*encoded_type)[loc+1]+2;
-    } else {
-      switch ((*encoded_type)[loc+1]) {
-      case 0:
-        return loc+2;
-      case 2: {
-        void *x1, *x2;
-        int l2 = deserialize(in,x1,encoded_type,loc+2);
-        int l3 = deserialize(in,x2,encoded_type,l2);
-        data = new tuple<void*,void*>(x1,x2);
-        return l3;
-      }
-      case 3: {
-        void *x1, *x2, *x3;
-        int l2 = deserialize(in,x1,encoded_type,loc+2);
-        int l3 = deserialize(in,x2,encoded_type,l2);
-        int l4 = deserialize(in,x3,encoded_type,l3);
-        data = new tuple<void*,void*,void*>(x1,x2,x3);
-        return l4;
-      }
-      }
-    }
-  }
-  case 11:  // Vec
-    switch ((*encoded_type)[loc+1]) {
-    case 0: {
-      int len = get_int(in);
-      Vec<int>* x = new Vec<int>(len);
-      in.read((const char*)x->buffer(),sizeof(int)*len);
-      data = x;
-      return loc+2;
-    }
-    case 1: {
-      int len = get_int(in);
-      Vec<long>* x = new Vec<long>(len);
-      in.read((const char*)x->buffer(),sizeof(long)*len);
-      data = x;
-      return loc+2;
-    }
-    case 3: {
-      int len = get_int(in);
-      Vec<double>* x = new Vec<double>(len);
-      in.read((const char*)x->buffer(),sizeof(double)*len);
-      data = x;
-      return loc+2;
-    }
-    }
-  default:
-    return loc+1;
-  }
-}
-
-void deserialize ( void* &data, const char* buffer, size_t len, vector<int>* encoded_type ) {
-  string s(buffer,len);
-  istringstream in(s);
-  in.seekg(0,ios::beg);
-  deserialize(in,data,encoded_type,0);
-}
 
 int num_of_executors = 1;
 int executor_rank = 0;
 int coordinator = 0;
-const int max_buffer_size = 500000000;
+const int max_buffer_size = 50000000;
 auto comm = MPI_COMM_WORLD;
 MPI_Request receive_request;
-vector<int> active_executors;
 extern bool delete_arrays;
 extern vector<Opr*> operations;
 extern vector<void*(*)(void*)> functions;
 bool stop_receiver = false;
 
-//void delete_reduce_input ( int opr_id );
-//void delete_array ( int opr_id );
+void info ( const char *fmt, ... );
+
+int serialize ( void* data, char* buffer, vector<int>* encoded_type );
+void deserialize ( void* &data, const char* buffer, size_t len, vector<int>* encoded_type );
+
 int delete_array ( void* &data, vector<int>* encoded_type, int loc );
+void delete_array ( int opr_id );
+void delete_first_reduce_input ( int rid );
+void delete_completed_dependents ( int opr_id );
 
 void handle_received_message ( int tag, int opr_id, void* data, int len ) {
   Opr* opr = operations[opr_id];
@@ -249,7 +56,6 @@ void handle_received_message ( int tag, int opr_id, void* data, int len ) {
   } else if (tag == 1 && opr->type == reduceOPR) {
     info("    received partial reduce result of %d bytes (opr %d)",
          len+4,opr_id);
-    vector<int>* rs = opr->opr.reduce_opr->s;
     void*(*op)(tuple<void*,void*>*) = functions[opr->opr.reduce_opr->op];
     if (opr->cached == nullptr) {
       // first reduction input
@@ -258,25 +64,25 @@ void handle_received_message ( int tag, int opr_id, void* data, int len ) {
     } else if (opr->opr.reduce_opr->valuep)
       // total aggregation
       opr->cached = op(new tuple<void*,void*>(opr->cached,data));
-    else if (operations[(*rs)[0]]->int_index) {
-      tuple<int,void*>* x = opr->cached;
-      tuple<int,void*>* y = data;
-      // merge the current state with the incoming partially reduced data
-      info("    merge reduce opr %d with incoming input",opr_id);
-      opr->cached = new tuple<int,void*>(get<0>(*x),op(new tuple<void*,void*>(get<1>(*x),get<1>(*y))));
-      info("    delete incoming partial reduce block for opr %d",opr_id);
-      delete_array(data,opr->encoded_type,0);
-    } else {
+    else {
       tuple<void*,void*>* x = opr->cached;
       tuple<void*,void*>* y = data;
       // merge the current state with the incoming partially reduced data
       info("    merge reduce opr %d with incoming input",opr_id);
+      auto old = (void*)x;
       opr->cached = new tuple<void*,void*>(get<0>(*x),op(new tuple<void*,void*>(get<1>(*x),get<1>(*y))));
-      info("    delete incoming partial reduce block for opr %d",opr_id);
-      delete_array(data,opr->encoded_type,0);
+      if (delete_arrays && opr->first_reduced_input < 0) {
+        info("    delete current reduce result in opr %d",opr_id);
+        delete_array(old,opr->encoded_type,0);
+      }
+      if (delete_arrays) {
+        info("    delete incoming partial reduce block for opr %d",opr_id);
+        delete_array(data,opr->encoded_type,0);
+      }
     }
+    delete_first_reduce_input(opr_id);
     opr->reduced_count--;
-    if (opr->reduced_count == 0) {
+    if (opr->reduced_count <= 0) {
       // completed final reduce
       info("    completed reduce opr %d",opr_id);
       opr->status = completed;
@@ -287,38 +93,36 @@ void handle_received_message ( int tag, int opr_id, void* data, int len ) {
 
 // check if there is a request to send data (array blocks); if there is, get the data and cache it
 int check_communication () {
+  // needs to be static
   static const char* buffer = new char[max_buffer_size];
-  MPI_Status status;
   if (receive_request == nullptr) {
     // prepare for the first receive (non-blocking)
     MPI_Irecv(buffer,max_buffer_size,MPI_BYTE,MPI_ANY_SOURCE,MPI_ANY_TAG,
               comm,&receive_request);
   }
   int mtag;
-  MPI_Test(&receive_request,&mtag,&status);
+  MPI_Test(&receive_request,&mtag,MPI_STATUS_IGNORE);
   if (mtag != 0) {
-    // deserialize and cache the incoming data
+    // deserialize and process the incoming data
     int opr_id = *(const int*)buffer;
     try {
-    int tag = *(const int*)(buffer+sizeof(int));
-    int len = *(const int*)(buffer+2*sizeof(int));
-    Opr* opr = operations[opr_id];
-    void* data;
-    char* b = new char[len];
-    memcpy(b,buffer+3*sizeof(int),len);
-    deserialize(data,b,len,opr->encoded_type);
-    delete b;
-    MPI_Request_free(&receive_request);
-    // prepare for the next receive (non-blocking)
-    MPI_Irecv(buffer,max_buffer_size,MPI_BYTE,MPI_ANY_SOURCE,
-              MPI_ANY_TAG,comm,&receive_request);
-//    thread( [tag,opr_id,data,len] () {
-    handle_received_message(tag,opr_id,data,len+2*sizeof(int));
-//            }).detach();
-} catch ( const exception &ex ) {
-  info("*** fatal error: receiving the data for operation %d",opr_id);
-  abort();
-}
+      int tag = *(const int*)(buffer+sizeof(int));
+      int len = *(const int*)(buffer+2*sizeof(int));
+      Opr* opr = operations[opr_id];
+      void* data;
+      char* b = new char[len];
+      memcpy(b,buffer+3*sizeof(int),len);
+      deserialize(data,b,len,opr->encoded_type);
+      delete b;
+      MPI_Request_free(&receive_request);
+      // prepare for the next receive (non-blocking)
+      MPI_Irecv(buffer,max_buffer_size,MPI_BYTE,MPI_ANY_SOURCE,
+                MPI_ANY_TAG,comm,&receive_request);
+      handle_received_message(tag,opr_id,data,len+2*sizeof(int));
+    } catch ( const exception &ex ) {
+      info("*** fatal error: receiving the data for operation %d",opr_id);
+      abort();
+    }
     return 1;
   }
   return 0;
@@ -343,12 +147,16 @@ void abort () {
   MPI_Abort(comm,0);
 }
 
+mutex send_data_mutex;
+
 void send_data ( int rank, void* data, int opr_id, int tag ) {
+  // needs to be static and locked
   char* buffer = new char[max_buffer_size];
   if (data == nullptr) {
     info("null data sent for %d to %d",opr_id,rank);
     abort();
   }
+  lock_guard<mutex> lock(send_data_mutex);
   // serialize data into a byte array
   Opr* opr = operations[opr_id];
   *(int*)buffer = opr_id;
@@ -385,8 +193,6 @@ void mpi_startup ( int argc, char* argv[] ) {
   MPI_Comm_rank(comm,&executor_rank);
   MPI_Comm_size(comm,&num_of_executors);
   coordinator = 0;
-  for ( int i = 0; i < num_of_executors; i++ )
-    active_executors.push_back(i);
   char machine_name[256];
   gethostname(machine_name,255);
   int local_rank = atoi(getenv("OMPI_COMM_WORLD_LOCAL_RANK"));

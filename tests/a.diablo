@@ -3,7 +3,7 @@ var M = N;
 
 var Az = tensor*(N,M)[ ((i,j),i*j*1.0) | i <-0..(N-1), j<-0..(M-1) ];
 var Bz = tensor*(N,M)[ ((i,j),i*j*1.0) | i <-0..(N-1), j<-0..(M-1) ];
-var Cz = tensor*(N,M)[ ((i,j),i*j*1.0) | i <-0..(N-1), j<-0..(M-1) ];
+//var Cz = tensor*(N,M)[ ((i,j),i*j*1.0) | i <-0..(N-1), j<-0..(M-1) ];
 //var V = tensor*(N)[ (i,2.3) | i <-0..(N-1) ];
 
 //tensor*(N,M)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
@@ -19,7 +19,7 @@ var reps = args(1).toInt;
 
 var iter = 0;
 while (iter < reps) {
-  Az = tensor*(N,N)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Az, k == kk, let c = a*b, group by (i,j) ];
+  Az = tensor*(N,N)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
   //Az = tensor*(N,N)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
   //Az = tensor*(N,M)[ ((i,j),m+n) | ((i,j),m) <= Az, ((ii,jj),n) <= Bz, ii==i, jj==j ];
   //Az = tensor*(N,M)[ ((i,j),m+n+k) | ((i,j),m) <= Az, ((ii,jj),n) <= Bz, ((iii,jjj),k) <- Cz, ii==i, jj==j, iii==i, jjj==j ];

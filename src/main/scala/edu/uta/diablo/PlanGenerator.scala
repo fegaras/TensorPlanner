@@ -238,6 +238,17 @@ object PlanGenerator {
         case _ => None
       }
 
+  def getPlanIndex ( e: Expr ): Option[Expr]
+    = e match {
+        case Seq(List(Tuple(List(_,Tuple(List(key,_))))))
+          => Some(key)
+        case IfE(p,x,y)
+          => getPlanIndex(x)
+        case Let(p,x,b)
+          => getPlanIndex(b)
+        case _ => None
+      }
+
   def cpu_cost ( e: Expr ): Int
     = e match {
         case Call("merge_tensors",_)
@@ -328,6 +339,27 @@ object PlanGenerator {
                         "toList",null)
         case flatMap(f@Lambda(p@TuplePat(List(kk,pp)),b),x@Call(join,_))
           if embedApplyOpr(b,f,"",Nil,None).nonEmpty && getJoinType(join).nonEmpty
+          => val xp = makePlan(x,false)
+             val jk = newvar; val iv = newvar; val tv = newvar
+             val ip = getIndices(pp)
+             val Some(key) = embedApplyOpr(b,f,tv,Nil,
+                                   if (top) None else Some(toExpr(ip)))
+             flatMap(Lambda(TuplePat(List(VarPat(jk),TuplePat(List(ip,VarPat(tv))))),
+                            key),
+                     xp)
+        case flatMap(f@Lambda(p@TuplePat(List(kk,pp)),b),x@Call(join,_))
+          if false && embedApplyOpr(b,f,"",Nil,None).nonEmpty && getJoinType(join).nonEmpty
+          => val xp = makePlan(x,false)
+             val jk = newvar; val iv = newvar; val tv = newvar
+             val ip = getIndices(pp)
+             val Some(key) = embedApplyOpr(b,f,tv,Nil,
+                                   if (top) None
+                                   else getPlanIndex(b).orElse(Some(toExpr(getIndices(pp)))))
+             flatMap(Lambda(TuplePat(List(VarPat(jk),TuplePat(List(ip,VarPat(tv))))),
+                            key),
+                     xp)
+        case flatMap(f@Lambda(p@TuplePat(List(kk,pp)),b),x@Call(join,_))
+          if false && embedApplyOpr(b,f,"",Nil,None).nonEmpty && getJoinType(join).nonEmpty
           => val xp = makePlan(x,false)
              val jk = newvar; val iv = newvar; val tv = newvar
              val ip = getIndices(pp)

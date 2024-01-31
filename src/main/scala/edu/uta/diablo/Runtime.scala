@@ -148,8 +148,15 @@ object Runtime {
     loadBlocks = PlanGenerator.loadBlocks.toArray
     val t = System.currentTimeMillis()
     Scheduler.schedule(e)
-    if (isCoordinator())
-      info("Scheduling time: %.5f secs".format((System.currentTimeMillis()-t)/1000.0))
+    if (trace && isCoordinator()) {
+      println("Plan:")
+      for ( i <- operations.indices ) {
+        val opr = operations(i)
+        printf("    %d:%s at %d cost %d\n",
+               i,opr,opr.node,opr.cpu_cost)
+      }
+      printf("Scheduling time: %.5f secs".format((System.currentTimeMillis()-t)/1000.0))
+    }
     val time = wtime()
     broadcast_plan()
     for ( x <- operations )
@@ -454,12 +461,15 @@ object Runtime {
     barrier()
     receiver.stop()
     sender.stop()
-    if (PlanGenerator.trace) {
-      if (isCoordinator())
-        info("Evaluation time: %.3f secs".format(wtime()-time))
-      val cbs = operations.indices.filter(x => operations(x).cached != null)
-      info("Cached blocks at "+executor_rank+": ("+cbs.length+") "+cbs)
-    }
+    if (isCoordinator())
+      info("Evaluation time: %.3f secs".format(wtime()-time))
+    val unclaimed = operations.zipWithIndex.filter {
+                        case (opr,opr_id)
+                          => (opr.cached != null && !opr.isInstanceOf[LoadOpr]
+                              && !exit_points.contains(opr_id))
+                    }.map(_._2).toList
+    info("There are "+unclaimed.length+" unclaimed blocks by GC in executor "
+         +executor_rank+": "+unclaimed)
     plan
   }
 

@@ -38,15 +38,12 @@ object Test {
       var Az = tensor*(N,M)[ ((i,j),i*j*1.0) | i <-0..(N-1), j<-0..(M-1) ];
       var Bz = tensor*(M,N)[ ((i,j),3.4) | i <-0..(N-1), j<-0..(M-1) ];
       var Cz = tensor*(N,M)[ ((i,j),4.5) | i <-0..(N-1), j<-0..(M-1) ];
-      //var V = tensor*(N)[ (i,2.3) | i <-0..(N-1) ];
-
-      //tensor*(N,M)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
-
+      var V = tensor*(N)[ (i,2.3) | i <-0..(N-1) ];
 
       //Az = Az+Bz-3.5*Cz;
       //Az
 
-      tensor*(N)[ (i,+/v) | (i,v) <- V, ((ii,j),a) <- Az, ii==i, let v = a+v, group by i ];
+      //tensor*(N)[ (i,+/v) | (i,v) <- V, ((ii,j),a) <- Az, ii==i, let v = a+v, group by i ];
 
       //tensor*(N,M)[ ((i,j),v+a) | (i,v) <- V, ((ii,j),a) <- Az, ii==i ];
 
@@ -76,9 +73,9 @@ object Test {
 
       // error: tensor*(N,M)[ ((i-12,j-14),a) | ((i,j),a) <- Az, i>=12, j>=14 ];
 
-      //var n = +/[ a | ((i,j),a) <- Az ];
-      //println(n);
-      //Az
+      var n = +/[ a | ((i,j),a) <- Az ];
+      println(n);
+      Az
 
 /*
         for i = 0, N-1 do
@@ -96,9 +93,9 @@ object Test {
       for i = 0, 20 do
          Az = tensor*(N,M)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
       Az
-
-     tensor*(100)[ (i,j.length) | (i,j) <- graph, group by i ];
 */
+     //tensor*(100)[ (i,j.length) | (i,j) <- graph, group by i ];
+
 
       """)
 

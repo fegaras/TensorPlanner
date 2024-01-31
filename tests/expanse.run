@@ -17,12 +17,12 @@ DIABLO_HOME=/home/$USER/TensorPlanner
 export SCALA_HOME=$SW/scala-2.12.3
 export SPARK_HOME=$SW/spark-3.1.2-bin-hadoop3.2
 # OPEN MPI was built using: --enable-mpi-threads --enable-mpi-java --with-slurm --without-ucx --without-hcol
-export OPENMPI_HOME=$SW/openmpi
+export MPI_HOME=$SW/openmpi
 
-export PATH="$OPENMPI_HOME/bin:$SCALA_HOME/bin:$PATH"
-export LD_LIBRARY_PATH="$OPENMPI_HOME/lib:$LD_LIBRARY_PATH"
+export PATH="$MPI_HOME/bin:$SCALA_HOME/bin:$PATH"
+export LD_LIBRARY_PATH="$MPI_HOME/lib:$LD_LIBRARY_PATH"
 
-JARS=classes:$DIABLO_HOME/lib/diablo.jar:$OPENMPI_HOME/lib/mpi.jar
+JARS=classes:$DIABLO_HOME/lib/diablo.jar:$MPI_HOME/lib/mpi.jar
 for I in `ls $SPARK_HOME/jars/*.jar -I *unsafe*`; do
     JARS=$JARS:$I
 done
@@ -40,4 +40,4 @@ ulimit -l unlimited
 
 # for each expanse node: 2 sockets, 1 executor per socket, 64 Java threads per executor
 mpirun -N 2 --bind-to socket --mca btl_openib_allow_ib true \
-       scala -J-Xms64g -J-Xmx64g -classpath classes:$DIABLO_HOME/lib/diablo.jar:$OPENMPI_HOME/lib/mpi.jar Multiply 1 10000 10
+       scala -J-Xms64g -J-Xmx64g -classpath classes:$DIABLO_HOME/lib/diablo.jar:$MPI_HOME/lib/mpi.jar Multiply 1 10000 10

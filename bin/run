@@ -1,14 +1,5 @@
 #/bin/bash
 
-if [ -z ${DIABLO_HOME} ]; then
-   DIABLO_HOME="$(cd `dirname $0`/..; pwd -P)"
-fi
-
-MPI_HOME=$HOME/openmpi
-
-export PATH="$MPI_HOME/bin:$PATH"
-export LD_LIBRARY_PATH="$MPI_HOME/lib/:$LD_LIBRARY_PATH"
-
 # number of executors per node
 executors=2
 

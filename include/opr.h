@@ -87,7 +87,6 @@ class Opr {
 public:
   int node = 0;
   void* coord = nullptr;
-  bool int_index = false;
   int size = -1;
   int static_blevel = -1;
   enum Status status = notReady;
