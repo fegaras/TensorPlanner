@@ -284,6 +284,8 @@ object Typechecker {
               => Some(1)
             case _ => None
           }
+      def is_matrix ( x: Expr ): Boolean
+        = dims(typecheck(x,env)).contains(2)
       e match {
         case MethodCall(x,"t",null)
           => typecheck(x,env) match {
@@ -295,6 +297,20 @@ object Typechecker {
                                           List(Generator(tuple(List(tuple(vxs.map(VarPat)),VarPat(xv))),x))))
                 case _ => false
              }
+        case MethodCall(x,"@",List(MethodCall(a,n,List(b))))
+          if false && operations.contains(n) && is_matrix(a) && is_matrix(b)
+          => val u = MethodCall(MethodCall(x,"@",List(a)),
+                                n,List(MethodCall(x,"@",List(b))))
+             if (array_operation(u,env))
+               modify(u.obj)
+             else false
+        case MethodCall(MethodCall(a,n,List(b)),"@",List(y))
+          if false && operations.contains(n) && is_matrix(a) && is_matrix(b)
+          => val u = MethodCall(MethodCall(a,"@",List(y)),
+                                n,List(MethodCall(b,"@",List(y))))
+             if (array_operation(u,env))
+               modify(u.obj)
+             else false
         case MethodCall(x,m,List(y))
           => (typecheck(x,env),typecheck(y,env)) match {
                 case (tx,ty)   // matrix-matrix multiplication

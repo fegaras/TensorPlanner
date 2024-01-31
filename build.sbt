@@ -21,6 +21,10 @@ libraryDependencies ++= {
   }
 }
 
+val mpijar = sys.env.get("MPI_HOME").getOrElse("../..")+"/lib/mpi.jar"
+
+libraryDependencies += "mpi" % "MPI" % "1.0" from ("file://"+mpijar)
+
 // Use BLAS:
 // libraryDependencies += "com.github.fommil.netlib" % "all" % "1.1.2" pomOnly()
 

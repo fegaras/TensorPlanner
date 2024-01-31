@@ -343,6 +343,17 @@ object PlanGenerator {
              val jk = newvar; val iv = newvar; val tv = newvar
              val ip = getIndices(pp)
              val Some(key) = embedApplyOpr(b,f,tv,Nil,
+                                   if (top) None
+                                   else getPlanIndex(b).orElse(Some(toExpr(getIndices(pp)))))
+             flatMap(Lambda(TuplePat(List(VarPat(jk),TuplePat(List(ip,VarPat(tv))))),
+                            key),
+                     xp)
+        case flatMap(f@Lambda(p@TuplePat(List(kk,pp)),b),x@Call(join,_))
+          if false && embedApplyOpr(b,f,"",Nil,None).nonEmpty && getJoinType(join).nonEmpty
+          => val xp = makePlan(x,false)
+             val jk = newvar; val iv = newvar; val tv = newvar
+             val ip = getIndices(pp)
+             val Some(key) = embedApplyOpr(b,f,tv,Nil,
                                    if (top) None else Some(toExpr(ip)))
              flatMap(Lambda(TuplePat(List(VarPat(jk),TuplePat(List(ip,VarPat(tv))))),
                             key),

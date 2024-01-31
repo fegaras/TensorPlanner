@@ -21,7 +21,7 @@ import scala.util.matching.Regex
 object Lifting {
   import AST._
   import Typechecker._
-  import Normalizer.{normalizeAll,renameVars}
+  import Normalizer.{normalizeAll,renameVars,is_simple_compr}
   import scala.collection.mutable
 
   // Contains the natural transformations for type abstractions
@@ -200,6 +200,7 @@ object Lifting {
               }
          case ((r,s,n),Generator(p,u:Comprehension))
            if set_compr_storage(lift_expr(u,r),r).nonEmpty
+              // && is_simple_compr(u)
            => val lu = lift_expr(u,r)
               lu.tpe = null    // clear the type info of e
               val tp = typecheck(lu,r)

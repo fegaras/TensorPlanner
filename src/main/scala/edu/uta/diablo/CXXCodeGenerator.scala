@@ -280,7 +280,7 @@ object CXXCodeGenerator {
          case TupleType(Nil)
            => "nullptr_t"
          case TupleType(List(t))
-           => makeCtype(t)
+           => makeCtype(t,true)
          case TupleType(ts)
            => ts.map(makeCtype(_,true)).mkString("tuple<",",",">*")
          case StorageType(_,_,_)
