@@ -427,17 +427,17 @@ object CXXCodeGenerator {
              makeCtype(tp)+" "+v+" = new vector<"+makeCtype(et,true)+">()"
         case VarDecl(v,tp,null)
           => env = env + ((v,tp))
-             makeCtype(tp)+"  "+v
+             makeCtype(tp,true)+"  "+v
         case VarDecl(v,tp,Seq(Nil))
           => env = env + ((v,tp))
              val z = makeC(makeZero(tp),tabs,false)
-             makeCtype(tp)+" "+v+" = "+z
+             makeCtype(tp,true)+" "+v+" = "+z
         case VarDecl(v,tp,Seq(List(x)))
           => env = env + ((v,tp))
-             makeCtype(tp)+" "+v+" = "+makeC(x,tabs,false)
+             makeCtype(tp,true)+" "+v+" = "+makeC(x,tabs,false)
         case VarDecl(v,tp,x)
           => env = env + ((v,tp))
-             makeCtype(tp)+" "+v+" = "+makeC(x,tabs,false)
+             makeCtype(tp,true)+" "+v+" = "+makeC(x,tabs,false)
         case Assign(d,Seq(List(MethodCall(x,m,List(y)))))
           if x == d && List("+","-","*","/").contains(m)
           => makeC(d,tabs,false)+" "+m+"= "+makeC(y,tabs,false)
