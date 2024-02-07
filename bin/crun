@@ -5,6 +5,8 @@ executors=2
 
 #export OMP_NUM_THREADS=2
 
-mpirun -N $executors --bind-to socket --use-hwthread-cpus $*
+cmd="mpirun -N $executors --bind-to socket --use-hwthread-cpus $*"
 
-#mpirun -N $executors --bind-to socket --host localhost:-1,milos:-1 --use-hwthread-cpus $*
+echo $cmd
+
+$cmd

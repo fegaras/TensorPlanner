@@ -19,5 +19,8 @@ echo "\"\"\")
 
 scalac -d classes -cp ${JARS} cxxgen.sc >cxxgen.log
 
-#echo "mpic++ -O3 -DNDEBUG cxxgen.cpp -fopenmp -I${DIABLO_HOME}/include -L${DIABLO_HOME}/lib -ldiablo"
-mpic++ -O3 -DNDEBUG cxxgen.cpp -fopenmp -I${DIABLO_HOME}/include -L${DIABLO_HOME}/lib -ldiablo
+cmd="mpic++ -O3 -DNDEBUG cxxgen.cpp -fopenmp -I${DIABLO_HOME}/include -L${DIABLO_HOME}/lib -ldiablo"
+
+echo $cmd
+
+$cmd

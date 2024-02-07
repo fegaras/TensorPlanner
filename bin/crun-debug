@@ -5,5 +5,5 @@ executors=2
 
 #export OMP_NUM_THREADS=4
 
-mpirun -N $executors --bind-to socket --use-hwthread-cpus gdb -ex run --args $*
-#mpirun -N $executors --bind-to socket --use-hwthread-cpus xterm -geometry 160x50 -hold -e gdb -ex run --args $*
+#mpirun -N $executors --bind-to socket --use-hwthread-cpus gdb -ex run --args $*
+mpirun -N $executors --bind-to socket --use-hwthread-cpus xterm -geometry 160x50 -hold -e gdb -ex run --args $*

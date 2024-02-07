@@ -35,6 +35,7 @@ extern bool trace_delete;
 
 void abort ();
 
+
 /* Array blocks are C arrays with length */
 template< typename T >
 class Vec {
@@ -97,6 +98,7 @@ public:
     delete[] data;
     if (trace_delete)
       printf("delete %p\n",this);
+    data = nullptr;
   }
 };
 

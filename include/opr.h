@@ -99,6 +99,7 @@ public:
   vector<int>* dependents;
   int count;
   int reduced_count;
+  int message_count;
   int first_reduced_input = -1;
   int cpu_cost;
   vector<int>* os;

@@ -26,21 +26,21 @@ int executor_rank = 0;
 int coordinator = 0;
 const int max_buffer_size = 50000000;
 auto comm = MPI_COMM_WORLD;
-MPI_Request receive_request;
+MPI_Request receive_request = MPI_REQUEST_NULL;
 extern bool delete_arrays;
 extern vector<Opr*> operations;
 extern vector<void*(*)(void*)> functions;
 bool stop_receiver = false;
+extern bool inMemory;
 
 void info ( const char *fmt, ... );
 
 int serialize ( void* data, char* buffer, vector<int>* encoded_type );
 void deserialize ( void* &data, const char* buffer, size_t len, vector<int>* encoded_type );
 
-int delete_array ( void* &data, vector<int>* encoded_type, int loc );
-void delete_array ( int opr_id );
+int delete_array ( void* &data, vector<int>* encoded_type );
 void delete_first_reduce_input ( int rid );
-void delete_completed_dependents ( int opr_id );
+
 
 void handle_received_message ( int tag, int opr_id, void* data, int len ) {
   Opr* opr = operations[opr_id];
@@ -73,11 +73,11 @@ void handle_received_message ( int tag, int opr_id, void* data, int len ) {
       opr->cached = new tuple<void*,void*>(get<0>(*x),op(new tuple<void*,void*>(get<1>(*x),get<1>(*y))));
       if (delete_arrays && opr->first_reduced_input < 0) {
         info("    delete current reduce result in opr %d",opr_id);
-        delete_array(old,opr->encoded_type,0);
+        delete_array(old,opr->encoded_type);
       }
       if (delete_arrays) {
         info("    delete incoming partial reduce block for opr %d",opr_id);
-        delete_array(data,opr->encoded_type,0);
+        delete_array(data,opr->encoded_type);
       }
     }
     delete_first_reduce_input(opr_id);
@@ -95,14 +95,14 @@ void handle_received_message ( int tag, int opr_id, void* data, int len ) {
 int check_communication () {
   // needs to be static
   static const char* buffer = new char[max_buffer_size];
-  if (receive_request == nullptr) {
+  if (receive_request == MPI_REQUEST_NULL) {
     // prepare for the first receive (non-blocking)
     MPI_Irecv(buffer,max_buffer_size,MPI_BYTE,MPI_ANY_SOURCE,MPI_ANY_TAG,
               comm,&receive_request);
   }
   int mtag;
   MPI_Test(&receive_request,&mtag,MPI_STATUS_IGNORE);
-  if (mtag != 0) {
+  if (mtag == 1) {
     // deserialize and process the incoming data
     int opr_id = *(const int*)buffer;
     try {
@@ -114,7 +114,6 @@ int check_communication () {
       memcpy(b,buffer+3*sizeof(int),len);
       deserialize(data,b,len,opr->encoded_type);
       delete b;
-      MPI_Request_free(&receive_request);
       // prepare for the next receive (non-blocking)
       MPI_Irecv(buffer,max_buffer_size,MPI_BYTE,MPI_ANY_SOURCE,
                 MPI_ANY_TAG,comm,&receive_request);
@@ -129,13 +128,15 @@ int check_communication () {
 }
 
 void kill_receiver () {
-  MPI_Cancel(&receive_request);
-  MPI_Request_free(&receive_request);
-  receive_request = nullptr;
+  if (receive_request != MPI_REQUEST_NULL) {
+    MPI_Cancel(&receive_request);
+    MPI_Request_free(&receive_request);
+    receive_request = MPI_REQUEST_NULL;
+  }
 }
 
 void run_receiver () {
-  if (receive_request != nullptr)
+  if (receive_request != MPI_REQUEST_NULL)
     kill_receiver();
   while (!stop_receiver) {
     check_communication();
@@ -170,6 +171,8 @@ void send_data ( int rank, void* data, int opr_id, int tag ) {
 }
 
 bool wait_all ( bool b ) {
+  if (inMemory)
+    return b;
   unsigned char in[1] = { b ? 0 : 1 };
   unsigned char ret[1];
   MPI_Allreduce(in,ret,1,MPI_BYTE,MPI_LOR,comm);
@@ -187,6 +190,8 @@ bool isCoordinator () {
 }
 
 void mpi_startup ( int argc, char* argv[] ) {
+  if (inMemory)
+    return;
   int ignore;
   MPI_Init_thread(&argc,&argv,MPI_THREAD_FUNNELED,&ignore);
   MPI_Comm_set_errhandler(comm,MPI_ERRORS_RETURN);
@@ -204,5 +209,6 @@ void mpi_startup ( int argc, char* argv[] ) {
 }
 
 void mpi_finalize () {
-  MPI_Finalize();
+  if (!inMemory)
+    MPI_Finalize();
 }

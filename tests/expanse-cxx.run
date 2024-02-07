@@ -31,4 +31,4 @@ done
 ulimit -l unlimited
 
 # for each expanse node: 2 sockets, 1 executor per socket, 64 threads per executor
-mpirun -N 2 --bind-to socket --mca btl_openib_allow_ib true a.out 10000 10
+mpirun -N 2 --bind-to socket --mca btl_openib_allow_ib true a.out 10000 1

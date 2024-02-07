@@ -26,10 +26,15 @@
 #include "opr.h"
 #include "comm.h"
 
+// trace execution
 const bool trace = true;
+// trace block deletes for debugging
 static bool trace_delete = false;
+// enables deletion of garbage blocks
 bool delete_arrays = true;
 const bool enable_partial_reduce = true;
+// evaluate the plan without MPI using 1 executor
+bool inMemory = false;
 
 vector<Opr*> operations;
 vector<void*(*)(void*)> functions;
@@ -336,6 +341,15 @@ int delete_array ( void* &data, vector<int>* encoded_type, int loc ) {
   }
 }
 
+int delete_array ( void* &data, vector<int>* encoded_type ) {
+  try {
+    delete_array(data,encoded_type,0);
+  } catch (...) {
+    info("cannot delete block %d",data);
+  }
+}
+
+
 // delete the cache of a task
 void delete_array ( int opr_id ) {
   if (!delete_arrays)
@@ -345,10 +359,17 @@ void delete_array ( int opr_id ) {
     cout << executor_rank << " " << "delete array " << opr_id << " "
          << opr->status << " " << opr->cached << " " << opr->count << endl;
   if (opr->cached != nullptr) {
-    delete_array(opr->cached,opr->encoded_type,0);
+    delete_array(opr->cached,opr->encoded_type);
     opr->cached = nullptr;
     info("    delete block %d (%d/%d)",opr_id,block_count,block_created);
   }
+}
+
+// does this task create a new block?
+bool block_constructor ( Opr* opr ) {
+  // true for a reduce or apply task that create a block
+  // and when receiving a remote block
+  return opr->cpu_cost > 0 || opr->node != executor_rank;
 }
 
 bool sends_msgs_only ( Opr* opr ) {
@@ -358,42 +379,31 @@ bool sends_msgs_only ( Opr* opr ) {
   return sends_msgs;
 }
 
-void delete_unclaimed_dependents ( int opr_id ) {
-  Opr* opr = operations[opr_id];
-  if (opr->cached != nullptr)
-    for ( int c: *opr->dependents ) {
-      Opr* copr = operations[c];
-      if (copr->count <= 0) {
-        delete_array(c);
-        delete_unclaimed_dependents(c);
-      }
-    }
-}
+void may_delete_deps ( int opr_id );
 
-void delete_completed_dependents ( int opr_id ) {
+// delete the task cache and the caches of its dependencies
+void may_delete ( int opr_id ) {
   Opr* opr = operations[opr_id];
-  for ( int c: *opr->dependents ) {
-    Opr* copr = operations[c];
-    copr->count--;
+  if (block_constructor(opr)) {// && opr->count > 0) {
     if (trace_delete)
-      cout << executor_rank << " " << "decrement count " << c
-           << " " << copr->count << endl;
-    if (copr->count <= 0) {
-      delete_array(c);
-      //delete_unclaimed_dependents(c);
-    }
+      cout << executor_rank << " " << "may delete " << opr_id << endl;
+    opr->count--;
+    if (trace_delete)
+      cout << executor_rank << " " << "decrement count " << opr_id
+           << " " << opr->count << endl;
+    if (opr->count <= 0 && opr->cached != nullptr)
+      delete_array(opr_id);
   }
 }
 
-// delete the caches of the task dependents
-void delete_ready_dependents ( int opr_id ) {
+// delete the caches of the task dependencies
+void may_delete_deps ( int opr_id ) {
   Opr* opr = operations[opr_id];
-  if ((opr->cpu_cost > 0)// || opr->node != executor_rank)
-      && (opr->type == applyOPR
-          || (opr->type == reduceOPR && !enable_partial_reduce))) {
+  if (opr->cpu_cost > 0) {
     if (trace_delete)
-      cout << executor_rank << " " << "delete ready dependents " << opr_id << endl;
-    delete_completed_dependents(opr_id);
+      cout << executor_rank << " " << "may delete deps " << opr_id << endl;
+    for ( int c: *opr->dependents )
+      may_delete(c);
   }
 }
 
@@ -405,7 +415,7 @@ vector<int>* get_dependents ( Opr* opr ) {
   vector<int>* ds = new vector<int>();
   for ( int c: *opr->children ) {
     Opr* copr = operations[c];
-    if (copr->cpu_cost > 0 || copr->node != executor_rank)
+    if (block_constructor(copr) && copr->type != loadOPR)
       ds->push_back(c);
     else {  // c has 0 cost and is local
       copr->dependents = get_dependents(copr);
@@ -426,6 +436,7 @@ void initialize_opr ( Opr* x ) {
     cache_data(x,loadBlocks[x->opr.load_opr->block]);
   // initial count is the number of local consumers
   x->count = 0;
+  x->message_count = 0;
   x->dependents = get_dependents(x);
   if (x->type == reduceOPR) {
     // used for partial reduction
@@ -456,12 +467,13 @@ void schedule ( void* plan ) {
     x->dependents = nullptr;
   for ( Opr* x: operations )
     initialize_opr(x);
-  // don't change this; works for matrix mult for 1 or 2 execs
-  for ( Opr* x: operations ) {
-    if (x->cpu_cost > 0 && x->node == executor_rank)
-      for ( int c: *x->dependents )
-          operations[c]->count++;
-  }
+  for ( Opr* x: operations )
+    if (x->node == executor_rank)
+      if (x->cpu_cost > 0 || sends_msgs_only(x))
+        for ( int c: *x->dependents ) {
+          Opr* copr = operations[c];
+          copr->count++;
+        }
   if (trace && isCoordinator()) {
     cout << "Plan:" << endl;
     for ( int i = 0; i < operations.size(); i++ ) {
@@ -483,7 +495,8 @@ void schedule ( void* plan ) {
              opr->count,sprint(*opr->dependents).c_str());
     }
   }
-  barrier();
+  if (!inMemory)
+    barrier();
 }
 
 void* inMemEval ( int id, int tabs );
@@ -505,6 +518,7 @@ void* inMemEvalPair ( int lg, int tabs ) {
   }
 }
 
+// top-down recursive evaluation
 void* inMemEval ( int id, int tabs ) {
   Opr* e = operations[id];
   if (hasCachedValue(e))
@@ -547,6 +561,7 @@ void* inMemEval ( int id, int tabs ) {
   return res;
 }
 
+ // in-memory evaluation using top-down recursive evaluation on a plan tree
 void* evalTopDown ( void* plan ) {
   tuple<void*,void*,vector<tuple<void*,int>*>*>* p = plan;
   for ( Opr* x: operations )
@@ -626,7 +641,7 @@ try {
           res = new tuple<void*,void*>(key,acc);
           acc = op(new tuple<void*,void*>(acc,get<1>(*v)));
           if (i > 1)
-            delete_array(res,opr->encoded_type,0);
+            delete_array(res,opr->encoded_type);
           delete res;
         }
         i++;
@@ -648,20 +663,6 @@ try {
 
 void enqueue_ready_operations ( int opr_id );
 
-void delete_reduce_input ( int opr_id ) {
-  Opr* opr = operations[opr_id];
-  opr->count--;
-  if (opr->count <= 0) {
-    if (opr->cpu_cost > 0) {
-      if (trace_delete)
-        cout << executor_rank << " " << "delete reduce input " << opr_id << endl;
-      delete_array(opr_id);
-    }
-    // needed because it is not done in enqueue_opr
-    delete_completed_dependents(opr_id);
-  }
-}
-
 // delete the first local reduce input
 void delete_first_reduce_input ( int rid ) {
   Opr* reduce_opr = operations[rid];
@@ -669,7 +670,7 @@ void delete_first_reduce_input ( int rid ) {
       && reduce_opr->children->size() > 1) {
     info("    delete first reduce input %d of %d",
          reduce_opr->first_reduced_input,rid);
-    delete_reduce_input(reduce_opr->first_reduced_input);
+    may_delete(reduce_opr->first_reduced_input);
     reduce_opr->first_reduced_input = -1;
   }
 }
@@ -697,11 +698,11 @@ void enqueue_reduce_opr ( int opr_id, int rid ) {
     // remove the old reduce result
     if (delete_arrays && reduce_opr->first_reduced_input < 0) {
       info("    delete current reduce result in opr %d",rid);
-      delete_array(old,reduce_opr->encoded_type,0);
+      delete_array(old,reduce_opr->encoded_type);
     }
-    // when reduce_opr is done with input opr => check if we can delete opr
+    // when reduce_opr finished with input opr => check if we can delete opr
     delete_first_reduce_input(rid);
-    delete_reduce_input(opr_id);
+    may_delete(opr_id);
   }
   reduce_opr->reduced_count--;
   if (reduce_opr->reduced_count <= 0) {
@@ -730,7 +731,6 @@ void enqueue_ready_operations ( int opr_id ) {
     for ( int c: *opr->consumers ) {
       Opr* copr = operations[c];
       if (copr->node != executor_rank
-          && copr->node >= 0
           && (!enable_partial_reduce
               || copr->type != reduceOPR)
           && !member(copr->node,&nodes_to_send_data))
@@ -738,9 +738,8 @@ void enqueue_ready_operations ( int opr_id ) {
     }
     { lock_guard<mutex> lock(send_mutex);
       for ( int c: nodes_to_send_data ) {
-        // lock the dependents until messages have been sent
-        for ( int d: *operations[opr_id]->dependents )
-          operations[d]->count++;
+        // lock the task until all messages have been sent
+        opr->message_count++;
         send_queue.push_back(new tuple<int,int,int>(c,opr_id,0));
       }
     }
@@ -752,7 +751,7 @@ void enqueue_ready_operations ( int opr_id ) {
       case reduceOPR:
         if (enable_partial_reduce) {
           enqueue_reduce_opr(opr_id,c);
-          return;
+          break;
         }
       default:
         // enqueue the local consumers that are ready
@@ -770,8 +769,10 @@ void enqueue_ready_operations ( int opr_id ) {
       }
     }
   }
-  // delete the completed descendants
-  delete_ready_dependents(opr_id);
+  while (opr->message_count > 0)
+    this_thread::sleep_for(chrono::milliseconds(1));
+  // delete the completed dependents
+  may_delete_deps(opr_id);
   opr->status = completed;
 }
 
@@ -795,19 +796,6 @@ bool in_send_queue ( int opr_id ) {
   return false;
 }
 
-void delete_after_send ( int opr_id ) {
-  Opr* opr = operations[opr_id];
-  delete_completed_dependents(opr_id);
-  if (sends_msgs_only(opr) && opr->cpu_cost > 0) {
-    opr->count--;
-    if (opr->count <= 0) {
-      if (trace_delete)
-        cout << executor_rank << " " << "delete self " << opr_id << endl;
-      delete_array(opr_id);
-    }
-  }
-}
-
 void run_sender () {
   while (!stop_sender) {
     if (!send_queue.empty()) {
@@ -820,28 +808,19 @@ void run_sender () {
       int opr_id = get<1>(*x);
       Opr* opr = operations[opr_id];
       send_data(get<0>(*x),opr->cached,opr_id,0);
-      delete_after_send(opr_id);
+      opr->message_count--;
+      if (trace_delete)
+        cout << "finished sent " << opr_id << " " << opr->message_count
+             << " " << sends_msgs_only(opr) << endl;
+      if (opr->message_count == 0 && sends_msgs_only(opr)) {
+        // when all sends from opr have been completed and opr is a sink (sends data to remote only)
+        if (opr->cpu_cost > 0)
+          may_delete(opr_id);
+        else for ( int c: *opr->dependents )
+               may_delete(c);
+      }
     } else this_thread::sleep_for(chrono::milliseconds(1));
   }
-}
-
-// garbage collection
-void gc () {
-  int n = block_count;
-  static vector<int>* es;
-  es = exit_points;
-  BFS(es,
-      [] ( int c ) {
-        Opr* copr = operations[c];
-        if (copr->count <= 0 && copr->cached != nullptr
-            && (copr->cpu_cost > 0 || copr->node != executor_rank)
-            && !member(c,es)) {
-          delete_array(copr->cached,copr->encoded_type,0);
-          copr->cached = nullptr;
-        }
-      });
-  info("GC removed %d blocks out of %d",
-       n-block_count,n);
 }
 
 void work () {
@@ -899,23 +878,25 @@ void* eval ( void* plan ) {
   for ( int x: *entries )
     ready_queue.push(x);
   info("Queue on %d: %s",executor_rank,sprint(*entries).c_str());
-  barrier();
-  thread rrp(run_receiver);
-  thread rsp(run_sender);
-  work();
-  barrier();
-  stop_receiver = true;
-  stop_sender = true;
-  kill_receiver();
-  rrp.join();
-  rsp.join();
+  if (!inMemory) {
+    barrier();
+    thread rrp(run_receiver);
+    thread rsp(run_sender);
+    work();
+    barrier();
+    stop_receiver = true;
+    stop_sender = true;
+    kill_receiver();
+    rrp.join();
+    rsp.join();
+  } else work();
   vector<tuple<void*,void*>*>* res = new vector<tuple<void*,void*>*>();
   for ( tuple<void*,int>* d: *get<2>(*p) )
     res->push_back(new tuple<void*,void*>(get<0>(*d),operations[get<1>(*d)]->cached));
   if (isCoordinator())
-    info("Evaluation time: %.3f secs",MPI_Wtime()-time);
-  info("Executor %d:  final blocks: %d,  max blocks: %d,  created blocks: %d",
-       executor_rank,block_count,max_blocks,block_created);
+    printf("*** Evaluation time: %.3f secs\n",MPI_Wtime()-time);
+  printf("*** Executor %d:  final blocks: %d,  max blocks: %d,  created blocks: %d\n",
+         executor_rank,block_count,max_blocks,block_created);
   vector<int> unclaimed;
   for ( int i = 0; i < operations.size(); i++ ) {
     Opr* opr = operations[i];
@@ -951,6 +932,12 @@ void* evalOpr ( int opr_id ) {
 void* collect ( void* plan ) {
   tuple<void*,void*,vector<tuple<void*,int>*>*>* p = plan;
   vector<tuple<void*,int>*>* es = get<2>(*p);
+  if (inMemory) {
+    vector<void*>* blocks = new vector<void*>();
+    for ( auto x: *es )
+      blocks->push_back(operations[get<1>(*x)]->cached);
+    return new tuple<void*,void*,void*>(get<0>(*p),get<1>(*p),blocks);
+  }
   if (isCoordinator()) {
     info("Collecting the task blocks at the coordinator");
     stop_receiver = false;

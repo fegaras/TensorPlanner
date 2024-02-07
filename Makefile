@@ -1,5 +1,6 @@
 all:
-	mpic++ -O3 -fopenmp -fpermissive -w -DNDEBUG -Iinclude -I${GC_HOME}/include -c src/main/cpp/*.cpp
+	#don't use -O
+	mpic++ -fopenmp -fpermissive -w -DNDEBUG -Iinclude -I${GC_HOME}/include -c src/main/cpp/*.cpp
 	ar rcs lib/libdiablo.a *.o
 	rm *.o
 
