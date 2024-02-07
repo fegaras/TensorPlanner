@@ -85,7 +85,7 @@ public:
 
 class Opr {
 public:
-  int node = 0;
+  int node = -1;
   void* coord = nullptr;
   bool int_index = false;
   int size = -1;

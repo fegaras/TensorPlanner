@@ -59,76 +59,128 @@ int communication_cost ( Opr* opr, int node ) {
   return n;
 }
 
-struct Worker {
-  int workDone;
-  int numTasks;
-  int id;
-};
+long get_coord_hash(vector<long>& coord) {
+  long seed = rand();
+  for(int i : coord) {
+    seed ^= (i + (seed << 3) + (seed >> 1));
+    seed = seed % 5381;
+  }
+  return abs(seed);
+}
 
-auto work_cmp = [] ( Worker x, Worker y ) {
-  if (x.workDone == y.workDone)
-    return y.numTasks <= x.numTasks;
-  else return y.workDone <= x.workDone;
-};
-static priority_queue<Worker,vector<Worker>,decltype(work_cmp)>
-            workerQueue(work_cmp);
+long get_worker_node(vector<long>& coord, long row_cnt, long col_cnt, long row_sz, long row_sz1, long col_sz) {
+  if(coord.size() == 1)
+    return coord[0]/row_sz1;
+  if(coord.size() == 2)
+    return (coord[0]/row_sz)*col_cnt + coord[1]/col_sz;
+  return get_coord_hash(coord) % num_of_executors;
+}
+
+void add_tasks(vector<int>& task_list, int node, queue<int>& q) {
+  for (int c: task_list) {
+    Opr* copr = operations[c];
+    if(copr->node == -1) {
+      if(copr->type == reduceOPR && copr->opr.reduce_opr->valuep) // total aggregation result is on coordinator
+        copr->node = coordinator;
+      else
+        copr->node = node;
+      q.push(c);
+    }
+  }
+}
+
+void get_coord( void* coord, vector<int>* encoded_type, vector<long>& coords, int loc ) {
+  if(coord == nullptr) {
+    return;
+  }
+  long i = 0;
+  switch ((*encoded_type)[loc]) {
+    case 0: case 1: // index
+      i = (long)coord;
+      coords.push_back(i);
+      return;
+    case 10: { // tuple
+      switch ((*encoded_type)[loc+1]) {
+        case 2: {
+          tuple<long,long>* index = coord;
+          coords.push_back((long)get<0>(*index));
+          coords.push_back((long)get<1>(*index));
+          return;
+        }
+        case 3: {
+          tuple<long,long,long>* index = coord;
+          coords.push_back((long)get<0>(*index));
+          coords.push_back((long)get<1>(*index));
+          coords.push_back((long)get<2>(*index));
+          return;
+
+        }
+      }
+    }
+  }
+}
 
 void schedule_plan ( void* plan ) {
   set_sizes();
   queue<int> task_queue;
-  for ( int i = 0; i < num_of_executors; i++ ) {
-    work.push_back(0);
-    tasks.push_back(0);
+  vector<vector<long>> op_coords(operations.size(),vector<long>());
+  long n = 0, m = 0;
+  for (int opr_id = 0; opr_id < operations.size(); opr_id++) {
+    Opr* opr = operations[opr_id];
+    get_coord(opr->coord, opr->encoded_type, op_coords[opr_id], 2);
+    if(op_coords[opr_id].size() == 0) {
+      continue;
+    }
+    n = max(n, op_coords[opr_id][0]);
+    if(op_coords[opr_id].size() == 1)
+      m = max(m, op_coords[opr_id][0]);
+    else if(op_coords[opr_id].size() > 1)
+      m = max(m, op_coords[opr_id][1]);
   }
-  vector<int> in_degree(operations.size() );
-  for ( Opr* op: operations )
-    for ( int c: *op->consumers )
-      in_degree[c]++;
-  vector<int> ep;
-  for ( int i = 0; i < in_degree.size(); i++ )
-    if (in_degree[i] == 0)
-      ep.push_back(i);
-  for ( int op: ep )
-    task_queue.push(op);
-  for ( int i = 0; i < num_of_executors; i++ )
-    workerQueue.push({ 0, 0, i });
-  float total_time = 0.0;
-  float worker_time = 0.0;
-  int k = min(num_of_executors,(int)(sqrt(num_of_executors))+1);
-  while ( !task_queue.empty() ) {
-    int c = task_queue.front();
+  n++,m++;
+  long row_cnt = sqrt(num_of_executors);
+  long col_cnt = num_of_executors/row_cnt;
+  long row_sz = ceil((double)n/row_cnt);
+  long row_sz1 = ceil((double)n/min(n,(long)num_of_executors));
+  long col_sz = ceil((double)m/col_cnt);
+
+  for (int opr_id = 0; opr_id < operations.size(); opr_id++) {
+    Opr* opr = operations[opr_id];
+    if(opr->node != -1)
+      continue;
+    int w = (int)get_coord_hash(op_coords[opr_id]) % num_of_executors;
+    if((*opr->consumers).size() == 0)
+      continue;
+    Opr* p_opr = operations[(*opr->consumers)[0]];
+    switch (opr->type) {
+      case pairOPR:
+        if(op_coords[opr_id].size() == 1)
+          w = op_coords[opr_id][0] % num_of_executors;
+        if((*p_opr->consumers).size() > 0) {
+          Opr* gp_opr = operations[(*p_opr->consumers)[0]];
+          if(gp_opr->type == reduceOPR  && !gp_opr->opr.reduce_opr->valuep)
+            opr->node = (int)get_worker_node(op_coords[(*opr->consumers)[0]],row_cnt,col_cnt,row_sz,row_sz1,col_sz);
+          else if(gp_opr->type != reduceOPR)
+            opr->node = w;
+        }
+        if(opr->node != -1)
+          task_queue.push(opr_id);
+        break;
+      case loadOPR:
+        opr->node = (int)get_worker_node(op_coords[opr_id],row_cnt,col_cnt,row_sz,row_sz1,col_sz);
+        task_queue.push(opr_id);
+        break;
+    }
+  }
+  vector<int> work_done(num_of_executors), tasks(num_of_executors);
+  while (!task_queue.empty()) {
+    int cur_task = task_queue.front();
     task_queue.pop();
-    Opr* opr = operations[c];
-    vector<Worker> tmp_workers;
-    Worker w = { 0, 0, 0 };
-    int min_comm_cost = 100000;
-    for ( int i = 0; i < k; i++ ) {
-      Worker tmp_worker = workerQueue.top();
-      workerQueue.pop();
-      tmp_workers.push_back(tmp_worker);
-      int tmp_cost = communication_cost(opr,tmp_worker.id);
-      if (tmp_cost < min_comm_cost) {
-        w = tmp_worker;
-        min_comm_cost = tmp_cost;
-      }
-    }
-    for ( Worker tw: tmp_workers )
-      if (tw.id != w.id)
-        workerQueue.push(tw);
-    // opr is allocated to worker w
-    if (opr->type == reduceOPR && opr->opr.reduce_opr->valuep)
-      opr->node = coordinator;  // total aggregation result is on coordinator
-    else opr->node = w.id;
-    int work_done = cpu_cost(opr) + communication_cost(opr,w.id);
-    workerQueue.push({ w.workDone + work_done, w.numTasks+1, w.id });
-    work[w.id] += work_done;
-    tasks[w.id]++;
+    Opr* opr = operations[cur_task];
+    work_done[opr->node] += opr->cpu_cost;
+    tasks[opr->node]++;
     // add more ready nodes
-    for ( int c: *opr->consumers ) {
-      Opr* copr = operations[c];
-      in_degree[c]--;
-      if (in_degree[c] == 0)
-          task_queue.push(c);
-    }
+    add_tasks(*opr->consumers, opr->node, task_queue);
+    add_tasks(*opr->children, opr->node, task_queue);
   }
 }
