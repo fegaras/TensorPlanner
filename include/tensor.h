@@ -42,7 +42,12 @@ class Vec {
 private:
   size_t length;
   T* data;
-
+  Vec ( const Vec& ) {}
+  Vec<T>* Clone () { return this; }
+  Vec<T>& operator= ( const Vec<T> &other ) {
+    swap(*this,other);
+    return *this;
+  }
 public:
   Vec ( size_t len = 0 ): length(len) {
     try {
@@ -87,11 +92,6 @@ public:
     swap(x.data,y.data);
   }
 
-  Vec<T>& operator= ( Vec<T> other ) {
-    swap(*this,other);
-    return *this;
-  }
-
   ~Vec () {
     block_count--;
     max_blocks = max(max_blocks,block_count);
@@ -119,9 +119,14 @@ Vec<T>* merge_tensors ( const Vec<T>* x, const Vec<T>* y, T(*op)(tuple<T,T>*), c
   T* av = a->buffer();
   T* xv = x->buffer();
   T* yv = y->buffer();
+  // don't create a tuple during loop
+  static tuple<T,T>* t = new tuple<T,T>(zero,zero);
   #pragma omp parallel for
-  for ( int i = 0; i < len; i++ )
-    av[i] = op(new tuple<T,T>(xv[i],yv[i]));
+  for ( int i = 0; i < len; i++ ) {
+    get<0>(*t) = xv[i];
+    get<1>(*t) = yv[i];
+    av[i] = op(t);
+  }
   return a;
 }
 
@@ -349,14 +354,16 @@ template< typename T >
 Vec<T>* array_buffer ( int dsize, int ssize, T zero,
                        tuple<Vec<int>*,Vec<int>*,Vec<T>*>* init = nullptr ) {
   Vec<T>* buffer = new Vec<T>(dsize*ssize);
+  T* bv = buffer->buffer();
+  #pragma omp parallel for
   for (int i = 0; i < buffer->size(); i++ )
-    (*buffer)[i] = zero;
+    bv[i] = zero;
   if (init != nullptr) {
     #pragma omp parallel for
     for ( int i = 0; i < get<0>(*init)->size()-1; i++ ) {
       int j = (*get<0>(*init))[i];
       while (j < (*get<0>(*init))[i+1]) {
-        (*buffer)[i*ssize+(*get<1>(*init))[j]] = (*get<2>(*init))[j];
+        bv[i*ssize+(*get<1>(*init))[j]] = (*get<2>(*init))[j];
         j++;
       }
     }
@@ -368,19 +375,22 @@ Vec<T>* array_buffer ( int dsize, int ssize, T zero,
 template< typename T >
 tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
      array2tensor ( int dn, int sn, T zero, Vec<T>* buffer ) {
+  T* bv = buffer->buffer();
   auto dense = new Vec<int>(dn+1);
+  T* dv = dense->buffer();
   auto sparse = new vector<int>();
   auto values = new vector<T>();
-  (*dense)[0] = 0;
+  dv[0] = 0;
+  #pragma omp parallel for
   for ( int i = 0; i < dn; i++ ) {
     for ( int j = 0; j < sn; j++ ) {
-      T v = (*buffer)[i*sn+j];
+      T v = bv[i*sn+j];
       if (v != zero) {
         sparse->push_back(j);
         values->push_back(v);
       }
     }
-    (*dense)[i+1] = sparse->size();
+    dv[i+1] = sparse->size();
   }
   return new tuple<Vec<int>*,Vec<int>*,Vec<T>*>(dense,new Vec<int>(sparse),new Vec<T>(values));
 }
@@ -393,29 +403,38 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
   int i = 0;
   int len = min(get<0>(*x)->size(),get<0>(*y)->size())-1;
   auto dense = new Vec<int>(len+1);
+  T* dv = dense->buffer();
   auto sparse = new vector<int>();
   auto values = new vector<T>();
-  (*dense)[0] = 0;
+  dv[0] = 0;
+  // don't create a tuple during loop
+  static tuple<T,T>* t = new tuple<T,T>(zero,zero);
   while (i < len) {
     int xn = (*get<0>(*x))[i];
     int yn = (*get<0>(*y))[i];
     while (xn < (*get<0>(*x))[i+1] && yn < (*get<0>(*y))[i+1]) {
       if ((*get<1>(*x))[xn] == (*get<1>(*y))[yn]) {
-        T v = op(new tuple<T,T>((*get<2>(*x))[xn],(*get<2>(*y))[yn]));
+        get<0>(*t) = (*get<2>(*x))[xn];
+        get<1>(*t) = (*get<2>(*y))[yn];
+        T v = op(t);
         if (v != zero) {
           sparse->push_back((*get<1>(*x))[xn]);
           values->push_back(v);
         }
         xn++; yn++;
       } else if ((*get<1>(*x))[xn] < (*get<1>(*y))[yn]) {
-        T v = op(new tuple<T,T>((*get<2>(*x))[xn],zero));
+        get<0>(*t) = (*get<2>(*x))[xn];
+        get<1>(*t) = zero;
+        T v = op(t);
         if (v != zero) {
           sparse->push_back((*get<1>(*x))[xn]);
           values->push_back(v);
         }
         xn++;
       } else {
-        T v = op(new tuple<T,T>(zero,(*get<2>(*y))[yn]));
+        get<0>(*t) = zero;
+        get<1>(*t) = (*get<2>(*y))[yn];
+        T v = op(t);
         if (v != zero) {
           sparse->push_back((*get<1>(*y))[yn]);
           values->push_back(v);
@@ -424,7 +443,9 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
       }
     }
     while (xn < (*get<0>(*x))[i+1]) {
-      T v = op(new tuple<T,T>((*get<2>(*x))[xn],zero));
+      get<0>(*t) = (*get<2>(*x))[xn];
+      get<1>(*t) = zero;
+      T v = op(t);
       if (v != zero) {
         sparse->push_back((*get<1>(*x))[xn]);
         values->push_back(v);
@@ -432,7 +453,9 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
       xn++;
     }
     while (yn < (*get<0>(*y))[i+1]) {
-      T v = op(new tuple<T,T>(zero,(*get<2>(*y))[yn]));
+      get<0>(*t) = zero;
+      get<1>(*t) = (*get<2>(*y))[yn];
+      T v = op(t);
       if (v != zero) {
         sparse->push_back((*get<1>(*y))[yn]);
         values->push_back(v);
@@ -440,13 +463,13 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
       yn++;
     }
     i++;
-    (*dense)[i] = sparse->size();
+    dv[i] = sparse->size();
   }
   return new tuple<Vec<int>*,Vec<int>*,Vec<T>*>(dense,new Vec<int>(sparse),new Vec<T>(values));
 }
 
 template< typename T >
-T binarySearch ( int key, int from, int to, Vec<int>* rows, Vec<T>* values, T zero ) {
+T binarySearch ( int key, int from, int to, const Vec<int>* rows, const Vec<T>* values, T zero ) {
   while (from <= to) {
     int middle = (from+to)/2;
     if ((*rows)[middle] == key)
@@ -459,7 +482,7 @@ T binarySearch ( int key, int from, int to, Vec<int>* rows, Vec<T>* values, T ze
 }
 
 template< typename T >
-bool binarySearch ( int key, int from, int to, Vec<int>* rows, Vec<T>* values ) {
+bool binarySearch ( int key, int from, int to, const Vec<int>* rows, const Vec<T>* values ) {
   while (from <= to) {
     int middle = (from+to)/2;
     if ((*rows)[middle] == key)

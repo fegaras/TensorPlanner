@@ -44,6 +44,7 @@ void delete_first_reduce_input ( int rid );
 
 void handle_received_message ( int tag, int opr_id, void* data, int len ) {
   Opr* opr = operations[opr_id];
+  static tuple<void*,void*>* op_arg = new tuple<void*,void*>(nullptr,nullptr);
   if (tag == 0) {
     info("    received %d bytes from %d (opr %d)",len+4,opr->node,opr_id);
     cache_data(opr,data);
@@ -61,16 +62,20 @@ void handle_received_message ( int tag, int opr_id, void* data, int len ) {
       // first reduction input
       info("    set reduce opr %d to the first incoming input",opr_id);
       opr->cached = data;
-    } else if (opr->opr.reduce_opr->valuep)
+    } else if (opr->opr.reduce_opr->valuep) {
       // total aggregation
-      opr->cached = op(new tuple<void*,void*>(opr->cached,data));
-    else {
+      get<0>(*op_arg) = opr->cached;
+      get<1>(*op_arg) = data;
+      opr->cached = op(op_arg);
+    } else {
       tuple<void*,void*>* x = opr->cached;
       tuple<void*,void*>* y = data;
       // merge the current state with the incoming partially reduced data
       info("    merge reduce opr %d with incoming input",opr_id);
       auto old = (void*)x;
-      opr->cached = new tuple<void*,void*>(get<0>(*x),op(new tuple<void*,void*>(get<1>(*x),get<1>(*y))));
+      get<0>(*op_arg) = get<1>(*x);
+      get<1>(*op_arg) = get<1>(*y);
+      opr->cached = new tuple<void*,void*>(get<0>(*x),op(op_arg));
       if (delete_arrays && opr->first_reduced_input < 0) {
         info("    delete current reduce result in opr %d",opr_id);
         delete_array(old,opr->encoded_type);

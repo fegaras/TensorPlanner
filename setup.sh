@@ -22,4 +22,4 @@ done
 export JARS=${JARS}
 
 export PATH="$SCALA_HOME/bin:$MPI_HOME/bin:$DIABLO_HOME/bin:$SPARK_HOME/bin:$PATH"
-export LD_LIBRARY_PATH="$MPI_HOME/lib:$LD_LIBRARY_PATH"
+export LD_LIBRARY_PATH="$MPI_HOME/lib:/usr/local/lib:$LD_LIBRARY_PATH"

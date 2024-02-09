@@ -678,6 +678,7 @@ void delete_first_reduce_input ( int rid ) {
 void enqueue_reduce_opr ( int opr_id, int rid ) {
   Opr* opr = operations[opr_id];      // child of reduce_opr
   Opr* reduce_opr = operations[rid];  // Reduce operation
+  static tuple<void*,void*>* op_arg = new tuple<void*,void*>(nullptr,nullptr);
   // partial reduce inside reduce opr
   void*(*op)(tuple<void*,void*>*) = functions[reduce_opr->opr.reduce_opr->op];
   if (reduce_opr->cached == nullptr) {
@@ -685,16 +686,20 @@ void enqueue_reduce_opr ( int opr_id, int rid ) {
     info("    set reduce opr %d to the first input opr %d",rid,opr_id);
     reduce_opr->cached = opr->cached;
     reduce_opr->first_reduced_input = opr_id;
-  } else if (reduce_opr->opr.reduce_opr->valuep)
+  } else if (reduce_opr->opr.reduce_opr->valuep) {
     // total aggregation
-    reduce_opr->cached = op(new tuple<void*,void*>(reduce_opr->cached,opr->cached));
-  else {
+    get<0>(*op_arg) = reduce_opr->cached;
+    get<1>(*op_arg) = opr->cached;
+    reduce_opr->cached = op(op_arg);
+  } else {
     tuple<void*,void*>* x = reduce_opr->cached;
     tuple<void*,void*>* y = opr->cached;
     // merge the current state with the partially reduced data
     info("    merge reduce opr %d with input opr %d",rid,opr_id);
     auto old = (void*)x;
-    reduce_opr->cached = new tuple<void*,void*>(get<0>(*x),op(new tuple<void*,void*>(get<1>(*x),get<1>(*y))));
+    get<0>(*op_arg) = get<1>(*x);
+    get<1>(*op_arg) = get<1>(*y);
+    reduce_opr->cached = new tuple<void*,void*>(get<0>(*x),op(op_arg));
     // remove the old reduce result
     if (delete_arrays && reduce_opr->first_reduced_input < 0) {
       info("    delete current reduce result in opr %d",rid);
