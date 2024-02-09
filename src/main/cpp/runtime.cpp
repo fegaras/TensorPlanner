@@ -156,17 +156,19 @@ int print_block ( ostringstream &out, const void* data,
       case 0: {
         Vec<int>* x = data;
         out << "Vec<int>(" << x->size() << ")";
+        return loc+2;
       }
       case 1: {
         Vec<long>* x = data;
         out << "Vec<long>(" << x->size() << ")";
+        return loc+2;
       }
       case 3: {
         Vec<double>* x = data;
         out << "Vec<double>(" << x->size() << ")";
+        return loc+2;
       }
     }
-    return loc+2;
   }
   default:
     return loc+1;

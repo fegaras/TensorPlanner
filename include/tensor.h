@@ -377,11 +377,11 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
      array2tensor ( int dn, int sn, T zero, Vec<T>* buffer ) {
   T* bv = buffer->buffer();
   auto dense = new Vec<int>(dn+1);
-  T* dv = dense->buffer();
+  int* dv = dense->buffer();
   auto sparse = new vector<int>();
   auto values = new vector<T>();
   dv[0] = 0;
-  #pragma omp parallel for
+  //#pragma omp parallel for
   for ( int i = 0; i < dn; i++ ) {
     for ( int j = 0; j < sn; j++ ) {
       T v = bv[i*sn+j];
@@ -403,7 +403,7 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
   int i = 0;
   int len = min(get<0>(*x)->size(),get<0>(*y)->size())-1;
   auto dense = new Vec<int>(len+1);
-  T* dv = dense->buffer();
+  int* dv = dense->buffer();
   auto sparse = new vector<int>();
   auto values = new vector<T>();
   dv[0] = 0;
