@@ -90,9 +90,6 @@ void add_tasks(vector<int>& task_list, int node, queue<int>& q) {
 }
 
 void get_coord( void* coord, vector<int>* encoded_type, vector<long>& coords, int loc ) {
-  if(coord == nullptr) {
-    return;
-  }
   long i = 0;
   switch ((*encoded_type)[loc]) {
     case 0: case 1: // index
