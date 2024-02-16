@@ -1,6 +1,9 @@
 #/bin/bash
+exec() { echo "\$ $@" ; "$@" ; }
 
-block_size=1000
+if [ -z $block_size ]; then
+   block_size=1000
+fi
 
 echo "import edu.uta.diablo._
 object Test {
@@ -19,10 +22,6 @@ echo "\"\"\")
 
 scalac -d classes -cp ${JARS} cxxgen.sc >cxxgen.log
 
-# use -ltcmalloc for heap profiling
+# use -ltcmalloc for heap profiling and -lprofiler for CPU profiling
 
-cmd="mpic++ -O3 -DNDEBUG cxxgen.cpp -fopenmp -I${DIABLO_HOME}/include -L${DIABLO_HOME}/lib -ldiablo"
-
-echo $cmd
-
-$cmd
+exec mpic++ -O3 -DNDEBUG cxxgen.cpp -fopenmp -I${DIABLO_HOME}/include -L${DIABLO_HOME}/lib -ldiablo

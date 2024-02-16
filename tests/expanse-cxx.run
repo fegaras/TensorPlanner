@@ -19,10 +19,19 @@ export SCALA_HOME=$SW/scala-2.12.3
 export SPARK_HOME=$SW/spark-3.1.2-bin-hadoop3.2
 export MPI_HOME=$SW/openmpi
 
+JARS=.:${DIABLO_HOME}/lib/diablo.jar:${MPI_HOME}/lib/mpi.jar
+for I in ${SPARK_HOME}/jars/*.jar; do
+    JARS=${JARS}:$I
+done
+for I in ${SPARK_HOME}/lib/*.jar; do
+    JARS=${JARS}:$I
+done
+export JARS=${JARS}
+
 export PATH="$MPI_HOME/bin:$SCALA_HOME/bin:$DIABLO_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$MPI_HOME/lib:$LD_LIBRARY_PATH"
 
-files="a.diablo"
+files="mult.diablo"
 for f in $files; do
     echo compiling $f ...
     diablo $f

@@ -515,6 +515,6 @@ object CXXCodeGenerator {
     val s = makeCxxCode(e)
     val fs = functions.map(f => "functions.push_back((void*(*)(void*))"
                                 +makeC(f,0,false)+");\n").mkString("")
-    writer.println(s"int main ( int argc, char* argv[] ) {\nmpi_startup(argc,argv);\n$fs${s}mpi_finalize();\nreturn 0;\n}")
+    writer.println(s"int main ( int argc, char* argv[] ) {\nstartup(argc,argv);\n$fs${s}mpi_finalize();\nreturn 0;\n}")
   }
 }

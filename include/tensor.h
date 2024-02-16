@@ -381,7 +381,6 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
   auto sparse = new vector<int>();
   auto values = new vector<T>();
   dv[0] = 0;
-  //#pragma omp parallel for
   for ( int i = 0; i < dn; i++ ) {
     for ( int j = 0; j < sn; j++ ) {
       T v = bv[i*sn+j];

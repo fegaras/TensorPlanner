@@ -54,3 +54,5 @@ void* eval ( void* plan );
 void* evalOpr ( int opr_id );
 
 void* collect ( void* plan );
+
+void startup ( int argc, char* argv[] );

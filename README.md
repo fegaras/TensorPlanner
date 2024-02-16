@@ -31,7 +31,7 @@ To test using Spark:
 build-diablo Multiply-diablo.scala
 run-diablo Multiply 1234 2345
 ```
-For CDSC Expanse, build the system:
+For SDSC Expanse, build the system:
 ```bash
 sbatch expanse-build.run
 ```
@@ -49,10 +49,10 @@ make
 ```
 Go to `tests` and do:
 ```bash
-diablo test.diablo
-crun a.out
+diablo mult.diablo
+crun a.out 4234 10
 ```
-For CDSC Expanse, build the system:
+For SDSC Expanse, build the system:
 ```bash
 sbatch expanse-build.run
 ```

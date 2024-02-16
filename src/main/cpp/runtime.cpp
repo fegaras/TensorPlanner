@@ -17,6 +17,7 @@
 #include <queue>
 #include <deque>
 #include <cassert>
+#include <cstring>
 #include <sstream>
 #include <chrono>
 #include <algorithm>
@@ -27,7 +28,7 @@
 #include "comm.h"
 
 // trace execution
-const bool trace = true;
+bool trace = true;
 // trace block deletes for debugging
 static bool trace_delete = false;
 // enables deletion of garbage blocks
@@ -35,6 +36,7 @@ bool delete_arrays = true;
 const bool enable_partial_reduce = true;
 // evaluate the plan without MPI using 1 executor
 bool inMemory = false;
+bool enable_collect = true;
 
 vector<Opr*> operations;
 vector<void*(*)(void*)> functions;
@@ -381,12 +383,10 @@ bool sends_msgs_only ( Opr* opr ) {
   return sends_msgs;
 }
 
-void may_delete_deps ( int opr_id );
-
 // delete the task cache and the caches of its dependencies
 void may_delete ( int opr_id ) {
   Opr* opr = operations[opr_id];
-  if (block_constructor(opr)) {// && opr->count > 0) {
+  if (block_constructor(opr)) {
     if (trace_delete)
       cout << executor_rank << " " << "may delete " << opr_id << endl;
     opr->count--;
@@ -937,6 +937,8 @@ void* evalOpr ( int opr_id ) {
 }
 
 void* collect ( void* plan ) {
+  if (!enable_collect)
+    return;
   tuple<void*,void*,vector<tuple<void*,int>*>*>* p = plan;
   vector<tuple<void*,int>*>* es = get<2>(*p);
   if (inMemory) {
@@ -972,5 +974,19 @@ void* collect ( void* plan ) {
     }
     barrier();
     return new tuple<void*,void*,void*>(get<0>(*p),get<1>(*p),nullptr);
+  }
+}
+
+vector<char*> env_names { "inMemory", "trace", "collect" };
+vector<bool*> env_vars  { &inMemory, &trace, &enable_collect };
+
+void startup ( int argc, char* argv[] ) {
+  mpi_startup(argc,argv);
+  static char name[100];
+  for ( int i = 0; i < env_names.size(); i++ ) {
+    sprintf(name,"diablo_%s",env_names[i]);
+    char* value = getenv(name);
+    if (value != nullptr)
+      *env_vars[i] = strcmp(value,"true") == 0;
   }
 }
