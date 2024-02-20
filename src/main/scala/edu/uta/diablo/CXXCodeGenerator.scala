@@ -334,6 +334,10 @@ object CXXCodeGenerator {
           => v+"["+makeC(n,tabs,false)+"]"
         case Index(x,List(n))
           => "(*"+makeC(x,tabs,false)+")["+makeC(n,tabs,false)+"]"
+        case MethodCall(x,"++",List(y))
+          => "append("+makeC(x,tabs,false)+","+makeC(y,tabs,false)+")"
+        case MethodCall("Math",opr,s)
+          => makeC(Call(opr,s))
         case MethodCall(x,op,List(y))
           if binary_oprs.contains(op)
           => "("+makeC(x,tabs,false)+binary_oprs(op)+makeC(y,tabs,false)+")"
@@ -515,6 +519,6 @@ object CXXCodeGenerator {
     val s = makeCxxCode(e)
     val fs = functions.map(f => "functions.push_back((void*(*)(void*))"
                                 +makeC(f,0,false)+");\n").mkString("")
-    writer.println(s"int main ( int argc, char* argv[] ) {\nstartup(argc,argv);\n$fs${s}mpi_finalize();\nreturn 0;\n}")
+    writer.println(s"int main ( int argc, char* argv[] ) {\nstartup(argc,argv,$block_dim_size);\n$fs${s}mpi_finalize();\nreturn 0;\n}")
   }
 }

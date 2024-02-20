@@ -6,6 +6,7 @@ if [ -z $block_size ]; then
 fi
 
 echo "import edu.uta.diablo._
+import Math._
 object Test {
   def main ( args: Array[String] ) {
     parami(block_dim_size,$block_size)

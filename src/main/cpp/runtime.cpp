@@ -980,8 +980,7 @@ void* collect ( void* plan ) {
 vector<char*> env_names { "inMemory", "trace", "collect" };
 vector<bool*> env_vars  { &inMemory, &trace, &enable_collect };
 
-void startup ( int argc, char* argv[] ) {
-  mpi_startup(argc,argv);
+void startup ( int argc, char* argv[], int block_dim_size ) {
   static char name[100];
   for ( int i = 0; i < env_names.size(); i++ ) {
     sprintf(name,"diablo_%s",env_names[i]);
@@ -989,4 +988,5 @@ void startup ( int argc, char* argv[] ) {
     if (value != nullptr)
       *env_vars[i] = strcmp(value,"true") == 0;
   }
+  mpi_startup(argc,argv,block_dim_size);
 }

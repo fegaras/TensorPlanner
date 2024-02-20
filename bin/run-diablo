@@ -5,4 +5,6 @@ export HADOOP_CONF_DIR=
 # max available memory in GB
 mem=`awk '/MemFree/ { printf "%.0f", $2/1024/1024 }' /proc/meminfo`
 
+jar cf test.jar -C classes .
+
 ${SPARK_HOME}/bin/spark-submit --jars ${DIABLO_HOME}/lib/diablo.jar,${MPI_HOME}/lib/mpi.jar --class $1 --driver-memory ${mem}g --executor-memory ${mem}g --conf spark.logLineage=true --conf "spark.executor.extraJavaOptions='-Xss512m'" --driver-java-options "-Xss512m" --master local[*] test.jar $2 $3 $4 $5 $6 $7

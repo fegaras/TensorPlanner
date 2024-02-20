@@ -22,7 +22,7 @@ int check_communication ();
 
 void send_data ( int rank, void* data, int opr_id, int tag );
 
-void mpi_startup ( int argc, char* argv[] );
+void mpi_startup ( int argc, char* argv[], int block_dim_size );
 
 void mpi_finalize ();
 

@@ -24,7 +24,7 @@
 int num_of_executors = 1;
 int executor_rank = 0;
 int coordinator = 0;
-const int max_buffer_size = 50000000;
+int max_buffer_size = 50000000;
 auto comm = MPI_COMM_WORLD;
 MPI_Request receive_request = MPI_REQUEST_NULL;
 extern bool delete_arrays;
@@ -194,7 +194,9 @@ bool isCoordinator () {
   return executor_rank == coordinator;
 }
 
-void mpi_startup ( int argc, char* argv[] ) {
+void mpi_startup ( int argc, char* argv[], int block_dim_size ) {
+  // can fit 5 blocks of double
+  max_buffer_size = 5*sizeof(double)*block_dim_size*block_dim_size;
   if (inMemory)
     return;
   int ignore;

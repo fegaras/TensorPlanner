@@ -55,4 +55,4 @@ void* evalOpr ( int opr_id );
 
 void* collect ( void* plan );
 
-void startup ( int argc, char* argv[] );
+void startup ( int argc, char* argv[], int block_dim_size );
