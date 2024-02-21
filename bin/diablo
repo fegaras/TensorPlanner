@@ -25,4 +25,4 @@ scalac -d classes -cp ${JARS} cxxgen.sc >cxxgen.log
 
 # use -ltcmalloc for heap profiling and -lprofiler for CPU profiling
 
-exec mpic++ -O3 -DNDEBUG cxxgen.cpp -fopenmp -I${DIABLO_HOME}/include -L${DIABLO_HOME}/lib -ldiablo
+exec mpic++ -mavx -O3 -DNDEBUG cxxgen.cpp -fopenmp -I${DIABLO_HOME}/include -L${DIABLO_HOME}/lib -ldiablo

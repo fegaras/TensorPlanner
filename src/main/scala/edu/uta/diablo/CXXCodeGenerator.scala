@@ -336,7 +336,7 @@ object CXXCodeGenerator {
           => "(*"+makeC(x,tabs,false)+")["+makeC(n,tabs,false)+"]"
         case MethodCall(x,"++",List(y))
           => "append("+makeC(x,tabs,false)+","+makeC(y,tabs,false)+")"
-        case MethodCall("Math",opr,s)
+        case MethodCall(Var("Math"),opr,s)
           => makeC(Call(opr,s))
         case MethodCall(x,op,List(y))
           if binary_oprs.contains(op)
