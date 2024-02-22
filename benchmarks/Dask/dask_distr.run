@@ -1,0 +1,21 @@
+#!/bin/bash
+#SBATCH -A uot166
+#SBATCH --job-name="dask_job"
+#SBATCH --output="dask_job.out"
+#SBATCH --partition=compute
+#SBATCH --nodes=5
+#SBATCH --ntasks-per-node=2
+#SBATCH --mem=249208M
+#SBATCH --time=60
+
+module purge
+module load cpu/0.17.3b  gcc/10.2.0/npcyll4 slurm openmpi/4.1.1
+SW=/expanse/lustre/projects/uot193/fegaras
+
+path_to_env="$HOME/venv/bin/activate"
+source "$path_to_env"
+export PATH="$path_to_env/bin:$PATH"
+for ((i=5; i<=5; i++)); do
+    n=$((i*20000))
+    mpirun -np 10 python Multiply.py $n $n
+done
