@@ -68,9 +68,17 @@ long get_coord_hash(vector<long>& coord) {
   return abs(seed);
 }
 
-long get_worker_node(vector<long>& coord, long row_cnt, long col_cnt, long row_sz, long row_sz1, long col_sz) {
-  if(coord.size() == 1)
+long get_worker_node(vector<long>& coord, long n, long m) {
+  long row_cnt = sqrt(num_of_executors);
+  long col_cnt = num_of_executors/row_cnt;
+  long row_sz = ceil((double)m/row_cnt);
+  long row_sz1 = ceil((double)m/min(m,(long)num_of_executors));
+  long col_sz = ceil((double)n/col_cnt);
+  long col_sz1 = ceil((double)n/min(n,(long)num_of_executors));
+  if(coord.size() == 1 || n == 1)
     return coord[0]/row_sz1;
+  if(m == 1)
+    return coord[1]/col_sz1;
   if(coord.size() == 2)
     return (coord[0]/row_sz)*col_cnt + coord[1]/col_sz;
   return get_coord_hash(coord) % num_of_executors;
@@ -121,26 +129,17 @@ void schedule_plan ( void* plan ) {
   set_sizes();
   queue<int> task_queue;
   vector<vector<long>> op_coords(operations.size(),vector<long>());
-  long n = 0, m = 0;
+
+  long total_work = 0, total_pairs = 0;
   for (int opr_id = 0; opr_id < operations.size(); opr_id++) {
     Opr* opr = operations[opr_id];
+    total_work += opr->cpu_cost;
+    if(opr->type == pairOPR)
+      total_pairs++;
     get_coord(opr->coord, opr->encoded_type, op_coords[opr_id], 2);
-    if(op_coords[opr_id].size() == 0) {
-      continue;
-    }
-    n = max(n, op_coords[opr_id][0]);
-    if(op_coords[opr_id].size() == 1)
-      m = max(m, op_coords[opr_id][0]);
-    else if(op_coords[opr_id].size() > 1)
-      m = max(m, op_coords[opr_id][1]);
   }
-  n++,m++;
-  long row_cnt = sqrt(num_of_executors);
-  long col_cnt = num_of_executors/row_cnt;
-  long row_sz = ceil((double)n/row_cnt);
-  long row_sz1 = ceil((double)n/min(n,(long)num_of_executors));
-  long col_sz = ceil((double)m/col_cnt);
-
+  long pair_threshold = ceil(1.1*total_pairs/(double)num_of_executors);
+  vector<int> pair_count(num_of_executors);
   for (int opr_id = 0; opr_id < operations.size(); opr_id++) {
     Opr* opr = operations[opr_id];
     if(opr->node != -1)
@@ -154,30 +153,60 @@ void schedule_plan ( void* plan ) {
         if(op_coords[opr_id].size() == 1)
           w = op_coords[opr_id][0] % num_of_executors;
         if((*p_opr->consumers).size() > 0) {
+          Opr* copr1 = operations[(*opr->children)[0]];
+          Opr* copr2 = operations[(*opr->children)[1]];
           Opr* gp_opr = operations[(*p_opr->consumers)[0]];
           if(gp_opr->type == reduceOPR  && !gp_opr->opr.reduce_opr->valuep)
-            opr->node = (int)get_worker_node(op_coords[(*opr->consumers)[0]],row_cnt,col_cnt,row_sz,row_sz1,col_sz);
-          else if(gp_opr->type != reduceOPR)
-            opr->node = w;
+            opr->node = (int)get_worker_node(op_coords[(*opr->consumers)[0]],(long)(*copr1->consumers).size(),(long)(*copr2->consumers).size());
+          else if(gp_opr->type != reduceOPR) {
+            if((*copr1->consumers).size() > 1) {
+              opr->node = (int)get_worker_node(op_coords[(*opr->consumers)[0]],(long)(*copr1->consumers).size(),(long)(*copr2->consumers).size());
+            }
+          }
         }
-        if(opr->node != -1)
-          task_queue.push(opr_id);
-        break;
-      case loadOPR:
-        opr->node = (int)get_worker_node(op_coords[opr_id],row_cnt,col_cnt,row_sz,row_sz1,col_sz);
+        else {
+          Opr* copr1 = operations[(*opr->children)[0]];
+          Opr* copr2 = operations[(*opr->children)[1]];
+          if((*copr1->consumers).size() > 1) {
+            opr->node = (int)get_worker_node(op_coords[(*opr->consumers)[0]],(*copr1->consumers).size(),(*copr2->consumers).size());
+          }
+        }
+        if(opr->node == -1) {
+          opr->node = w;
+        }
+        while(pair_count[opr->node] >= pair_threshold) {
+          opr->node = rand() % num_of_executors;
+        }
+        pair_count[opr->node]++;
         task_queue.push(opr_id);
         break;
+      case loadOPR:
+        if((*opr->consumers).size() == 1)
+          opr->node = rand() % num_of_executors;
+        break;
+      case reduceOPR:
+        // total aggregation in executor 0
+        if(opr->opr.reduce_opr->valuep)
+          opr->node = 0;
     }
   }
-  vector<int> work_done(num_of_executors), tasks(num_of_executors);
+  long threshold = ceil(1.1*total_work/(double)num_of_executors);
+  vector<int> work_done(num_of_executors), task_count(num_of_executors);
   while (!task_queue.empty()) {
     int cur_task = task_queue.front();
     task_queue.pop();
     Opr* opr = operations[cur_task];
     work_done[opr->node] += opr->cpu_cost;
-    tasks[opr->node]++;
+    task_count[opr->node]++;
+    int w = opr->node;
+    if(opr->type != pairOPR && work_done[opr->node] >= threshold) {
+      w = rand() % num_of_executors;
+      while(work_done[w] >= threshold) {
+        w = rand() % num_of_executors;
+      }
+    }
     // add more ready nodes
-    add_tasks(*opr->consumers, opr->node, task_queue);
-    add_tasks(*opr->children, opr->node, task_queue);
+    add_tasks(*opr->consumers, w, task_queue);
+    add_tasks(*opr->children, w, task_queue);
   }
 }
