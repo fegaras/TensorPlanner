@@ -196,7 +196,7 @@ bool isCoordinator () {
 
 void mpi_startup ( int argc, char* argv[], int block_dim_size ) {
   // can fit 5 blocks of double
-  max_buffer_size = 5*sizeof(double)*block_dim_size*block_dim_size;
+  max_buffer_size = max(100000LU,5*sizeof(double)*block_dim_size*block_dim_size);
   if (inMemory)
     return;
   int ignore;

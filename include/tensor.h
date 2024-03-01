@@ -23,6 +23,7 @@
 #include <memory>
 #include <thread>
 #include <mutex>
+#include <malloc.h>
 #include "mpi.h"
 #include "omp.h"
 
@@ -60,7 +61,7 @@ public:
     block_created++;
     max_blocks = max(max_blocks,block_count);
     if (trace_delete)
-      printf("create %p\n",this);
+      printf("create %p %d\n",this,(int)mallinfo2().arena);
   }
 
   Vec ( vector<T>* x ): length(x->size()), data(new T[length]) {
@@ -71,7 +72,7 @@ public:
     max_blocks = max(max_blocks,block_count);
     delete x;
     if (trace_delete)
-      printf("create %p\n",this);
+      printf("create %p %d\n",this,(int)mallinfo2().arena);
   }
 
   inline size_t size () const { return length; }
@@ -97,7 +98,7 @@ public:
     max_blocks = max(max_blocks,block_count);
     delete[] data;
     if (trace_delete)
-      printf("delete %p\n",this);
+      printf("delete %p %d\n",this,(int)mallinfo2().arena);
     data = nullptr;
   }
 };

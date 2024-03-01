@@ -78,9 +78,8 @@ mutex send_mutex;
 
 mutex info_mutex;
 // print tracing info
-void info ( const char *fmt, ... ) {
+void info ( const char* fmt, ... ) {
   using namespace std::chrono;
-  static char* cbuffer = new char[20000];
   if (trace) {
     lock_guard<mutex> lock(info_mutex);    
     auto millis = duration_cast<milliseconds>(system_clock::now()
@@ -89,11 +88,11 @@ void info ( const char *fmt, ... ) {
     tm* t = localtime(&now);
     va_list args;
     va_start(args,fmt);
-    cbuffer[0] = 0;
-    vsprintf(cbuffer,fmt,args);
+    printf("[%02d:%02d:%02d:%03d%3d]   ",
+           t->tm_hour,t->tm_min,t->tm_sec,millis,executor_rank);
+    vprintf(fmt,args);
+    printf("\n");
     va_end(args);
-    printf("[%02d:%02d:%02d:%03d%3d]   %s\n",t->tm_hour,t->tm_min,
-           t->tm_sec,millis,executor_rank,cbuffer);
   }
 }
 
