@@ -15,6 +15,7 @@
  */
 
 #include <vector>
+#include <unordered_map>
 #include <tuple>
 #include <queue>
 #include <cmath>
@@ -45,6 +46,34 @@ void set_sizes () {
     size(x);
 }
 
+void set_blevel( void*& plan, unordered_map<int,int>& offset_map) {
+  queue<pair<Opr*,int>> opr_queue;
+  tuple<void*,void*,vector<tuple<void*,int>*>*>* p = plan;
+  for ( auto x: *get<2>(*p) ) {
+    Opr* op = operations[get<1>(*x)];
+    opr_queue.push({op,0});
+  }
+  while(!opr_queue.empty()) {
+    auto [cur_opr, cur_blevel] = opr_queue.front();
+    opr_queue.pop();
+    if (cur_blevel > cur_opr->static_blevel) {
+      cur_opr->static_blevel = cur_blevel;
+      for (int c: *cur_opr->children) {
+        Opr* copr = operations[c];
+        opr_queue.push({copr,cur_blevel+1});
+      }
+    }
+  }
+  int offset = 0;
+  for ( Opr* opr: operations )
+    if (opr->type == pairOPR) {
+      opr->static_blevel += size(opr);
+      if(offset_map.find(opr->static_blevel) == offset_map.end()) {
+        offset_map[opr->static_blevel] = offset++;
+      }
+    }
+}
+
 int cpu_cost ( Opr* opr ) {
   return opr->cpu_cost;
 }
@@ -59,28 +88,22 @@ int communication_cost ( Opr* opr, int node ) {
   return n;
 }
 
-long get_coord_hash(vector<long>& coord) {
-  long seed = rand();
-  for(int i : coord) {
-    seed ^= (i + (seed << 3) + (seed >> 1));
-    seed = seed % 5381;
-  }
+int get_coord_hash(vector<long>& coord) {
+  int seed = 5381;
+  for ( int i: coord )
+    seed = i ^ (seed << 2) ^ (seed >> 1);
   return abs(seed);
 }
 
-long get_worker_node(vector<long>& coord, long n, long m) {
+long get_worker_node(vector<long>& coord, long n, long m, int offset) {
   long row_cnt = sqrt(num_of_executors);
   long col_cnt = num_of_executors/row_cnt;
-  long row_sz = ceil((double)m/row_cnt);
-  long row_sz1 = ceil((double)m/min(m,(long)num_of_executors));
-  long col_sz = ceil((double)n/col_cnt);
-  long col_sz1 = ceil((double)n/min(n,(long)num_of_executors));
   if(coord.size() == 1 || n == 1)
-    return coord[0]/row_sz1;
+    return (coord[0]+offset)%num_of_executors;
   if(m == 1)
-    return coord[1]/col_sz1;
+    return (coord[1]+offset)%num_of_executors;
   if(coord.size() == 2)
-    return (coord[0]/row_sz)*col_cnt + coord[1]/col_sz;
+    return ((coord[0]%row_cnt)*col_cnt + coord[1]%col_cnt + offset)%num_of_executors;
   return get_coord_hash(coord) % num_of_executors;
 }
 
@@ -127,86 +150,66 @@ void get_coord( void* coord, vector<int>* encoded_type, vector<long>& coords, in
 
 void schedule_plan ( void* plan ) {
   set_sizes();
-  queue<int> task_queue;
+  unordered_map<int,int> offset_map;
+  set_blevel(plan,offset_map);
+  work = vector<int>(num_of_executors);
+  tasks = vector<int>(num_of_executors);
   vector<vector<long>> op_coords(operations.size(),vector<long>());
-
-  long total_work = 0, total_pairs = 0;
+  vector<int> in_degree(operations.size());
   for (int opr_id = 0; opr_id < operations.size(); opr_id++) {
     Opr* opr = operations[opr_id];
-    total_work += opr->cpu_cost;
-    if(opr->type == pairOPR)
-      total_pairs++;
     get_coord(opr->coord, opr->encoded_type, op_coords[opr_id], 2);
+    for ( int c: *opr->consumers )
+      in_degree[c]++;
   }
-  long pair_threshold = ceil(1.1*total_pairs/(double)num_of_executors);
-  vector<int> pair_count(num_of_executors);
-  for (int opr_id = 0; opr_id < operations.size(); opr_id++) {
-    Opr* opr = operations[opr_id];
-    if(opr->node != -1)
-      continue;
-    int w = (int)get_coord_hash(op_coords[opr_id]) % num_of_executors;
-    if((*opr->consumers).size() == 0)
-      continue;
-    Opr* p_opr = operations[(*opr->consumers)[0]];
-    switch (opr->type) {
-      case pairOPR:
-        if(op_coords[opr_id].size() == 1)
-          w = op_coords[opr_id][0] % num_of_executors;
-        if((*p_opr->consumers).size() > 0) {
-          Opr* copr1 = operations[(*opr->children)[0]];
-          Opr* copr2 = operations[(*opr->children)[1]];
-          Opr* gp_opr = operations[(*p_opr->consumers)[0]];
-          if(gp_opr->type == reduceOPR  && !gp_opr->opr.reduce_opr->valuep)
-            opr->node = (int)get_worker_node(op_coords[(*opr->consumers)[0]],(long)(*copr1->consumers).size(),(long)(*copr2->consumers).size());
-          else if(gp_opr->type != reduceOPR) {
-            if((*copr1->consumers).size() > 1) {
-              opr->node = (int)get_worker_node(op_coords[(*opr->consumers)[0]],(long)(*copr1->consumers).size(),(long)(*copr2->consumers).size());
-            }
-          }
-        }
-        else {
-          Opr* copr1 = operations[(*opr->children)[0]];
-          Opr* copr2 = operations[(*opr->children)[1]];
-          if((*copr1->consumers).size() > 1) {
-            opr->node = (int)get_worker_node(op_coords[(*opr->consumers)[0]],(*copr1->consumers).size(),(*copr2->consumers).size());
-          }
-        }
-        if(opr->node == -1) {
-          opr->node = w;
-        }
-        while(pair_count[opr->node] >= pair_threshold) {
-          opr->node = rand() % num_of_executors;
-        }
-        pair_count[opr->node]++;
-        task_queue.push(opr_id);
-        break;
-      case loadOPR:
-        if((*opr->consumers).size() == 1)
-          opr->node = rand() % num_of_executors;
-        break;
-      case reduceOPR:
-        // total aggregation in executor 0
-        if(opr->opr.reduce_opr->valuep)
-          opr->node = 0;
-    }
+  vector<int> entry_points;
+  for ( int i = 0; i < in_degree.size(); i++ )
+    if (in_degree[i] == 0)
+      entry_points.push_back(i);
+  queue<int> task_queue;
+  for ( int op: entry_points ) {
+    Opr* opr = operations[op];
+    opr->node = (int)get_coord_hash(op_coords[op]) % num_of_executors;
+    task_queue.push(op);
   }
-  long threshold = ceil(1.1*total_work/(double)num_of_executors);
-  vector<int> work_done(num_of_executors), task_count(num_of_executors);
-  while (!task_queue.empty()) {
-    int cur_task = task_queue.front();
+
+  while ( !task_queue.empty() ) {
+    int c = task_queue.front();
     task_queue.pop();
-    Opr* opr = operations[cur_task];
-    work_done[opr->node] += opr->cpu_cost;
-    task_count[opr->node]++;
-    int w = opr->node;
-    if(opr->type != pairOPR && work_done[opr->node] >= threshold) {
-      w = rand() % num_of_executors;
-      while(work_done[w] >= threshold) {
-        w = rand() % num_of_executors;
+    Opr* opr = operations[c];
+    // add more ready nodes
+    for ( int c: *opr->consumers ) {
+      Opr* copr = operations[c];
+      in_degree[c]--;
+      if (in_degree[c] == 0) {
+        if(copr->type == reduceOPR && copr->opr.reduce_opr->valuep)
+          copr->node = coordinator;  // total aggregation result is on coordinator
+        else if(copr->type == pairOPR) {
+          if((*copr->consumers).size() != 1) {
+            copr->node = opr->node;
+          }
+          else {
+            Opr* p_opr = operations[(*copr->consumers)[0]];
+            Opr* ch_opr1 = operations[(*copr->children)[0]];
+            Opr* ch_opr2 = operations[(*copr->children)[1]];
+            if((*p_opr->consumers).size() > 0) {
+              Opr* gp_opr = operations[(*p_opr->consumers)[0]];
+              long child1_size = (long)(*ch_opr1->consumers).size(), child2_size = (long)(*ch_opr2->consumers).size();
+              // reduce -> apply -> pair GBJ pattern
+              if(gp_opr->type == reduceOPR || (child1_size > 1 && child2_size > 1)) {
+                copr->node = (int)get_worker_node(op_coords[(*copr->consumers)[0]],child1_size,child2_size,offset_map[copr->static_blevel]);
+              }
+              else
+                copr->node = opr->node;
+            }
+            else
+              copr->node = opr->node;
+          }
+        }
+        else
+          copr->node = opr->node;
+        task_queue.push(c);
       }
     }
-    // add more ready nodes
-    add_tasks(*opr->consumers, w, task_queue);
-    add_tasks(*opr->children, w, task_queue);
   }
 }
