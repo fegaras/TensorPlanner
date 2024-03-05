@@ -97,12 +97,12 @@ int get_coord_hash(vector<long>& coord) {
 
 long get_worker_node(vector<long>& coord, long n, long m, int offset) {
   long row_cnt = sqrt(num_of_executors);
-  long col_cnt = num_of_executors/row_cnt;
+  long col_cnt = ceil((double)num_of_executors/row_cnt);
   if(coord.size() == 1 || n == 1)
     return (coord[0]+offset)%num_of_executors;
   if(m == 1)
     return (coord[1]+offset)%num_of_executors;
-  if(coord.size() == 2)
+  if(coord.size() <= 3)
     return ((coord[0]%row_cnt)*col_cnt + coord[1]%col_cnt + offset)%num_of_executors;
   return get_coord_hash(coord) % num_of_executors;
 }
@@ -162,16 +162,13 @@ void schedule_plan ( void* plan ) {
     for ( int c: *opr->consumers )
       in_degree[c]++;
   }
-  vector<int> entry_points;
-  for ( int i = 0; i < in_degree.size(); i++ )
-    if (in_degree[i] == 0)
-      entry_points.push_back(i);
   queue<int> task_queue;
-  for ( int op: entry_points ) {
-    Opr* opr = operations[op];
-    opr->node = (int)get_coord_hash(op_coords[op]) % num_of_executors;
-    task_queue.push(op);
-  }
+  for ( int i = 0; i < in_degree.size(); i++ )
+    if (in_degree[i] == 0) {
+      Opr* opr = operations[i];
+      opr->node = (int)get_coord_hash(op_coords[i]) % num_of_executors;
+      task_queue.push(i);
+    }
 
   while ( !task_queue.empty() ) {
     int c = task_queue.front();
@@ -182,11 +179,33 @@ void schedule_plan ( void* plan ) {
       Opr* copr = operations[c];
       in_degree[c]--;
       if (in_degree[c] == 0) {
-        if(copr->type == reduceOPR && copr->opr.reduce_opr->valuep)
-          copr->node = coordinator;  // total aggregation result is on coordinator
+        // find the node of children with min workload
+        int min_work = 2e9, min_tasks = 2e9, min_work_node = -1;
+        for(int child: *copr->children) {
+          Opr* ch_opr = operations[child];
+          int tmp_work = work[ch_opr->node]+communication_cost(copr,ch_opr->node);
+          if(tmp_work < min_work) {
+            min_work = tmp_work;
+            min_tasks = tasks[ch_opr->node];
+            min_work_node = ch_opr->node;
+          }
+          else if(tmp_work == min_work && tasks[ch_opr->node] < min_tasks) {
+            min_tasks = tasks[ch_opr->node];
+            min_work_node = ch_opr->node;
+          }
+        }
+        if(min_work_node == -1)
+          min_work_node = (int)get_coord_hash(op_coords[c]) % num_of_executors;
+
+        if(copr->type == reduceOPR) {
+          if(copr->opr.reduce_opr->valuep)
+            copr->node = coordinator;  // total aggregation result is on coordinator
+          else
+            copr->node = min_work_node;
+        }
         else if(copr->type == pairOPR) {
           if((*copr->consumers).size() != 1) {
-            copr->node = opr->node;
+            copr->node = min_work_node;
           }
           else {
             Opr* p_opr = operations[(*copr->consumers)[0]];
@@ -200,14 +219,17 @@ void schedule_plan ( void* plan ) {
                 copr->node = (int)get_worker_node(op_coords[(*copr->consumers)[0]],child1_size,child2_size,offset_map[copr->static_blevel]);
               }
               else
-                copr->node = opr->node;
+                copr->node = min_work_node;
             }
             else
-              copr->node = opr->node;
+              copr->node = min_work_node;
           }
         }
         else
-          copr->node = opr->node;
+          copr->node = min_work_node;
+        int work_done = copr->cpu_cost + communication_cost(copr,copr->node);
+        work[copr->node] += work_done;
+        tasks[copr->node]++;
         task_queue.push(c);
       }
     }
