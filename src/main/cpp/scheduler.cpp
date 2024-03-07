@@ -95,9 +95,7 @@ int get_coord_hash(vector<long>& coord) {
   return abs(seed);
 }
 
-long get_worker_node(vector<long>& coord, long n, long m, int offset) {
-  long row_cnt = sqrt(num_of_executors);
-  long col_cnt = ceil((double)num_of_executors/row_cnt);
+long get_worker_node(vector<long>& coord, long n, long m, long row_cnt, long col_cnt, int offset) {
   if(coord.size() == 1 || n == 1)
     return (coord[0]+offset)%num_of_executors;
   if(m == 1)
@@ -170,6 +168,13 @@ void schedule_plan ( void* plan ) {
       task_queue.push(i);
     }
 
+  long row_cnt = sqrt(num_of_executors);
+  long col_cnt = ceil((double)num_of_executors/row_cnt);
+  while(num_of_executors % row_cnt != 0) {
+    row_cnt--;
+  }
+  col_cnt = num_of_executors/row_cnt;
+
   while ( !task_queue.empty() ) {
     int c = task_queue.front();
     task_queue.pop();
@@ -215,8 +220,8 @@ void schedule_plan ( void* plan ) {
               Opr* gp_opr = operations[(*p_opr->consumers)[0]];
               long child1_size = (long)(*ch_opr1->consumers).size(), child2_size = (long)(*ch_opr2->consumers).size();
               // reduce -> apply -> pair GBJ pattern
-              if(gp_opr->type == reduceOPR || (child1_size > 1 && child2_size > 1)) {
-                copr->node = (int)get_worker_node(op_coords[(*copr->consumers)[0]],child1_size,child2_size,offset_map[copr->static_blevel]);
+              if(gp_opr->type == reduceOPR || (child1_size > 1 || child2_size > 1)) {
+                copr->node = (int)get_worker_node(op_coords[(*copr->consumers)[0]],child1_size,child2_size,row_cnt,col_cnt,offset_map[copr->static_blevel]);
               }
               else
                 copr->node = min_work_node;
