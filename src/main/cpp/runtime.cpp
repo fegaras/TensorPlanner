@@ -184,13 +184,6 @@ string print_block ( Opr* opr ) {
   return out.str();
 }
 
-vector<int>* range ( long n1, long n2, long n3 ) {
-  vector<int>* a = new vector<int>();
-  for ( int i = n1; i <= n2; i += n3 )
-    a->push_back(i);
-  return a;
-}
-
 int store_opr ( Opr* opr, const vector<int>* children,
                 void* coord, int cost, vector<int>* encoded_type ) {
   opr->consumers = new vector<int>();

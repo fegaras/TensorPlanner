@@ -106,24 +106,6 @@ Vec<T>* array_buffer_dense ( size_t dsize, const T zero ) {
 }
 
 template< typename T >
-Vec<T>* merge_tensors ( const Vec<T>* x, const Vec<T>* y, T(*op)(tuple<T,T>*), const T zero ) {
-  int len = min(x->size(),y->size());
-  Vec<T>* a = new Vec<T>(len);
-  T* av = a->buffer();
-  T* xv = x->buffer();
-  T* yv = y->buffer();
-  // don't create a tuple during loop
-  static tuple<T,T>* t = new tuple<T,T>(zero,zero);
-  #pragma omp parallel for
-  for ( int i = 0; i < len; i++ ) {
-    get<0>(*t) = xv[i];
-    get<1>(*t) = yv[i];
-    av[i] = op(t);
-  }
-  return a;
-}
-
-template< typename T >
 vector<T>* parallelize ( vector<T>* x ) {
   return x;
 }
@@ -343,10 +325,12 @@ vector<tuple<long,tuple<T,S>*>*>* join ( vector<tuple<long,T>*>* x,
   return a;
 }
 
+// Create a dense array and initialize it with the values of the tensor init (if not null).
+// It converts the sparse tensor init to a complete dense array where missing values are zero
 template< typename T >
 Vec<T>* array_buffer ( int dsize, int ssize, T zero,
                        tuple<Vec<int>*,Vec<int>*,Vec<T>*>* init = nullptr ) {
-  Vec<T>* buffer = new Vec<T>(dsize*ssize);
+  auto buffer = new Vec<T>(dsize*ssize);
   T* bv = buffer->buffer();
   #pragma omp parallel for
   for (int i = 0; i < buffer->size(); i++ )
@@ -360,6 +344,23 @@ Vec<T>* array_buffer ( int dsize, int ssize, T zero,
         j++;
       }
     }
+  }
+  return buffer;
+}
+
+// Create a dense array and initialize it with the values of the sparse tensor init (if not null).
+// It converts the sparse tensor init to a complete dense array where missing values are zero
+template< typename T >
+Vec<T>* array_buffer_sparse ( int ssize, T zero, tuple<Vec<int>*,Vec<T>*>* init = nullptr ) {
+  auto buffer = new Vec<T>(ssize);
+  T* bv = buffer->buffer();
+  #pragma omp parallel for
+  for (int i = 0; i < buffer->size(); i++ )
+    bv[i] = zero;
+  if (init != nullptr) {
+    #pragma omp parallel for
+    for ( int j = 0; j < get<0>(*init)->size()-1; j++ )
+      bv[(*get<0>(*init))[j]] = (*get<1>(*init))[j];
   }
   return buffer;
 }
@@ -384,9 +385,50 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
     }
     dv[i+1] = sparse->size();
   }
+  delete buffer;
   return new tuple<Vec<int>*,Vec<int>*,Vec<T>*>(dense,new Vec<int>(sparse),new Vec<T>(values));
 }
 
+// convert a dense array to a sparse tensor (dense dimensions dn=0 & sparse dimensions sn>0)
+template< typename T >
+tuple<Vec<int>*,Vec<T>*>* array2tensor ( int sn, T zero, Vec<T>* buffer ) {
+  T* bv = buffer->buffer();
+  auto sparse = new vector<int>();
+  auto values = new vector<T>();
+  int j = 0;
+  while ( j < sn ) {
+    T v = bv[j];
+    if ( v != zero ) {
+      sparse->push_back(j);
+      values->push_back(v);
+    }
+    j++;
+  }
+  delete buffer;
+  return new tuple<Vec<int>*,Vec<T>*>(new Vec<int>(sparse),new Vec<T>(values));
+}
+
+// merge two dense tensors using the monoid op/zero
+template< typename T >
+Vec<T>* merge_tensors ( const Vec<T>* x, const Vec<T>* y, T(*op)(tuple<T,T>*), const T zero ) {
+  int len = min(x->size(),y->size());
+  Vec<T>* a = new Vec<T>(len);
+  T* av = a->buffer();
+  T* xv = x->buffer();
+  T* yv = y->buffer();
+  // don't create a tuple during loop
+  auto t = new tuple<T,T>(zero,zero);
+  #pragma omp parallel for
+  for ( int i = 0; i < len; i++ ) {
+    get<0>(*t) = xv[i];
+    get<1>(*t) = yv[i];
+    av[i] = op(t);
+  }
+  delete t;
+  return a;
+}
+
+// merge two tensors using the monoid op/zero
 template< typename T >
 tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
      merge_tensors ( tuple<Vec<int>*,Vec<int>*,Vec<T>*>* x,
@@ -400,7 +442,7 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
   auto values = new vector<T>();
   dv[0] = 0;
   // don't create a tuple during loop
-  static tuple<T,T>* t = new tuple<T,T>(zero,zero);
+  auto t = new tuple<T,T>(zero,zero);
   while (i < len) {
     int xn = (*get<0>(*x))[i];
     int yn = (*get<0>(*y))[i];
@@ -457,7 +499,74 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
     i++;
     dv[i] = sparse->size();
   }
+  delete t;
   return new tuple<Vec<int>*,Vec<int>*,Vec<T>*>(dense,new Vec<int>(sparse),new Vec<T>(values));
+}
+
+// merge two sparse tensors using the monoid op/zero
+template< typename T >
+tuple<Vec<int>*,Vec<T>*>*
+     merge_tensors ( tuple<Vec<int>*,Vec<T>*>* x,
+                     tuple<Vec<int>*,Vec<T>*>* y,
+                     T(*op)(tuple<T,T>*), T zero ) {
+  auto sparse = new vector<int>();
+  auto values = new vector<T>();
+  // don't create a tuple during loop
+  auto t = new tuple<T,T>(zero,zero);
+  int xn = 0;
+  int yn = 0;
+  while (xn < get<0>(*x)->size() && yn < get<0>(*y)->size()) {
+    if ((*get<0>(*x))[xn] == (*get<0>(*y))[yn]) {
+      get<0>(*t) = (*get<1>(*x))[xn];
+      get<1>(*t) = (*get<1>(*y))[yn];
+      T v = op(t);
+      if (v != zero) {
+        sparse->push_back((*get<0>(*x))[xn]);
+        values->push_back(v);
+      }
+      xn++; yn++;
+    } else if ((*get<0>(*x))[xn] < (*get<0>(*y))[yn]) {
+      get<0>(*t) = (*get<1>(*x))[xn];
+      get<1>(*t) = zero;
+      T v = op(t);
+      if (v != zero) {
+        sparse->push_back((*get<0>(*x))[xn]);
+        values->push_back(v);
+      }
+      xn++;
+    } else {
+      get<0>(*t) = zero;
+      get<1>(*t) = (*get<1>(*y))[yn];
+      T v = op(t);
+      if (v != zero) {
+        sparse->push_back((*get<0>(*y))[yn]);
+        values->push_back(v);
+      }
+      yn++;
+    }
+  }
+  while (xn < get<0>(*x)->size()) {
+    get<0>(*t) = (*get<1>(*x))[xn];
+    get<1>(*t) = zero;
+    T v = op(t);
+    if (v != zero) {
+      sparse->push_back((*get<0>(*x))[xn]);
+      values->push_back(v);
+    }
+    xn++;
+  }
+  while (yn < get<0>(*y)->size()) {
+    get<0>(*t) = zero;
+    get<1>(*t) = (*get<1>(*y))[yn];
+    T v = op(t);
+    if (v != zero) {
+      sparse->push_back((*get<0>(*y))[yn]);
+      values->push_back(v);
+    }
+    yn++;
+  }
+  delete t;
+  return new tuple<Vec<int>*,Vec<T>*>(new Vec<int>(sparse),new Vec<T>(values));
 }
 
 template< typename T >

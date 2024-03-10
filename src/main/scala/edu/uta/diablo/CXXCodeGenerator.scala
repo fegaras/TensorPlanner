@@ -349,7 +349,7 @@ object CXXCodeGenerator {
              val tc = makeCtype(exprType(v),true)
              "new vector<"+tc+">("+nc+","+vc+")"
         case MethodCall(x,"length",null)
-          => makeC(x,tabs,false)+".size()"
+          => makeC(x,tabs,false)+"->size()"
         case MethodCall(x,"toInt",null)
           => "atoi("+makeC(x,tabs,false)+")"
         case MethodCall(x,"toList",null)

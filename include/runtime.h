@@ -25,6 +25,22 @@ inline bool inRange ( long i, long n1, long n2, long n3 ) {
   return i>=n1 && i<= n2 && (i-n1)%n3 == 0;
 }
 
+Vec<bool>* array_buffer_bool ( int dsize, int ssize, tuple<Vec<int>*,Vec<bool>*>* init = nullptr );
+Vec<bool>* array_buffer_sparse_bool ( int ssize, Vec<int>* init = nullptr );
+tuple<Vec<int>*,Vec<int>*>* array2tensor_bool ( int dn, int sn, Vec<bool>* buffer );
+
+tuple<Vec<int>*,Vec<int>*>* array2tensor_bool ( int dn, int sn, Vec<bool>* buffer );
+
+Vec<int>* array2tensor_bool ( int sn, Vec<bool>* buffer );
+
+tuple<Vec<int>*,Vec<int>*>*
+     merge_tensors ( tuple<Vec<int>*,Vec<int>*>* x,
+                     tuple<Vec<int>*,Vec<int>*>* y,
+                     bool(*op)(tuple<bool,bool>*), bool zero );
+
+Vec<int>* merge_tensors ( Vec<int>* x, Vec<int>* y,
+                          bool(*op)(tuple<bool,bool>*), bool zero );
+
 int loadOpr ( void* block, void* coord, vector<int>* encoded_type );
 int loadOpr ( void* block, long coord, vector<int>* encoded_type ) {
   return loadOpr(block,(void*)coord,encoded_type);
