@@ -375,7 +375,7 @@ object CXXCodeGenerator {
               tab(tabs-1)+"#pragma omp parallel for\n" +
               tab(tabs-1)+"for ( int "+i+" = "+makeC(n1,tabs,false)+"; "+i+
                  " <= "+makeC(n2,tabs,false)+"; "+i+" += "+makeC(n3,tabs,false)+" )\n"+
-                 tab(tabs)+makeC(nb,tabs+1,true)+" }"
+                 tab(tabs)+makeC(nb,tabs+1,true)+"; }"
         case Call("for",List(VarDecl(i,tp,Range(n1,n2,n3)),b))
           => "for ( int "+i+" = "+makeC(n1,tabs,false)+"; "+i+
                  " <= "+makeC(n2,tabs,false)+"; "+i+" += "+makeC(n3,tabs,false)+" )\n"+
@@ -403,7 +403,7 @@ object CXXCodeGenerator {
           => val tc = makeCtype(exprType(s.head),false)
              "new vector<"+tc+">({ "+s.map(makeC(_,tabs,false)).mkString(", ")+" })"
         case IfE(p,x,Seq(Nil))
-          if stmt
+          if false //stmt
           => "{ assert("+makeC(p,tabs,false)+");\n"+tab(tabs)+makeC(x,tabs+1,stmt)+"; }"
         case IfE(p,x,Seq(Nil))
           if stmt

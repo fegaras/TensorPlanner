@@ -33,12 +33,12 @@ int serialize ( ostringstream &out, const void* data, vector<int>* encoded_type,
       case 0:
         return loc+2;
       case 2: {
-        tuple<void*,void*>* x = data;
+        auto x = (tuple<void*,void*>*)data;
         int l2 = serialize(out,get<0>(*x),encoded_type,loc+2);
         return serialize(out,get<1>(*x),encoded_type,l2);
       }
       case 3: {
-        tuple<void*,void*,void*>* x = data;
+        auto x = (tuple<void*,void*,void*>*)data;
         int l2 = serialize(out,get<0>(*x),encoded_type,loc+2);
         int l3 = serialize(out,get<1>(*x),encoded_type,l2);
         return serialize(out,get<2>(*x),encoded_type,l3);
@@ -48,19 +48,19 @@ int serialize ( ostringstream &out, const void* data, vector<int>* encoded_type,
   case 11:  // Vec
     switch ((*encoded_type)[loc+1]) {
     case 0: {
-      Vec<int>* x = data;
+      auto x = (Vec<int>*)data;
       put_int(out,x->size());
       out.write((const char*)x->buffer(),sizeof(int)*x->size());
       return loc+2;
     }
     case 1: {
-      Vec<long>* x = data;
+      auto x = (Vec<long>*)data;
       put_int(out,x->size());
       out.write((const char*)x->buffer(),sizeof(long)*x->size());
       return loc+2;
     }
     case 3: {
-      Vec<double>* x = data;
+      auto x = (Vec<double>*)data;
       put_int(out,x->size());
       out.write((const char*)x->buffer(),sizeof(double)*x->size());
       return loc+2;
@@ -80,14 +80,14 @@ int serialize ( void* data, char* buffer, vector<int>* encoded_type ) {
 
 int get_int ( istringstream &in ) {
   int n;
-  in.read((const char*)&n,sizeof(int));
+  in.read((char*)&n,sizeof(int));
   return n;
 }
 
 int deserialize ( istringstream &in, void* &data, vector<int>* encoded_type, int loc ) {
   switch ((*encoded_type)[loc]) {
   case 0: case 1: // index
-    data = (long)get_int(in);
+    data = (void*)(long)get_int(in);
     return loc+1;
   case 10: { // tuple
     switch ((*encoded_type)[loc+1]) {
@@ -115,21 +115,21 @@ int deserialize ( istringstream &in, void* &data, vector<int>* encoded_type, int
     case 0: {
       int len = get_int(in);
       Vec<int>* x = new Vec<int>(len);
-      in.read((const char*)x->buffer(),sizeof(int)*len);
+      in.read((char*)x->buffer(),sizeof(int)*len);
       data = x;
       return loc+2;
     }
     case 1: {
       int len = get_int(in);
       Vec<long>* x = new Vec<long>(len);
-      in.read((const char*)x->buffer(),sizeof(long)*len);
+      in.read((char*)x->buffer(),sizeof(long)*len);
       data = x;
       return loc+2;
     }
     case 3: {
       int len = get_int(in);
       Vec<double>* x = new Vec<double>(len);
-      in.read((const char*)x->buffer(),sizeof(double)*len);
+      in.read((char*)x->buffer(),sizeof(double)*len);
       data = x;
       return loc+2;
     }

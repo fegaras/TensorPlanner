@@ -30,7 +30,7 @@
 // trace execution
 bool trace = true;
 // trace block deletes for debugging
-static bool trace_delete = false;
+bool trace_delete = false;
 // enables deletion of garbage blocks
 bool delete_arrays = true;
 const bool enable_partial_reduce = true;
@@ -47,9 +47,9 @@ static vector<int>* exit_points;
 extern int executor_rank;
 extern int num_of_executors;
 
-static int block_count = 0;
-static int block_created = 0;
-static int max_blocks = 0;
+int block_count = 0;
+int block_created = 0;
+int max_blocks = 0;
 
 
 // used for comparing task priorities in the run-time queue
@@ -89,7 +89,7 @@ void info ( const char* fmt, ... ) {
     va_list args;
     va_start(args,fmt);
     printf("[%02d:%02d:%02d:%03d%3d]   ",
-           t->tm_hour,t->tm_min,t->tm_sec,millis,executor_rank);
+           t->tm_hour,t->tm_min,t->tm_sec,(int)millis,executor_rank);
     vprintf(fmt,args);
     printf("\n");
     va_end(args);
@@ -132,7 +132,7 @@ int print_block ( ostringstream &out, const void* data,
         return loc+2;
       case 2: {
         out << "(";
-        tuple<void*,void*>* x = data;
+        auto x = (tuple<void*,void*>*)data;
         int l2 = print_block(out,get<0>(*x),encoded_type,loc+2);
         out << ",";
         int l3 = print_block(out,get<1>(*x),encoded_type,l2);
@@ -140,7 +140,7 @@ int print_block ( ostringstream &out, const void* data,
         return l3;
       }
       case 3: {
-        tuple<void*,void*,void*>* x = data;
+        auto x = (tuple<void*,void*,void*>*)data;
         out << "(";
         int l2 = print_block(out,get<0>(*x),encoded_type,loc+2);
         out << ",";
@@ -155,17 +155,17 @@ int print_block ( ostringstream &out, const void* data,
   case 11: { // data block
     switch ((*encoded_type)[loc+1]) {
       case 0: {
-        Vec<int>* x = data;
+        auto x = (Vec<int>*)data;
         out << "Vec<int>(" << x->size() << ")";
         return loc+2;
       }
       case 1: {
-        Vec<long>* x = data;
+        auto x = (Vec<long>*)data;
         out << "Vec<long>(" << x->size() << ")";
         return loc+2;
       }
       case 3: {
-        Vec<double>* x = data;
+        auto x = (Vec<double>*)data;
         out << "Vec<double>(" << x->size() << ")";
         return loc+2;
       }
@@ -205,8 +205,7 @@ int store_opr ( Opr* opr, const vector<int>* children,
   int loc = operations.size();
   operations.push_back(opr);
   task_table.emplace(pair<size_t,int>(key,loc));
-  opr->children = children;
-  children->shrink_to_fit();
+  opr->children = (vector<int>*)children;
   for ( int c: *children ) {
     auto cs = operations[c]->consumers;
     if (find(cs->begin(),cs->end(),loc) == cs->end())
@@ -287,7 +286,7 @@ bool hasCachedValue ( Opr* x ) {
           || x->status == locked || x->status == zombie);
 }
 
-void cache_data ( Opr* opr, const void* data ) {
+void cache_data ( Opr* opr, void* data ) {
   opr->cached = data;
 }
 
@@ -295,7 +294,7 @@ bool member ( int n, vector<int>* v ) {
   return find(v->begin(),v->end(),n) != v->end();
 }
 
-int delete_array ( void* &data, vector<int>* encoded_type, int loc ) {
+int delete_array_ ( void* &data, vector<int>* encoded_type, int loc ) {
   if (!delete_arrays)
     return 0;
   switch ((*encoded_type)[loc]) {
@@ -306,34 +305,34 @@ int delete_array ( void* &data, vector<int>* encoded_type, int loc ) {
       case 0: case 1:
         return loc+2;
       case 2: {
-        tuple<void*,void*>* x = data;
-        int l2 = delete_array(get<0>(*x),encoded_type,loc+2);
-        return delete_array(get<1>(*x),encoded_type,l2);
+        auto x = (tuple<void*,void*>*)data;
+        int l2 = delete_array_(get<0>(*x),encoded_type,loc+2);
+        return delete_array_(get<1>(*x),encoded_type,l2);
       }
       case 3: {
-        tuple<void*,void*,void*>* x = data;
-        int l2 = delete_array(get<0>(*x),encoded_type,loc+2);
-        int l3 = delete_array(get<1>(*x),encoded_type,l2);
-        return delete_array(get<2>(*x),encoded_type,l3);
+        auto x = (tuple<void*,void*,void*>*)data;
+        int l2 = delete_array_(get<0>(*x),encoded_type,loc+2);
+        int l3 = delete_array_(get<1>(*x),encoded_type,l2);
+        return delete_array_(get<2>(*x),encoded_type,l3);
       }
     }
   }
   case 11:  // data block
     switch ((*encoded_type)[loc+1]) {
     case 0: {
-      Vec<int>* x = data;
+      auto x = (Vec<int>*)data;
       delete x;
       data = nullptr;
       return loc+2;
     }
     case 1: {
-      Vec<long>* x = data;
+      auto x = (Vec<long>*)data;
       delete x;
       data = nullptr;
       return loc+2;
     }
     case 3: {
-      Vec<double>* x = data;
+      auto x = (Vec<double>*)data;
       delete x;
       data = nullptr;
       return loc+2;
@@ -344,9 +343,10 @@ int delete_array ( void* &data, vector<int>* encoded_type, int loc ) {
   }
 }
 
-int delete_array ( void* &data, vector<int>* encoded_type ) {
+void delete_block ( void* &data, vector<int>* encoded_type ) {
   try {
-    delete_array(data,encoded_type,0);
+    delete_array_(data,encoded_type,0);
+    data = nullptr;
   } catch (...) {
     info("cannot delete block %d",data);
   }
@@ -362,7 +362,7 @@ void delete_array ( int opr_id ) {
     cout << executor_rank << " " << "delete array " << opr_id << " "
          << opr->status << " " << opr->cached << " " << opr->count << endl;
   if (opr->cached != nullptr) {
-    delete_array(opr->cached,opr->encoded_type);
+    delete_block(opr->cached,opr->encoded_type);
     opr->cached = nullptr;
     info("    delete block %d (%d/%d)",opr_id,block_count,block_created);
   }
@@ -462,7 +462,7 @@ void schedule_plan ( void* plan );
 
 void schedule ( void* plan ) {
   auto time = MPI_Wtime();
-  tuple<void*,void*,vector<tuple<void*,int>*>*>* p = plan;
+  auto p = (tuple<void*,void*,vector<tuple<void*,int>*>*>*)plan;
   schedule_plan(plan);
   for ( Opr* x: operations )
     x->dependents = nullptr;
@@ -509,9 +509,9 @@ void* inMemEvalPair ( int lg, int tabs ) {
       int y = operations[lg]->opr.pair_opr->y;
       void* gx = inMemEvalPair(x,tabs);
       void* gy = inMemEvalPair(y,tabs);
-      tuple<void*,void*>* gty = gy;
+      auto gty = (tuple<void*,void*>*)gy;
       void* yy = (operations[y]->type == pairOPR) ? gy : get<1>(*gty);
-      tuple<void*,void*>* gtx = gx;
+      auto gtx = (tuple<void*,void*>*)gx;
       void* xx = (operations[x]->type == pairOPR) ? gx : get<1>(*gtx);
       return new tuple<void*,void*>(get<0>(*gtx),new tuple<void*,void*>(xx,yy));
     }
@@ -531,7 +531,7 @@ void* inMemEval ( int id, int tabs ) {
       res = loadBlocks[e->opr.load_opr->block];
       break;
     case applyOPR: {
-      vector<void*>*(*f)(void*) = functions[e->opr.apply_opr->fnc];
+      auto f = (vector<void*>*(*)(void*))functions[e->opr.apply_opr->fnc];
       res = (*f(inMemEval(e->opr.apply_opr->x,tabs+1)))[0];
       break;
     }
@@ -542,10 +542,10 @@ void* inMemEval ( int id, int tabs ) {
       vector<int>* rs = e->opr.reduce_opr->s;
       vector<tuple<void*,void*>*>* sv = new vector<tuple<void*,void*>*>();
       for ( int x: *rs ) {
-        tuple<void*,void*>* v = inMemEval(x,tabs+1);
+        auto v = (tuple<void*,void*>*)inMemEval(x,tabs+1);
         sv->push_back(v);
       }
-      void*(*op)(tuple<void*,void*>*) = functions[e->opr.reduce_opr->op];
+      auto op = (void*(*)(tuple<void*,void*>*))functions[e->opr.reduce_opr->op];
       void* av = nullptr;
       for ( tuple<void*,void*>* v: *sv ) {
         if (av == nullptr)
@@ -564,12 +564,12 @@ void* inMemEval ( int id, int tabs ) {
 
  // in-memory evaluation using top-down recursive evaluation on a plan tree
 void* evalTopDown ( void* plan ) {
-  tuple<void*,void*,vector<tuple<void*,int>*>*>* p = plan;
+  auto p = (tuple<void*,void*,vector<tuple<void*,int>*>*>*)plan;
   for ( Opr* x: operations )
     x->count = x->consumers->size();
   vector<tuple<void*,void*>*>* res = new vector<tuple<void*,void*>*>();
   for ( tuple<void*,int>* d: *get<2>(*p) ) {
-    tuple<void*,void*>* v = inMemEval(get<1>(*d),0);
+    auto v = (tuple<void*,void*>*)inMemEval(get<1>(*d),0);
     res->push_back(v);
   }
   return new tuple<void*,void*,void*>(get<0>(*p),get<1>(*p),res);
@@ -589,9 +589,9 @@ void* computePair ( int lg_id ) {
       int y = lg->opr.pair_opr->y;
       void* gx = computePair(x);
       void* gy = computePair(y);
-      tuple<void*,void*>* gty = gy;
+      auto gty = (tuple<void*,void*>*)gy;
       void* yy = (operations[y]->type == pairOPR) ? gy : get<1>(*gty);
-      tuple<void*,void*>* gtx = gx;
+      auto gtx = (tuple<void*,void*>*)gx;
       void* xx = (operations[x]->type == pairOPR) ? gx : get<1>(*gtx);
       void* data = new tuple<void*,void*>(get<0>(*gtx),new tuple<void*,void*>(xx,yy));
       cache_data(lg,data);
@@ -617,7 +617,7 @@ try {
       cache_data(opr,res);
       break;
     case applyOPR: {
-      vector<void*>*(*f)(void*) = functions[opr->opr.apply_opr->fnc];
+      auto f = (vector<void*>*(*)(void*))functions[opr->opr.apply_opr->fnc];
       opr->status = computed;
       res = (*(f(operations[opr->opr.apply_opr->x]->cached)))[0];
       cache_data(opr,res);
@@ -629,21 +629,22 @@ try {
     case reduceOPR: {
       // not used if partial reduce is enabled
       vector<int>* rs = opr->opr.reduce_opr->s;
-      void*(*op)(tuple<void*,void*>*) = functions[opr->opr.reduce_opr->op];
+      auto op = (void*(*)(tuple<void*,void*>*))functions[opr->opr.reduce_opr->op];
       void* acc = nullptr;
       void* key = 0;
       int i = 0;
-      for ( void* x: *rs ) {
-        tuple<void*,void*>* v = operations[x]->cached;
+      for ( int x: *rs ) {
+        auto v = (tuple<void*,void*>*)operations[x]->cached;
         if (acc == nullptr) {
           key = get<0>(*v);
           acc = get<1>(*v);
         } else {
-          res = new tuple<void*,void*>(key,acc);
+          auto tres = new tuple<void*,void*>(key,acc);
+          res = tres;
           acc = op(new tuple<void*,void*>(acc,get<1>(*v)));
           if (i > 1)
-            delete_array(res,opr->encoded_type);
-          delete res;
+            delete_block(res,opr->encoded_type);
+          delete tres;
         }
         i++;
       }
@@ -681,7 +682,7 @@ void enqueue_reduce_opr ( int opr_id, int rid ) {
   Opr* reduce_opr = operations[rid];  // Reduce operation
   static tuple<void*,void*>* op_arg = new tuple<void*,void*>(nullptr,nullptr);
   // partial reduce inside reduce opr
-  void*(*op)(tuple<void*,void*>*) = functions[reduce_opr->opr.reduce_opr->op];
+  auto op = (void*(*)(tuple<void*,void*>*))functions[reduce_opr->opr.reduce_opr->op];
   if (reduce_opr->cached == nullptr) {
     // first reduction (may delete later)
     info("    set reduce opr %d to the first input opr %d",rid,opr_id);
@@ -693,8 +694,8 @@ void enqueue_reduce_opr ( int opr_id, int rid ) {
     get<1>(*op_arg) = opr->cached;
     reduce_opr->cached = op(op_arg);
   } else {
-    tuple<void*,void*>* x = reduce_opr->cached;
-    tuple<void*,void*>* y = opr->cached;
+    auto x = (tuple<void*,void*>*)reduce_opr->cached;
+    auto y = (tuple<void*,void*>*)opr->cached;
     // merge the current state with the partially reduced data
     info("    merge reduce opr %d with input opr %d",rid,opr_id);
     auto old = (void*)x;
@@ -704,7 +705,7 @@ void enqueue_reduce_opr ( int opr_id, int rid ) {
     // remove the old reduce result
     if (delete_arrays && reduce_opr->first_reduced_input < 0) {
       info("    delete current reduce result in opr %d",rid);
-      delete_array(old,reduce_opr->encoded_type);
+      delete_block(old,reduce_opr->encoded_type);
     }
     // when reduce_opr finished with input opr => check if we can delete opr
     delete_first_reduce_input(rid);
@@ -874,7 +875,7 @@ vector<int>* entry_points ( const vector<int>* es ) {
 
 void* eval ( void* plan ) {
   auto time = MPI_Wtime();
-  tuple<void*,void*,vector<tuple<void*,int>*>*>* p = plan;
+  auto p = (tuple<void*,void*,vector<tuple<void*,int>*>*>*)plan;
   exit_points = new vector<int>();
   for ( auto x: *get<2>(*p) )
     exit_points->push_back(get<1>(*x));
@@ -931,14 +932,14 @@ void* evalOpr ( int opr_id ) {
   eval(plan);
   Opr* opr = operations[opr_id];
   opr->status = computed;
-  tuple<void*,void*>* res = opr->cached;
+  auto res = (tuple<void*,void*>*)opr->cached;
   return get<1>(*res);
 }
 
 void* collect ( void* plan ) {
   if (!enable_collect)
-    return;
-  tuple<void*,void*,vector<tuple<void*,int>*>*>* p = plan;
+    return nullptr;
+  auto p = (tuple<void*,void*,vector<tuple<void*,int>*>*>*)plan;
   vector<tuple<void*,int>*>* es = get<2>(*p);
   if (inMemory) {
     vector<void*>* blocks = new vector<void*>();
@@ -976,13 +977,13 @@ void* collect ( void* plan ) {
   }
 }
 
-vector<char*> env_names { "inMemory", "trace", "collect" };
+vector<string> env_names { "inMemory", "trace", "collect" };
 vector<bool*> env_vars  { &inMemory, &trace, &enable_collect };
 
 void startup ( int argc, char* argv[], int block_dim_size ) {
   static char name[100];
   for ( int i = 0; i < env_names.size(); i++ ) {
-    sprintf(name,"diablo_%s",env_names[i]);
+    sprintf(name,"diablo_%s",env_names[i].c_str());
     char* value = getenv(name);
     if (value != nullptr)
       *env_vars[i] = strcmp(value,"true") == 0;

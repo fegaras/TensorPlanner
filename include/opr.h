@@ -21,7 +21,7 @@ enum OprType { applyOPR=0, pairOPR=1, loadOPR=2, reduceOPR=3 };
 
 static const char* oprNames[] = { "apply", "pair", "load", "reduce" };
 
-static const vector<int>* empty_vector = new vector<int>();
+static vector<int>* empty_vector = new vector<int>();
 
 class Opr;
 
@@ -135,4 +135,4 @@ public:
 };
 
 void enqueue_ready_operations ( int opr_id );
-void cache_data ( Opr* opr, const void* data );
+void cache_data ( Opr* opr, void* data );

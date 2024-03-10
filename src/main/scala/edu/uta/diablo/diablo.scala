@@ -35,6 +35,7 @@ package object diablo extends diablo.ArrayFunctions {
   var mapPreserve = true         // use a map that preserves partitioning when applicable
   var asynchronous = false
   var cxx_generation = false
+  val add_index_bounds = false
 
   val rddClass = "org.apache.spark.rdd.RDD"
   val datasetClass = "edu.uta.diablo.DiabloDataFrame"

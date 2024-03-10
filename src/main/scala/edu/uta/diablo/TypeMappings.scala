@@ -100,10 +100,11 @@ object TypeMappings {
     val deq = 1.to(dn).map(i => s"ii$i == i$i").mkString(", ")
     val dkey = (2 to dn).foldLeft("i1") { case (r,i) => s"($r*d#$i+i$i)" }
     val skey = (2 to sn).foldLeft("j1") { case (r,i) => s"($r*s#$i+j$i)" }
-    val conds = ((if (dn==1) List("i1 >= 0, i1 < d")
+    val conds = if (!add_index_bounds) "true"
+                else (((if (dn==1) List("i1 >= 0, i1 < d")
                   else 1.to(dn).map( i => s"i$i >= 0, i$i < d#$i" ))
                  ++(if (sn==1) List("j1 >= 0, j1 < s")
-                    else 1.to(sn).map( i => s"j$i >= 0, j$i < s#$i" ))).mkString(", ")
+                    else 1.to(sn).map( i => s"j$i >= 0, j$i < s#$i" ))).mkString(", "))
     val svarset = if (sn==1) "let j1 = sparse[col]%s"
                   else (1 to sn).map{ k => s"let j$k = "+("sparse[col]"::(sn.to(k+1,-1))
                             .map(i => s"s#$i").toList).mkString("/")+s"%s#$k" }.mkString(", ")
@@ -261,10 +262,11 @@ object TypeMappings {
     val div_vars = rep(k => s"let ii$k = i$k / $N")
     val mod_vars = rep(k => s"i$k % $N")
     val idx = rep(k => s"ii$k * $N + i$k")
-    val ranges = ((if (dn==1) List(s"ii1 * $N + i1 >= 0, ii1 * $N + i1 < d")
+    val ranges = if (!add_index_bounds) "true"
+                 else (((if (dn==1) List(s"ii1 * $N + i1 >= 0, ii1 * $N + i1 < d")
                    else 1.to(dn).map(k => s"ii$k * $N + i$k >= 0, ii$k * $N + i$k < d#$k"))
                   ++(if (sn==1) List(s"ii${dn+1} * $N + i${dn+1} >= 0, ii${dn+1} * $N + i${dn+1} < s")
-                     else 1.to(sn).map(k => s"ii${k+dn} * $N + i${k+dn} >= 0, ii${k+dn} * $N + i${k+dn} < s#$k"))).mkString(", ")
+                     else 1.to(sn).map(k => s"ii${k+dn} * $N + i${k+dn} >= 0, ii${k+dn} * $N + i${k+dn} < s#$k"))).mkString(", "))
     if (boolean_values) {
       s"""
        typemap ${full}${cm}_block_bool_tensor_${dn}_$sn $dims: array${dn+sn}[Boolean] {

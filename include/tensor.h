@@ -34,8 +34,6 @@ extern int block_created;
 extern int max_blocks;
 extern bool trace_delete;
 
-void abort ();
-
 
 /* Array blocks are C arrays with length */
 template< typename T >
@@ -60,8 +58,6 @@ public:
     block_count++;
     block_created++;
     max_blocks = max(max_blocks,block_count);
-    if (trace_delete)
-      printf("create %p %d\n",this,(int)mallinfo2().arena);
   }
 
   Vec ( vector<T>* x ): length(x->size()), data(new T[length]) {
@@ -71,8 +67,6 @@ public:
     block_created++;
     max_blocks = max(max_blocks,block_count);
     delete x;
-    if (trace_delete)
-      printf("create %p %d\n",this,(int)mallinfo2().arena);
   }
 
   inline size_t size () const { return length; }
@@ -97,8 +91,6 @@ public:
     block_count--;
     max_blocks = max(max_blocks,block_count);
     delete[] data;
-    if (trace_delete)
-      printf("delete %p %d\n",this,(int)mallinfo2().arena);
     data = nullptr;
   }
 };

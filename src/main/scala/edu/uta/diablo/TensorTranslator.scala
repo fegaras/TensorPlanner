@@ -178,7 +178,8 @@ object TensorTranslator {
                                 case _ => Nil
                               }
                    // the traversal indices are i1, i2, ... with i1<d1, i2<d2, ...
-                   val conds = all_dims.zipWithIndex.flatMap {
+                   val conds = if (!add_index_bounds) Nil
+                               else all_dims.zipWithIndex.flatMap {
                                   case (d,i) => List(Predicate(MethodCall(Var("i"+(i+1)),">=",List(IntConst(0)))),
                                                      Predicate(MethodCall(Var("i"+(i+1)),"<",List(d))))
                                }

@@ -33,3 +33,5 @@ bool wait_all ( bool b );
 void kill_receiver ();
 
 void run_receiver ();
+
+int mpi_abort ();
