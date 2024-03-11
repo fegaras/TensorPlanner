@@ -52,6 +52,8 @@ int block_created = 0;
 int max_blocks = 0;
 
 
+void delete_block ( void* &data, vector<int>* encoded_type );
+
 // used for comparing task priorities in the run-time queue
 class task_cmp {
   int priority ( const int opr_id ) const {
@@ -212,7 +214,14 @@ int loadOpr ( void* block, void* coord, vector<int>* encoded_type ) {
   o->type = loadOPR;
   o->opr.load_opr = new LoadOpr(loadBlocks.size());
   int loc = store_opr(o,empty_vector,coord,0,encoded_type);
-  loadBlocks.push_back(block);
+  // the loaded data is used in one executor only; the others delete the block
+  o->node = loadBlocks.size() % num_of_executors;
+  if (o->node == executor_rank)
+    loadBlocks.push_back(block);
+  else {
+    delete_block(block,encoded_type);
+    loadBlocks.push_back(nullptr);
+  }
   return loc;
 }
 
@@ -426,8 +435,8 @@ void initialize_opr ( Opr* x ) {
   x->status = notReady;
   x->cached = nullptr;
   // a Load opr is cached in the coordinator too
-  if (isCoordinator() && x->type == loadOPR)
-    cache_data(x,loadBlocks[x->opr.load_opr->block]);
+//  if (isCoordinator() && x->type == loadOPR)
+//    cache_data(x,loadBlocks[x->opr.load_opr->block]);
   // initial count is the number of local consumers
   x->count = 0;
   x->message_count = 0;
@@ -607,6 +616,7 @@ try {
     case loadOPR:
       opr->status = computed;
       res = loadBlocks[opr->opr.load_opr->block];
+      assert(res != nullptr);
       cache_data(opr,res);
       break;
     case applyOPR: {

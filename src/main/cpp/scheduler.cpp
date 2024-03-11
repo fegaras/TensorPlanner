@@ -164,7 +164,7 @@ void schedule_plan ( void* plan ) {
   for ( int i = 0; i < in_degree.size(); i++ )
     if (in_degree[i] == 0) {
       Opr* opr = operations[i];
-      opr->node = (int)get_coord_hash(op_coords[i]) % num_of_executors;
+      //opr->node = (int)get_coord_hash(op_coords[i]) % num_of_executors;
       task_queue.push(i);
     }
 
