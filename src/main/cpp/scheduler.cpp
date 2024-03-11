@@ -16,6 +16,7 @@
 
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <tuple>
 #include <queue>
 #include <cmath>
@@ -160,20 +161,39 @@ void schedule_plan ( void* plan ) {
     for ( int c: *opr->consumers )
       in_degree[c]++;
   }
-  queue<int> task_queue;
-  for ( int i = 0; i < in_degree.size(); i++ )
-    if (in_degree[i] == 0) {
-      Opr* opr = operations[i];
-      //opr->node = (int)get_coord_hash(op_coords[i]) % num_of_executors;
-      task_queue.push(i);
+  auto p = (tuple<void*,void*,vector<tuple<void*,int>*>*>*)plan;
+  vector<int> exit_points;
+  for ( auto x: *get<2>(*p) )
+    exit_points.push_back(get<1>(*x));
+  unordered_set<int> entry_points, visited;
+  queue<int> opr_queue;
+  for(int ep: exit_points) {
+    opr_queue.push(ep);
+    visited.insert(ep);
+  }
+  while(!opr_queue.empty()) {
+    int cur = opr_queue.front();
+    opr_queue.pop();
+    Opr* opr = operations[cur];
+    if(opr->type == loadOPR) {
+      entry_points.insert(cur);
     }
+    else {
+      for(int ch: *opr->children) {
+        if(visited.count(ch) == 0) {
+          opr_queue.push(ch);
+          visited.insert(ch);
+        }
+      }
+    }
+  }
+  queue<int> task_queue;
+  for ( int i : entry_points ) {
+    task_queue.push(i);
+  }
 
   long row_cnt = sqrt(num_of_executors);
-  long col_cnt = ceil((double)num_of_executors/row_cnt);
-  while(num_of_executors % row_cnt != 0) {
-    row_cnt--;
-  }
-  col_cnt = num_of_executors/row_cnt;
+  long col_cnt = num_of_executors/row_cnt;
 
   while ( !task_queue.empty() ) {
     int c = task_queue.front();
