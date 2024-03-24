@@ -16,6 +16,7 @@
 
 #include "tensor.h"
 #include "comm.h"
+#include <stdint.h>
 
 extern vector<void*(*)(void*)> functions;
 
@@ -42,22 +43,22 @@ Vec<int>* merge_tensors ( Vec<int>* x, Vec<int>* y,
                           bool(*op)(tuple<bool,bool>*), bool zero );
 
 int loadOpr ( void* block, void* coord, vector<int>* encoded_type );
-int loadOpr ( void* block, long coord, vector<int>* encoded_type ) {
+int loadOpr ( void* block, uintptr_t coord, vector<int>* encoded_type ) {
   return loadOpr(block,(void*)coord,encoded_type);
 }
 
 int pairOpr ( int x, int y, void* coord, vector<int>* encoded_type );
-int pairOpr ( int x, int y, long coord, vector<int>* encoded_type ) {
+int pairOpr ( int x, int y, uintptr_t coord, vector<int>* encoded_type ) {
   return pairOpr(x,y,(void*)coord,encoded_type);
 }
 
 int applyOpr ( int x, int fnc, void* args, void* coord, int cost, vector<int>* encoded_type );
-int applyOpr ( int x, int fnc, void* args, long coord, int cost, vector<int>* encoded_type ) {
+int applyOpr ( int x, int fnc, void* args, uintptr_t coord, int cost, vector<int>* encoded_type ) {
   return applyOpr(x,fnc,args,(void*)coord,cost,encoded_type);
 }
 
-int reduceOpr ( const vector<long>* s, bool valuep, int op, void* coord, int cost, vector<int>* encoded_type );
-int reduceOpr ( const vector<long>* s, bool valuep, int op, long coord, int cost, vector<int>* encoded_type ) {
+int reduceOpr ( const vector<uintptr_t>* s, bool valuep, int op, void* coord, int cost, vector<int>* encoded_type );
+int reduceOpr ( const vector<uintptr_t>* s, bool valuep, int op, uintptr_t coord, int cost, vector<int>* encoded_type ) {
   return reduceOpr(s,valuep,op,(void*)coord,cost,encoded_type);
 }
 

@@ -12,11 +12,13 @@ module purge
 module load slurm cpu/0.15.4 gcc/7.5.0 openjdk
 
 SW=/expanse/lustre/projects/uot166/fegaras
+# for the mpi.jar only
 export MPI_HOME=$SW/openmpi
 $SW/sbt/bin/sbt package
 
 module purge
-module load slurm cpu/0.17.3b  gcc/10.2.0/npcyll4 openmpi/4.1.3
+module load slurm cpu/0.17.3b  gcc/10.2.0/npcyll4
+module load mvapich2/2.3.7/iyjtn3x
 
 mpic++ -O3 -fopenmp -DNDEBUG -fpermissive -Iinclude -c src/main/cpp/*.cpp
 ar rcs lib/libdiablo.a *.o

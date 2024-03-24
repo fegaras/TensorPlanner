@@ -1,0 +1,18 @@
+#/bin/bash
+exec() { echo "\$ $@" ; "$@" ; }
+
+# number of executors per node
+if [ -z $executors ]; then
+   executors=2
+fi
+
+export MV2_SMP_USE_CMA=0
+export MV2_USE_RDMA_CM=0
+export MV2_HOMOGENEOUS_CLUSTER=1
+export MV2_ENABLE_AFFINITY=0
+export MV2_USE_ALIGNED_ALLOC=1
+export MV2_CPU_BINDING_LEVEL=socket
+
+export diablo_collect=false
+
+exec mpirun -N $executors $*

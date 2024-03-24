@@ -21,7 +21,7 @@ libraryDependencies ++= {
   }
 }
 
-val mpijar = sys.env.get("MPI_HOME").getOrElse("../..")+"/lib/mpi.jar"
+val mpijar = sys.env.get("DIABLO_HOME").getOrElse(sys.env.get("MPI_HOME").getOrElse("../.."))+"/lib/mpi.jar"
 
 libraryDependencies += "mpi" % "MPI" % "1.0" from ("file://"+mpijar)
 

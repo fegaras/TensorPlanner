@@ -7,8 +7,10 @@ mem=`awk '/MemFree/ { printf "%.0f", $2/1024/1024 }' /proc/meminfo`
 # max available memory in GB per executor
 mem=$[$mem/$executors]
 
+MPI_JAR=${HOME}/openmpi/lib/mpi.jar
+
 # run on 2 nodes: localhost and milos (disable firewall, enable passwordless ssh to localhost and to each other, must have the same TensorPlanner code)
-#mpirun -N $executors --bind-to socket --host localhost:-1,milos:-1 --use-hwthread-cpus -quiet scala -classpath classes:${DIABLO_HOME}/lib/diablo.jar:${MPI_HOME}/lib/mpi.jar -J-Xmx${mem}g -J-Xms2g -J-Xss100m $*
+#mpirun -N $executors --bind-to socket --host localhost:-1,milos:-1 scala -classpath classes:${DIABLO_HOME}/lib/diablo.jar:${MPI_JAR} -J-Xmx${mem}g -J-Xms2g -J-Xss100m $*
 
 # run on localhost
-mpirun -N $executors --bind-to socket --use-hwthread-cpus -quiet scala -classpath classes:${DIABLO_HOME}/lib/diablo.jar:${MPI_HOME}/lib/mpi.jar -J-Xmx${mem}g -J-Xms1g -J-Xss100m $*
+mpirun -N $executors --bind-to socket scala -classpath classes:${DIABLO_HOME}/lib/diablo.jar:${MPI_JAR} -J-Xmx${mem}g -J-Xms1g -J-Xss100m $*

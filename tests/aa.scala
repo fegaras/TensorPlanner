@@ -1,4 +1,5 @@
 import edu.uta.diablo._
+import Math._
 
 object Test {
   def main ( args: Array[String] ) {
@@ -31,6 +32,8 @@ object Test {
     val N = 23
     val M = 15
 
+var iter = 0
+
     val graph = textFile("graph.txt").map{ case (_,line) => val a = line.split(","); (a(0).toInt,a(0).toInt) }
 
     val plan = q("""
@@ -40,10 +43,17 @@ object Test {
       var Cz = tensor*(N,M)[ ((i,j),4.5) | i <-0..(N-1), j<-0..(M-1) ];
       var V = tensor*(N)[ (i,2.3) | i <-0..(N-1) ];
 
+//var iter = 0;
+while (iter < 3) {
+Az = [ ((i,j),a+1) | ((i,j),a) <- Az, a == iter ];
+iter = iter+1;
+}
+Az;
+
       //Az = Az+Bz-3.5*Cz;
       //Az
 
-      //tensor*(N)[ (i,+/v) | (i,v) <- V, ((ii,j),a) <- Az, ii==i, let v = a+v, group by i ];
+      //tensor*(N)[ (i,+/v) | (i,v) <- V, ((ii,j),a) <- Az, ii==i, let v = a*v, group by i ];
 
       //tensor*(N,M)[ ((i,j),v+a) | (i,v) <- V, ((ii,j),a) <- Az, ii==i ];
 
@@ -72,11 +82,11 @@ object Test {
       // error: tensor*(N)[ (i,+/v) | (i,v) <- V, ((ii,j),a) <- Az, ii==i, let v = a+v, group by i ];
 
       // error: tensor*(N,M)[ ((i-12,j-14),a) | ((i,j),a) <- Az, i>=12, j>=14 ];
-
+/*
       var n = +/[ a | ((i,j),a) <- Az ];
       println(n);
       Az
-
+*/
 /*
         for i = 0, N-1 do
             for j = 0, M-1 do

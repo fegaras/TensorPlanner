@@ -17,16 +17,18 @@
 #include "tensor.h"
 #include <sstream>
 #include <cstring>
+#include <stdint.h>
 
+void info ( const char *fmt, ... );
 
-void put_int ( ostringstream &out, const int i ) {
-  out.write((const char*)&i,sizeof(int));
+void put_int ( ostringstream &out, const uintptr_t i ) {
+  out.write((const char*)&i,sizeof(uintptr_t));
 }
 
 int serialize ( ostringstream &out, const void* data, vector<int>* encoded_type, int loc ) {
   switch ((*encoded_type)[loc]) {
   case 0: case 1: // index
-    put_int(out,(long)data);
+    put_int(out,(uintptr_t)data);
     return loc+1;
   case 10: { // tuple
     switch ((*encoded_type)[loc+1]) {
@@ -43,6 +45,8 @@ int serialize ( ostringstream &out, const void* data, vector<int>* encoded_type,
         int l3 = serialize(out,get<1>(*x),encoded_type,l2);
         return serialize(out,get<2>(*x),encoded_type,l3);
       }
+    default:
+      info("Unknown tuple: %d",(*encoded_type)[loc+1]);
     }
   }
   case 11:  // Vec
@@ -65,6 +69,8 @@ int serialize ( ostringstream &out, const void* data, vector<int>* encoded_type,
       out.write((const char*)x->buffer(),sizeof(double)*x->size());
       return loc+2;
     }
+    default:
+      info("Unknown Vec: %d",(*encoded_type)[loc+1]);
     }
   default:
     return loc+1;
@@ -78,16 +84,16 @@ int serialize ( void* data, char* buffer, vector<int>* encoded_type ) {
   return out.tellp();
 }
 
-int get_int ( istringstream &in ) {
-  int n;
-  in.read((char*)&n,sizeof(int));
+uintptr_t get_int ( istringstream &in ) {
+  uintptr_t n;
+  in.read((char*)&n,sizeof(uintptr_t));
   return n;
 }
 
 int deserialize ( istringstream &in, void* &data, vector<int>* encoded_type, int loc ) {
   switch ((*encoded_type)[loc]) {
   case 0: case 1: // index
-    data = (void*)(long)get_int(in);
+    data = (void*)get_int(in);
     return loc+1;
   case 10: { // tuple
     switch ((*encoded_type)[loc+1]) {
@@ -108,6 +114,8 @@ int deserialize ( istringstream &in, void* &data, vector<int>* encoded_type, int
         data = new tuple<void*,void*,void*>(x1,x2,x3);
         return l4;
       }
+      default:
+        info("Unknown tuple: %d",(*encoded_type)[loc+1]);
     }
   }
   case 11:  // Vec
@@ -133,6 +141,8 @@ int deserialize ( istringstream &in, void* &data, vector<int>* encoded_type, int
       data = x;
       return loc+2;
     }
+    default:
+      info("Unknown Vec: %d",(*encoded_type)[loc+1]);
     }
   default:
     return loc+1;

@@ -25,7 +25,7 @@ int num_of_executors = 1;
 int executor_rank = 0;
 int coordinator = 0;
 int max_buffer_size = 50000000;
-auto comm = MPI_COMM_WORLD;
+const auto comm = MPI_COMM_WORLD;
 MPI_Request receive_request = MPI_REQUEST_NULL;
 extern bool delete_arrays;
 extern vector<Opr*> operations;
@@ -46,17 +46,17 @@ void handle_received_message ( int tag, int opr_id, void* data, int len ) {
   Opr* opr = operations[opr_id];
   static tuple<void*,void*>* op_arg = new tuple<void*,void*>(nullptr,nullptr);
   if (tag == 0) {
-    info("    received %d bytes from %d (opr %d)",len+4,opr->node,opr_id);
+    info("    received %d bytes from %d (opr %d)",len,opr->node,opr_id);
     cache_data(opr,data);
     opr->status = completed;
     enqueue_ready_operations(opr_id);
   } else if (tag == 2) {   // cache data
-    info("    received %d bytes from %d (opr %d)",len+4,opr->node,opr_id);
+    info("    received %d bytes from %d (opr %d)",len,opr->node,opr_id);
     opr->cached = data;
     opr->status = completed;
   } else if (tag == 1 && opr->type == reduceOPR) {
     info("    received partial reduce result of %d bytes (opr %d)",
-         len+4,opr_id);
+         len,opr_id);
     auto op = (void*(*)(tuple<void*,void*>*))functions[opr->opr.reduce_opr->op];
     if (opr->cached == nullptr) {
       // first reduction input
@@ -98,7 +98,6 @@ void handle_received_message ( int tag, int opr_id, void* data, int len ) {
 
 // check if there is a request to send data (array blocks); if there is, get the data and cache it
 int check_communication () {
-  // needs to be static
   static char* buffer = new char[max_buffer_size];
   if (receive_request == MPI_REQUEST_NULL) {
     // prepare for the first receive (non-blocking)
@@ -110,23 +109,15 @@ int check_communication () {
   if (mtag == 1) {
     // deserialize and process the incoming data
     int opr_id = *(const int*)buffer;
-    try {
-      int tag = *(const int*)(buffer+sizeof(int));
-      int len = *(const int*)(buffer+2*sizeof(int));
-      Opr* opr = operations[opr_id];
-      void* data;
-      char* b = new char[len];
-      memcpy(b,buffer+3*sizeof(int),len);
-      deserialize(data,b,len,opr->encoded_type);
-      delete b;
-      // prepare for the next receive (non-blocking)
-      MPI_Irecv(buffer,max_buffer_size,MPI_BYTE,MPI_ANY_SOURCE,
-                MPI_ANY_TAG,comm,&receive_request);
-      handle_received_message(tag,opr_id,data,len+2*sizeof(int));
-    } catch ( const exception &ex ) {
-      info("*** fatal error: receiving the data for operation %d",opr_id);
-      abort();
-    }
+    int tag = *(const int*)(buffer+sizeof(int));
+    int len = *(const int*)(buffer+2*sizeof(int));
+    Opr* opr = operations[opr_id];
+    void* data;
+    deserialize(data,buffer+3*sizeof(int),len,opr->encoded_type);
+    // prepare for the next receive (non-blocking)
+    MPI_Irecv(buffer,max_buffer_size,MPI_BYTE,MPI_ANY_SOURCE,
+              MPI_ANY_TAG,comm,&receive_request);
+    handle_received_message(tag,opr_id,data,len+3*sizeof(int));
     return 1;
   }
   return 0;
@@ -144,8 +135,8 @@ void run_receiver () {
   if (receive_request != MPI_REQUEST_NULL)
     kill_receiver();
   while (!stop_receiver) {
-    check_communication();
-    this_thread::sleep_for(chrono::milliseconds(1));
+    if (check_communication() == 0)
+      this_thread::sleep_for(chrono::milliseconds(1));
   }
 }
 
@@ -157,9 +148,9 @@ mutex send_data_mutex;
 
 void send_data ( int rank, void* data, int opr_id, int tag ) {
   // needs to be static and locked
-  char* buffer = new char[max_buffer_size];
+  static char* buffer = new char[max_buffer_size];
   if (data == nullptr) {
-    info("null data sent for %d to %d",opr_id,rank);
+    info("null data sent for opr %d to %d",opr_id,rank);
     abort();
   }
   lock_guard<mutex> lock(send_data_mutex);
@@ -172,19 +163,18 @@ void send_data ( int rank, void* data, int opr_id, int tag ) {
   info("    sending %d bytes to %d (opr %d)",
        len+3*sizeof(int),rank,opr_id);
   MPI_Send(buffer,len+3*sizeof(int),MPI_BYTE,rank,tag,comm);
-  delete buffer;
 }
 
 bool wait_all ( bool b ) {
   if (inMemory)
     return b;
-  unsigned char in[1] = { (unsigned char)( b ? 0 : 1 ) };
-  unsigned char ret[1];
-  MPI_Allreduce(in,ret,1,MPI_BYTE,MPI_LOR,comm);
+  int in[1] = { ( b ? 0 : 1 ) };
+  int ret[1];
+  MPI_Allreduce(in,ret,1,MPI_INT,MPI_LOR,comm);
   return ret[0] == 0;
 }
 
-void barrier () {
+void mpi_barrier () {
   MPI_Barrier(comm);
 }
 
@@ -199,15 +189,26 @@ void mpi_startup ( int argc, char* argv[], int block_dim_size ) {
   max_buffer_size = max(100000LU,5*sizeof(double)*block_dim_size*block_dim_size);
   if (inMemory)
     return;
-  int ignore;
-  MPI_Init_thread(&argc,&argv,MPI_THREAD_FUNNELED,&ignore);
+  // Multiple threads may call MPI, with no restrictions
+  int provided;
+  MPI_Init_thread(&argc,&argv,MPI_THREAD_MULTIPLE,&provided);
+  if (provided != MPI_THREAD_MULTIPLE) {
+    printf("Required MPI_THREAD_MULTIPLE to run MPI+OpenMP");
+    MPI_Finalize();
+    exit(-1);
+  }
   MPI_Comm_set_errhandler(comm,MPI_ERRORS_RETURN);
   MPI_Comm_rank(comm,&executor_rank);
   MPI_Comm_size(comm,&num_of_executors);
   coordinator = 0;
   char machine_name[256];
   gethostname(machine_name,255);
-  int local_rank = atoi(getenv("OMPI_COMM_WORLD_LOCAL_RANK"));
+  int local_rank = 0;
+  char* lc = getenv("OMPI_COMM_WORLD_LOCAL_RANK");
+  if (lc == nullptr)
+    lc = getenv("MV2_COMM_WORLD_LOCAL_RANK");
+  if (lc != nullptr)
+    local_rank = atoi(lc);
   int ts;
   #pragma omp parallel
   { ts = omp_get_num_threads(); }

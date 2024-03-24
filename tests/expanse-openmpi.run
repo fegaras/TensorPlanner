@@ -3,7 +3,7 @@
 #SBATCH --job-name="diablo"
 #SBATCH --output="run.log"
 #SBATCH --partition=compute
-#SBATCH --nodes=1
+#SBATCH --nodes=2
 #SBATCH --ntasks-per-node=128
 #SBATCH --mem=249208M
 #SBATCH --export=ALL
@@ -39,5 +39,7 @@ done
 
 ulimit -l unlimited
 
+export diablo_collect=false
+
 # for each expanse node: 2 sockets, 1 executor per socket, 64 threads per executor
-mpirun -N 2 --bind-to socket --mca btl_openib_allow_ib true a.out 10000 1
+mpirun -N 2 --bind-to socket --mca btl_openib_allow_ib true a.out 20000 10

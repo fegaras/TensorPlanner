@@ -26,7 +26,7 @@ void mpi_startup ( int argc, char* argv[], int block_dim_size );
 
 void mpi_finalize ();
 
-void barrier ();
+void mpi_barrier ();
 
 bool wait_all ( bool b );
 

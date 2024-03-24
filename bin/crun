@@ -6,4 +6,6 @@ if [ -z $executors ]; then
    executors=2
 fi
 
+export diablo_collect=false
+
 exec mpirun -N $executors --bind-to socket --use-hwthread-cpus $*

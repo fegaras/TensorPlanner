@@ -23,7 +23,7 @@
 #include <memory>
 #include <thread>
 #include <mutex>
-#include <malloc.h>
+#include <stdint.h>
 #include "mpi.h"
 #include "omp.h"
 
@@ -156,9 +156,9 @@ vector<S>* flatMap ( vector<S>*(*f)(T), vector<T>* x ) {
 template< typename K, typename T, typename S >
 vector<tuple<K*,tuple<T,S>*>*>* join_nl ( vector<tuple<K*,T>*>* x,
                                           vector<tuple<K*,S>*>* y ) {
-  vector<tuple<K*,tuple<T,S>*>*>* a = new vector<tuple<K*,tuple<T,S>*>*>();
-  for ( tuple<K*,T>* ex: *x )
-    for ( tuple<K*,S>* ey: *y )
+  auto a = new vector<tuple<K*,tuple<T,S>*>*>();
+  for ( auto ex: *x )
+    for ( auto ey: *y )
       if (*get<0>(*ex) == *get<0>(*ey))
         a->push_back(new tuple<K*,tuple<T,S>*>(get<0>(*ex),
                            new tuple<T,S>(get<1>(*ex),get<1>(*ey))));
@@ -166,22 +166,22 @@ vector<tuple<K*,tuple<T,S>*>*>* join_nl ( vector<tuple<K*,T>*>* x,
 }
 
 template< typename T, typename S >
-vector<tuple<long,tuple<T,S>*>*>* join_nl ( vector<tuple<long,T>*>* x,
-                                            vector<tuple<long,S>*>* y ) {
-  vector<tuple<long,tuple<T,S>*>*>* a = new vector<tuple<long,tuple<T,S>*>*>();
-  for ( tuple<long,T>* ex: *x )
-    for ( tuple<long,S>* ey: *y )
+vector<tuple<uintptr_t,tuple<T,S>*>*>* join_nl ( vector<tuple<uintptr_t,T>*>* x,
+                                                 vector<tuple<uintptr_t,S>*>* y ) {
+  auto a = new vector<tuple<uintptr_t,tuple<T,S>*>*>();
+  for ( auto ex: *x )
+    for ( auto ey: *y )
       if (get<0>(*ex) == get<0>(*ey))
-        a->push_back(new tuple<long,tuple<T,S>*>(get<0>(*ex),
+        a->push_back(new tuple<uintptr_t,tuple<T,S>*>(get<0>(*ex),
                            new tuple<T,S>(get<1>(*ex),get<1>(*ey))));
   return a;
 }
 
 template< typename K, typename T >
 vector<tuple<K*,T>*>* reduceByKey ( vector<tuple<K*,T>*>* x, T(*op)(tuple<T,T>*) ) {
-  vector<tuple<K*,T>*>* a = new vector<tuple<K*,T>*>();
+  auto a = new vector<tuple<K*,T>*>();
   map<K,tuple<K*,T>*> h;
-  for ( tuple<K*,T>* e: *x ) {
+  for ( auto e: *x ) {
     auto p = h.find(*get<0>(*e));
     if (p == h.end())
       h.emplace(*get<0>(*e),e);
@@ -193,25 +193,25 @@ vector<tuple<K*,T>*>* reduceByKey ( vector<tuple<K*,T>*>* x, T(*op)(tuple<T,T>*)
 }
 
 template< typename T >
-vector<tuple<long,T>*>* reduceByKey ( vector<tuple<long,T>*>* x, T(*op)(tuple<T,T>*) ) {
-  vector<tuple<long,T>*>* a = new vector<tuple<long,T>*>();
-  map<long,T> h;
-  for ( tuple<long,T>* e: *x ) {
+vector<tuple<uintptr_t,T>*>* reduceByKey ( vector<tuple<uintptr_t,T>*>* x, T(*op)(tuple<T,T>*) ) {
+  auto a = new vector<tuple<uintptr_t,T>*>();
+  map<uintptr_t,T> h;
+  for ( auto e: *x ) {
     auto p = h.find(get<0>(*e));
     if (p == h.end())
       h.emplace(get<0>(*e),get<1>(*e));
     else p->second = op(new tuple<T,T>(get<1>(*e),p->second));
   }
   for ( auto e: h )
-    a->push_back(new tuple<long,T>(e.first,e.second));
+    a->push_back(new tuple<uintptr_t,T>(e.first,e.second));
   return a;
 }
 
 template< typename K, typename T >
 vector<tuple<K*,vector<T>*>*>* groupByKey ( vector<tuple<K*,T>*>* x ) {
-  vector<tuple<K*,vector<T>*>*>* a = new vector<tuple<K*,vector<T>*>*>();
+  auto a = new vector<tuple<K*,vector<T>*>*>();
   map<K,tuple<K*,vector<T>*>*> h;
-  for ( tuple<K*,T>* e: *x ) {
+  for ( auto e: *x ) {
     auto p = h.find(*get<0>(*e));
     if (p == h.end())
       h.emplace(*get<0>(*e),new tuple<K*,vector<T>*>(get<0>(*e),elem(get<1>(*e))));
@@ -223,33 +223,33 @@ vector<tuple<K*,vector<T>*>*>* groupByKey ( vector<tuple<K*,T>*>* x ) {
 }
 
 template< typename T >
-vector<tuple<long,vector<T>*>*>* groupByKey ( vector<tuple<long,T>*>* x ) {
-  vector<tuple<long,vector<T>*>*>* a = new vector<tuple<long,vector<T>*>*>();
-  map<long,vector<T>*> h;
-  for ( tuple<long,T>* e: *x ) {
+vector<tuple<uintptr_t,vector<T>*>*>* groupByKey ( vector<tuple<uintptr_t,T>*>* x ) {
+  auto a = new vector<tuple<uintptr_t,vector<T>*>*>();
+  map<uintptr_t,vector<T>*> h;
+  for ( auto e: *x ) {
     auto p = h.find(get<0>(*e));
     if (p == h.end())
       h.emplace(get<0>(*e),elem(get<1>(*e)));
     else p->second->push_back(get<1>(*e));
   }
   for ( auto e: h )
-    a->push_back(new tuple<long,vector<T>*>(e.first,e.second));
+    a->push_back(new tuple<uintptr_t,vector<T>*>(e.first,e.second));
   return a;
 }
 
 template< typename K, typename T, typename S >
 vector<tuple<K*,tuple<vector<T>*,vector<S>*>*>*>* cogroup ( vector<tuple<K*,T>*>* x,
                                                             vector<tuple<K*,S>*>* y ) {
-  vector<tuple<K*,tuple<vector<T>*,vector<S>*>>>* a = new vector<tuple<K*,tuple<vector<T>*,vector<S>*>>>();
+  auto a = new vector<tuple<K*,tuple<vector<T>*,vector<S>*>>>();
   map<K,tuple<vector<T>*,vector<S>*>*> h;
-  for ( tuple<K*,T>* e: *x ) {
+  for ( auto e: *x ) {
     auto p = h.find(*get<0>(*e));
     if (p == h.end())
       h.emplace(*get<0>(*e),
                 new tuple<vector<T>*,vector<S>*>(elem(get<1>(*e)),new vector<S>()));
     else get<0>(p->second)->push_back(get<1>(*e));
   }
-  for ( tuple<K*,S>* e: *y ) {
+  for ( auto e: *y ) {
     auto p = h.find(*get<0>(*e));
     if (p == h.end())
       h.emplace(*get<0>(*e),
@@ -262,18 +262,18 @@ vector<tuple<K*,tuple<vector<T>*,vector<S>*>*>*>* cogroup ( vector<tuple<K*,T>*>
 }
 
 template< typename T, typename S >
-vector<tuple<long,tuple<vector<T>*,vector<S>*>*>*>* cogroup ( vector<tuple<long,T>*>* x,
-                                                              vector<tuple<long,S>*>* y ) {
-  vector<tuple<long,tuple<vector<T>*,vector<S>*>>>* a = new vector<tuple<long,tuple<vector<T>*,vector<S>*>>>();
-  map<long,tuple<vector<T>*,vector<S>>*> h;
-  for ( tuple<long,T>* e: *x ) {
+vector<tuple<uintptr_t,tuple<vector<T>*,vector<S>*>*>*>* cogroup ( vector<tuple<uintptr_t,T>*>* x,
+                                                                   vector<tuple<uintptr_t,S>*>* y ) {
+  auto a = new vector<tuple<uintptr_t,tuple<vector<T>*,vector<S>*>>>();
+  map<uintptr_t,tuple<vector<T>*,vector<S>>*> h;
+  for ( auto e: *x ) {
     auto p = h.find(get<0>(*e));
     if (p == h.end())
       h.emplace(get<0>(*e),
                 new tuple<vector<T>*,vector<S>*>(elem(get<1>(*e)),new vector<S>()));
     else get<0>(p->second)->push_back(get<1>(*e));
   }
-  for ( tuple<long,S>* e: *y ) {
+  for ( auto e: *y ) {
     auto p = h.find(get<0>(*e));
     if (p == h.end())
       h.emplace(get<0>(*e),
@@ -281,22 +281,22 @@ vector<tuple<long,tuple<vector<T>*,vector<S>*>*>*>* cogroup ( vector<tuple<long,
     else get<1>(p->second)->push_back(get<1>(*e));
   }
   for ( auto e: h )
-    a->push_back(new tuple<long,tuple<vector<T>*,vector<S>*>*>(e.first,e.second));
+    a->push_back(new tuple<uintptr_t,tuple<vector<T>*,vector<S>*>*>(e.first,e.second));
   return a;
 }
 
 template< typename K, typename T, typename S >
 vector<tuple<K*,tuple<T,S>*>*>* join ( vector<tuple<K*,T>*>* x,
                                        vector<tuple<K*,S>*>* y ) {
-  vector<tuple<K*,tuple<T,S>*>*>* a = new vector<tuple<K*,tuple<T,S>*>*>();
+  auto a = new vector<tuple<K*,tuple<T,S>*>*>();
   map<K,vector<T>*> h;
-  for ( tuple<K*,T>* ex: *x ) {
+  for ( auto ex: *x ) {
     auto p = h.find(*get<0>(*ex));
     if (p == h.end())
       h.emplace(*get<0>(*ex),elem(get<1>(*ex)));
     else p->second->push_back(get<1>(*ex));
   }
-  for ( tuple<K*,S>* ey: *y ) {
+  for ( auto ey: *y ) {
     auto p = h.find(*get<0>(*ey));
     if (p != h.end())
       for ( T ex: *p->second )
@@ -306,21 +306,21 @@ vector<tuple<K*,tuple<T,S>*>*>* join ( vector<tuple<K*,T>*>* x,
 }
 
 template< typename T, typename S >
-vector<tuple<long,tuple<T,S>*>*>* join ( vector<tuple<long,T>*>* x,
-                                         vector<tuple<long,S>*>* y ) {
-  vector<tuple<long,tuple<T,S>*>*>* a = new vector<tuple<long,tuple<T,S>*>*>();
-  map<long,vector<T>*> h;
-  for ( tuple<long,T>* ex: *x ) {
+vector<tuple<uintptr_t,tuple<T,S>*>*>* join ( vector<tuple<uintptr_t,T>*>* x,
+                                         vector<tuple<uintptr_t,S>*>* y ) {
+  auto a = new vector<tuple<uintptr_t,tuple<T,S>*>*>();
+  map<uintptr_t,vector<T>*> h;
+  for ( auto ex: *x ) {
     auto p = h.find(get<0>(*ex));
     if (p == h.end())
       h.emplace(get<0>(*ex),elem(get<1>(*ex)));
     else p->second->push_back(get<1>(*ex));
   }
-  for ( tuple<long,S>* ey: *y ) {
+  for ( auto ey: *y ) {
     auto p = h.find(get<0>(*ey));
     if (p != h.end())
       for ( T ex: *p->second )
-        a->push_back(new tuple<long,tuple<T,S>*>(get<0>(*ey),new tuple<T,S>(ex,get<1>(*ey))));
+        a->push_back(new tuple<uintptr_t,tuple<T,S>*>(get<0>(*ey),new tuple<T,S>(ex,get<1>(*ey))));
   }
   return a;
 }

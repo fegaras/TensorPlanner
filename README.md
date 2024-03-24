@@ -1,64 +1,52 @@
 # TensorPlanner
 
-### Installation using Open MPI
+### Installation
 
-DIABLO depends on Scala 2.12.15, open-mpi, Spark 3.2.1, JDK 11, and sbt 1.6.2.
+DIABLO depends on MPI, JDK 11, Spark 3.2.1, Scala 2.12.15, and sbt 1.6.2.
 
-Download and install open-mpi from [https://www.open-mpi.org/software/](https://www.open-mpi.org/software/).
-Set `$JAVA_HOME` to point to your Java instalation.
-Go to the Open MPI extracted directory and do:
+Download and install either
+MVAPICH2 from [https://mvapich.cse.ohio-state.edu/downloads/](https://mvapich.cse.ohio-state.edu/downloads/)
+or open-mpi from [https://www.open-mpi.org/software/](https://www.open-mpi.org/software/).
+
+Edit the file `setup.sh` to point to your installation directories and set it up
+for MVAPICH2 (for open-mpi, use openmpi instead of mvapich):
 ```bash
-./configure --enable-mpi-threads --enable-mpi-java --with-slurm --without-ucx --without-hcol --prefix="$HOME/openmpi"
-make all install
-```
-Edit the file `setup.sh` to point to your installation directories and run it using:
-```bash
-source setup.sh
+mvapich=y source setup.sh
 ```
 Compile TensorPlanner using:
 ```bash
 sbt package
+make
 ```
-Make sure you can ssh to localhost and any other computer used in MPI without password.
+Make sure you can ssh to localhost and to any other computer used in MPI without password.
 
 Go to `TensorPlaner/tests/` and do:
 ```bash
-build test.scala
-run Test
+diablo mult.diablo
+crun-mvapich ./a.out 4234 10
 ```
-To test using Spark:
+To test it on SDSC Expanse, build the system:
+```bash
+sbatch expanse-mvapich-build.run
+```
+Go to `tests`, edit `expanse-mvapich.run`, and do:
+```bash
+sbatch expanse-mvapich.run
+```
+
+### Old synchronous DIABLO using Spark
+
 ```bash
 build-diablo Multiply-diablo.scala
 run-diablo Multiply 1234 2345
 ```
-For SDSC Expanse, build the system:
+To test it on SDSC Expanse, build the system:
 ```bash
 sbatch expanse-build.run
 ```
 Go to `tests`, edit `expanse.run`, and do:
 ```bash
 sbatch expanse.run
-```
-
-### C++ Code Generation
-
-Build the system:
-```bash
-source setup.sh
-make
-```
-Go to `tests` and do:
-```bash
-diablo mult.diablo
-crun a.out 4234 10
-```
-For SDSC Expanse, build the system:
-```bash
-sbatch expanse-build.run
-```
-Go to `tests`, edit `expanse-cxx.run`, and do:
-```bash
-sbatch expanse-cxx.run
 ```
 
 ## Data Model

@@ -8,11 +8,15 @@ export SCALA_HOME=${HOME}/system/scala-2.12.15
 
 export SPARK_HOME=${HOME}/spark-3.2.1-bin-hadoop3.2
 
-# install open-mpi from https://www.open-mpi.org/software/
-export MPI_HOME=${HOME}/openmpi
+if [ -v mvapich ]; then
+    # install MVAPICH2 2.3.7 from https://mvapich.cse.ohio-state.edu/downloads/
+    export MPI_HOME=${HOME}/mvapich 
+else
+    # install open-mpi from https://www.open-mpi.org/software/
+    export MPI_HOME=${HOME}/openmpi
+fi
 
-
-JARS=.:${DIABLO_HOME}/lib/diablo.jar:${MPI_HOME}/lib/mpi.jar
+JARS=.:${DIABLO_HOME}/lib/diablo.jar:${DIABLO_HOME}/lib/mpi.jar
 for I in ${SPARK_HOME}/jars/*.jar; do
     JARS=${JARS}:$I
 done

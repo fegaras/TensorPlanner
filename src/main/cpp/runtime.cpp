@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <stdarg.h>
 #include <unistd.h>
+#include <stdint.h>
 #include "tensor.h"
 #include "opr.h"
 #include "comm.h"
@@ -41,9 +42,9 @@ bool enable_collect = true;
 vector<Opr*> operations;
 vector<void*(*)(void*)> functions;
 
-static map<size_t,int> task_table;
-static vector<void*> loadBlocks;
-static vector<int>* exit_points;
+map<size_t,int> task_table;
+vector<void*> loadBlocks;
+vector<int>* exit_points;
 extern int executor_rank;
 extern int num_of_executors;
 
@@ -71,11 +72,11 @@ public:
 };
 
 // run-time task queue
-static priority_queue<int,vector<int>,task_cmp> ready_queue;
+priority_queue<int,vector<int>,task_cmp> ready_queue;
 mutex ready_mutex;
 
 // tasks waiting to send data (dest_id,src_id,tag)
-static deque<tuple<int,int,int>*> send_queue;
+deque<tuple<int,int,int>*> send_queue;
 mutex send_mutex;
 
 mutex info_mutex;
@@ -125,7 +126,7 @@ int print_block ( ostringstream &out, const void* data,
                   vector<int>* encoded_type, int loc ) {
   switch ((*encoded_type)[loc]) {
   case 0: case 1: // index
-    out << (long)data;
+    out << (uintptr_t)data;
     return loc+1;
   case 10: { // tuple
     switch ((*encoded_type)[loc+1]) {
@@ -152,6 +153,8 @@ int print_block ( ostringstream &out, const void* data,
         out << ")";
         return l4;
       }
+      default:
+        info("Unknown tuple: %d",(*encoded_type)[loc+1]);
     }
   }
   case 11: { // data block
@@ -171,6 +174,8 @@ int print_block ( ostringstream &out, const void* data,
         out << "Vec<double>(" << x->size() << ")";
         return loc+2;
       }
+      default:
+        info("Unknown Vec: %d",(*encoded_type)[loc+1]);
     }
   }
   default:
@@ -239,15 +244,15 @@ int applyOpr ( int x, int fnc, void* args, void* coord, int cost, vector<int>* e
   return store_opr(o,new vector<int>({ x }),coord,cost,encoded_type);
 }
 
-int reduceOpr ( const vector<long>* s, bool valuep, int op,
+int reduceOpr ( const vector<uintptr_t>* s, bool valuep, int op,
                 void* coord, int cost, vector<int>* encoded_type ) {
   if (s->size() == 1)
     return (*s)[0];
   Opr* o = new Opr();
   o->type = reduceOPR;
   auto ss = new vector<int>();
-  for ( long x: *s )
-    ss->push_back(x);
+  for ( uintptr_t x: *s )
+    ss->push_back((int)x);
   o->opr.reduce_opr = new ReduceOpr(ss,valuep,op);
   return store_opr(o,ss,coord,cost,encoded_type);
 }
@@ -317,6 +322,8 @@ int delete_array_ ( void* &data, vector<int>* encoded_type, int loc ) {
         int l3 = delete_array_(get<1>(*x),encoded_type,l2);
         return delete_array_(get<2>(*x),encoded_type,l3);
       }
+      default:
+        info("Unknown tuple: %d",(*encoded_type)[loc+1]);
     }
   }
   case 11:  // data block
@@ -339,6 +346,8 @@ int delete_array_ ( void* &data, vector<int>* encoded_type, int loc ) {
       data = nullptr;
       return loc+2;
     }
+    default:
+      info("Unknown Vec: %d",(*encoded_type)[loc+1]);
     }
   default:
     return loc+1;
@@ -353,7 +362,6 @@ void delete_block ( void* &data, vector<int>* encoded_type ) {
     info("cannot delete block %d",data);
   }
 }
-
 
 // delete the cache of a task
 void delete_array ( int opr_id ) {
@@ -418,7 +426,7 @@ vector<int>* get_dependents ( Opr* opr ) {
   vector<int>* ds = new vector<int>();
   for ( int c: *opr->children ) {
     Opr* copr = operations[c];
-    if (block_constructor(copr) && copr->type != loadOPR)
+    if (block_constructor(copr))
       ds->push_back(c);
     else {  // c has 0 cost and is local
       copr->dependents = get_dependents(copr);
@@ -434,9 +442,6 @@ vector<int>* get_dependents ( Opr* opr ) {
 void initialize_opr ( Opr* x ) {
   x->status = notReady;
   x->cached = nullptr;
-  // a Load opr is cached in the coordinator too
-//  if (isCoordinator() && x->type == loadOPR)
-//    cache_data(x,loadBlocks[x->opr.load_opr->block]);
   // initial count is the number of local consumers
   x->count = 0;
   x->message_count = 0;
@@ -464,7 +469,7 @@ void schedule_plan ( void* plan );
 
 void schedule ( void* plan ) {
   auto time = MPI_Wtime();
-  auto p = (tuple<void*,void*,vector<tuple<void*,int>*>*>*)plan;
+  auto p = (tuple<void*,void*,vector<tuple<void*,uintptr_t>*>*>*)plan;
   schedule_plan(plan);
   for ( Opr* x: operations )
     x->dependents = nullptr;
@@ -499,7 +504,7 @@ void schedule ( void* plan ) {
     }
   }
   if (!inMemory)
-    barrier();
+    mpi_barrier();
 }
 
 void* inMemEval ( int id, int tabs );
@@ -566,42 +571,37 @@ void* inMemEval ( int id, int tabs ) {
 
  // in-memory evaluation using top-down recursive evaluation on a plan tree
 void* evalTopDown ( void* plan ) {
-  auto p = (tuple<void*,void*,vector<tuple<void*,int>*>*>*)plan;
+  auto p = (tuple<void*,void*,vector<tuple<void*,uintptr_t>*>*>*)plan;
   for ( Opr* x: operations )
     x->count = x->consumers->size();
   vector<tuple<void*,void*>*>* res = new vector<tuple<void*,void*>*>();
-  for ( tuple<void*,int>* d: *get<2>(*p) ) {
+  for ( auto d: *get<2>(*p) ) {
     auto v = (tuple<void*,void*>*)inMemEval(get<1>(*d),0);
     res->push_back(v);
   }
   return new tuple<void*,void*,void*>(get<0>(*p),get<1>(*p),res);
 }
 
-void* compute ( int lg_id );
-
 void* computePair ( int lg_id ) {
   Opr* lg = operations[lg_id];
-  if (hasCachedValue(lg)) {
-    assert(lg->cached != nullptr);
+  if (hasCachedValue(lg))
     return lg->cached;
-  }
   switch (lg->type) {
     case pairOPR: {
       int x = lg->opr.pair_opr->x;
       int y = lg->opr.pair_opr->y;
       void* gx = computePair(x);
       void* gy = computePair(y);
-      auto gty = (tuple<void*,void*>*)gy;
-      void* yy = (operations[y]->type == pairOPR) ? gy : get<1>(*gty);
       auto gtx = (tuple<void*,void*>*)gx;
       void* xx = (operations[x]->type == pairOPR) ? gx : get<1>(*gtx);
+      auto gty = (tuple<void*,void*>*)gy;
+      void* yy = (operations[y]->type == pairOPR) ? gy : get<1>(*gty);
       void* data = new tuple<void*,void*>(get<0>(*gtx),new tuple<void*,void*>(xx,yy));
       cache_data(lg,data);
       lg->status = completed;
       return data;
     }
     default:
-      assert(lg->cached != nullptr);
       return lg->cached;
   }
 }
@@ -809,7 +809,7 @@ bool in_send_queue ( int opr_id ) {
 void run_sender () {
   while (!stop_sender) {
     if (!send_queue.empty()) {
-     tuple<int,int,int>* x;
+      tuple<int,int,int>* x;
       {
         lock_guard<mutex> lock(send_mutex);
         x = send_queue.back();
@@ -819,9 +819,6 @@ void run_sender () {
       Opr* opr = operations[opr_id];
       send_data(get<0>(*x),opr->cached,opr_id,0);
       opr->message_count--;
-      if (trace_delete)
-        cout << "finished sent " << opr_id << " " << opr->message_count
-             << " " << sends_msgs_only(opr) << endl;
       if (opr->message_count == 0 && sends_msgs_only(opr)) {
         // when all sends from opr have been completed and opr is a sink (sends data to remote only)
         if (opr->cpu_cost > 0)
@@ -835,29 +832,39 @@ void run_sender () {
 
 void work () {
   bool exit = false;
-  int count = 0;
-  float t = MPI_Wtime();
+  double t = MPI_Wtime();
+  double st = t;
   while (!exit) {
-    count = (count+1)%100;
-    if (count == 0)
+    if (MPI_Wtime() - st > 2) {
       exit = exit_poll();
+      st = MPI_Wtime();
+      if (exit) break;
+    }
     if (!ready_queue.empty()) {
       int opr_id;
       { lock_guard<mutex> lock(ready_mutex);
         opr_id = ready_queue.top();
         ready_queue.pop();
       };
-      compute(opr_id);
+      try {
+        compute(opr_id);
+      } catch ( const exception &ex ) {
+        info("*** fatal error: %s",ex.what());
+        abort();
+      } catch (...) {
+        info("*** fatal error: unrecognized exception");
+        abort();
+      }
       enqueue_ready_operations(opr_id);
       t = MPI_Wtime();
-    } else if (MPI_Wtime()-t > 10.0) {
-      info("... starving");
-      vector<int> v;
+    } else if (MPI_Wtime()-t > 30) {
+      int n = 0;
       for ( int x: *exit_points )
         if (operations[x]->node == executor_rank
             && !hasCachedValue(operations[x]))
-          v.push_back(x);
-      info("... missing: %s",sprint(v).c_str());
+          n++;
+      info("... starving (remaining exit points: %d, ready queue: %d, send queue: %d)",
+           n,ready_queue.size(),send_queue.size());
       t = MPI_Wtime();
     }
   }
@@ -878,7 +885,7 @@ vector<int>* entry_points ( const vector<int>* es ) {
 
 void* eval ( void* plan ) {
   auto time = MPI_Wtime();
-  auto p = (tuple<void*,void*,vector<tuple<void*,int>*>*>*)plan;
+  auto p = (tuple<void*,void*,vector<tuple<void*,uintptr_t>*>*>*)plan;
   exit_points = new vector<int>();
   for ( auto x: *get<2>(*p) )
     exit_points->push_back(get<1>(*x));
@@ -889,11 +896,11 @@ void* eval ( void* plan ) {
     ready_queue.push(x);
   info("Queue on %d: %s",executor_rank,sprint(*entries).c_str());
   if (!inMemory) {
-    barrier();
+    mpi_barrier();
     thread rrp(run_receiver);
     thread rsp(run_sender);
     work();
-    barrier();
+    mpi_barrier();
     stop_receiver = true;
     stop_sender = true;
     kill_receiver();
@@ -901,7 +908,7 @@ void* eval ( void* plan ) {
     rsp.join();
   } else work();
   vector<tuple<void*,void*>*>* res = new vector<tuple<void*,void*>*>();
-  for ( tuple<void*,int>* d: *get<2>(*p) )
+  for ( tuple<void*,uintptr_t>* d: *get<2>(*p) )
     res->push_back(new tuple<void*,void*>(get<0>(*d),operations[get<1>(*d)]->cached));
   if (isCoordinator())
     printf("*** Evaluation time: %.3f secs\n",MPI_Wtime()-time);
@@ -942,8 +949,8 @@ void* evalOpr ( int opr_id ) {
 void* collect ( void* plan ) {
   if (!enable_collect)
     return nullptr;
-  auto p = (tuple<void*,void*,vector<tuple<void*,int>*>*>*)plan;
-  vector<tuple<void*,int>*>* es = get<2>(*p);
+  auto p = (tuple<void*,void*,vector<tuple<void*,uintptr_t>*>*>*)plan;
+  vector<tuple<void*,uintptr_t>*>* es = get<2>(*p);
   if (inMemory) {
     vector<void*>* blocks = new vector<void*>();
     for ( auto x: *es )
@@ -967,7 +974,7 @@ void* collect ( void* plan ) {
     stop_receiver = true;
     kill_receiver();
     rrp.join();
-    barrier();
+    mpi_barrier();
     return new tuple<void*,void*,void*>(get<0>(*p),get<1>(*p),blocks);
   } else {
     for ( auto x: *es ) {
@@ -975,7 +982,7 @@ void* collect ( void* plan ) {
       if (opr->node == executor_rank)
         send_data(getCoordinator(),opr->cached,get<1>(*x),2);
     }
-    barrier();
+    mpi_barrier();
     return new tuple<void*,void*,void*>(get<0>(*p),get<1>(*p),nullptr);
   }
 }
