@@ -1,8 +1,0 @@
-#/bin/bash
-
-../setup.sh
-
-# max available memory in GB
-mem=`awk '/MemFree/ { printf "%.0f", $2/1024/1024 }' /proc/meminfo`
-
-scala -classpath classes:${DIABLO_HOME}/lib/diablo.jar:${MPI_HOME}/lib/mpi.jar -J-Xmx${mem}g -J-Xms2g -J-Xss100m $*

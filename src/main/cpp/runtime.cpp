@@ -38,6 +38,10 @@ const bool enable_partial_reduce = true;
 // evaluate the plan without MPI using 1 executor
 bool inMemory = false;
 bool enable_collect = true;
+bool enable_recovery;
+bool skip_work = false;
+bool stop_receiver = false;
+bool stop_sender = false;
 
 vector<Opr*> operations;
 vector<void*(*)(void*)> functions;
@@ -439,6 +443,27 @@ vector<int>* get_dependents ( Opr* opr ) {
   } else return ds;
 }
 
+// used for garbage collection with recovery
+vector<int>* set_closest_local_descendants ( int opr_id ) {
+  queue<int> opr_queue;
+  opr_queue.push(opr_id);
+  vector<int>* buffer = new vector<int>();
+  int node = operations[opr_id]->node;
+  while (!opr_queue.empty()) {
+    int c = opr_queue.front();
+    opr_queue.pop();
+    Opr* opr = operations[c];
+    if (!member(c,buffer))
+      if (opr->node == node) {
+        buffer->push_back(c);
+        opr->oc++;
+      } else for ( int x: *opr->children )
+               opr_queue.push(x);
+  }
+  operations[opr_id]->os = buffer;
+  return buffer;
+}
+
 void initialize_opr ( Opr* x ) {
   x->status = notReady;
   x->cached = nullptr;
@@ -795,8 +820,25 @@ bool exit_poll () {
   return wait_all(b);
 }
 
-bool stop_sender = false;
-extern bool stop_receiver;
+int abort_count = 0;
+const int steps_before_abort = 2;
+
+// kill the executor to test recovery
+void kill_executor ( int executor ) {
+  abort_count++;
+  if (enable_recovery && executor_rank == executor
+      && abort_count == steps_before_abort) {
+    info("Killing executor %d to test recovery",executor);
+//    if (!accumulator.exit)  // abort exit_poll
+//      send_data(getCoordinator(),false,5);
+    skip_work = true;
+    stop_sender = true;
+    stop_receiver = true;
+    // wait forever
+    while (true)
+      this_thread::sleep_for(chrono::milliseconds(1000));
+  }
+}
 
 bool in_send_queue ( int opr_id ) {
   lock_guard<mutex> lock(send_mutex);
@@ -840,7 +882,7 @@ void work () {
       st = MPI_Wtime();
       if (exit) break;
     }
-    if (!ready_queue.empty()) {
+    if (!ready_queue.empty() && !skip_work) {
       int opr_id;
       { lock_guard<mutex> lock(ready_mutex);
         opr_id = ready_queue.top();
@@ -985,6 +1027,85 @@ void* collect ( void* plan ) {
     mpi_barrier();
     return new tuple<void*,void*,void*>(get<0>(*p),get<1>(*p),nullptr);
   }
+}
+
+int nn ( int c, int failed_executor, int new_executor ) {
+  return (operations[c]->node == failed_executor)
+          ? new_executor
+          : operations[c]->node;
+}
+
+vector<int>* completed_front ( int failed_executor, int new_executor ) {
+  for ( Opr* x: operations )
+    x->visited = false;
+  queue<int> opr_queue;
+  vector<int>* buffer = new vector<int>();
+  for ( int c: *exit_points)
+    opr_queue.push(c);
+  while (!opr_queue.empty()) {
+    int c = opr_queue.front();
+    opr_queue.pop();
+    Opr* opr = operations[c];
+    if (!opr->visited) {
+      opr->visited = true;
+      switch (opr->type) {
+      case reduceOPR:   // used for partial reduction
+        opr->cached = nullptr;
+        for ( int x: *opr->opr.reduce_opr->s )
+          if (nn(x,failed_executor,new_executor) == executor_rank)
+            opr->reduced_count++;
+        vector<int> v;
+        if (nn(c,failed_executor,new_executor) == executor_rank)
+          for ( int x: *opr->opr.reduce_opr->s )
+            if (nn(x,failed_executor,new_executor) != executor_rank
+                && !member(nn(x,failed_executor,new_executor),&v))
+              v.push_back(x);
+        opr->reduced_count += v.size();
+      }
+      if (opr->node == executor_rank && hasCachedValue(opr))
+        buffer->push_back(c);
+      else if (executor_rank == 0 && opr->type == loadOPR)
+        buffer->push_back(c);
+      else for ( int c: *opr->children)
+             opr_queue.push(c);
+    }
+  }
+  return buffer;
+}
+
+// recovery from failure
+void recover ( int failed_executor, int new_executor ) {
+  skip_work = true;
+  //accumulator.reset();
+  info("Recovering from the failed executor by replacing %d with %d",
+       failed_executor,new_executor);
+  vector<int>* front = completed_front(failed_executor,new_executor);
+  info("Completed front: %s",sprint(*front));
+  for ( int opr_id: *front )
+    for ( int c: *operations[opr_id]->consumers )
+      if (operations[c]->type == reduceOPR)
+        enqueue_reduce_opr(opr_id,c);
+  if (executor_rank != new_executor) {
+    for ( int opr_id: *front ) {
+      Opr* opr = operations[opr_id];
+      bool feb = false;
+      bool neb = false;
+      for ( int c: *opr->consumers ) {
+        feb = feb || operations[c]->node == failed_executor;
+        neb = neb || operations[c]->node == new_executor;
+      }
+      if (feb && (opr->status != completed || !neb)
+          || (opr->type == loadOPR && executor_rank == 0))
+        send_data(new_executor,opr->cached,opr_id,0);
+    }
+  }
+  for ( int opr_id = 0; opr_id < operations.size(); opr_id++ ) {
+    Opr* opr = operations[opr_id];
+    if (opr->node == failed_executor)
+      opr->node = new_executor;
+  }
+  info("Recovered from the failed executor %d",failed_executor);
+  skip_work = false;
 }
 
 vector<string> env_names { "inMemory", "trace", "collect" };

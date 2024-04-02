@@ -10,33 +10,25 @@
 #SBATCH --export=ALL
 #SBATCH --time=30    # time limit in minutes
 
-module load cpu/0.17.3b  gcc/10.2.0/npcyll4
-module load mvapich2/2.3.7/iyjtn3x
+module purge
+module load slurm cpu/0.17.3b gcc/10.2.0/npcyll4 mvapich2/2.3.7/iyjtn3x
 
 SW=/expanse/lustre/projects/uot166/fegaras
 export DIABLO_HOME=/home/$USER/TensorPlanner
 export SCALA_HOME=$SW/scala-2.12.3
 export SPARK_HOME=$SW/spark-3.1.2-bin-hadoop3.2
 
-# used for Scala compilation only
-export MPI_JAR=$SW/openmpi/lib/mpi.jar
-
-JARS=.:${DIABLO_HOME}/lib/diablo.jar:$MPI_JAR
-for I in ${SPARK_HOME}/jars/*.jar; do
-    JARS=${JARS}:$I
-done
-for I in ${SPARK_HOME}/lib/*.jar; do
-    JARS=${JARS}:$I
+JARS=${DIABLO_HOME}/lib/diablo.jar
+for I in core sql; do
+    JARS=${JARS}:`ls ${SPARK_HOME}/jars/spark-${I}*.jar`
 done
 export JARS=${JARS}
 
 export PATH="$SCALA_HOME/bin:$DIABLO_HOME/bin:$PATH"
 
-files="mult.diablo"
-for f in $files; do
-    echo compiling $f ...
-    diablo $f
-done
+file="mult.diablo"
+echo compiling $file ...
+diablo $file
 
 ulimit -l unlimited
 ulimit -s unlimited

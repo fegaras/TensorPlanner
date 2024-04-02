@@ -12,8 +12,7 @@ module purge
 module load slurm cpu/0.15.4 gcc/7.5.0 openjdk
 
 SW=/expanse/lustre/projects/uot166/fegaras
-# for the mpi.jar only
-export MPI_HOME=$SW/openmpi
+
 $SW/sbt/bin/sbt package
 
 module purge

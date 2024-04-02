@@ -34,7 +34,7 @@ Go to `tests`, edit `expanse-mvapich.run`, and do:
 sbatch expanse-mvapich.run
 ```
 
-### Old synchronous DIABLO using Spark
+### Synchronous DIABLO using Spark
 
 ```bash
 build-diablo Multiply-diablo.scala
@@ -44,9 +44,9 @@ To test it on SDSC Expanse, build the system:
 ```bash
 sbatch expanse-build.run
 ```
-Go to `tests`, edit `expanse.run`, and do:
+Go to `tests`, edit `expanse-diablo.run`, and do:
 ```bash
-sbatch expanse.run
+sbatch expanse-diablo.run
 ```
 
 ## Data Model

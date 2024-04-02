@@ -18,8 +18,18 @@
 #include <sstream>
 #include <cstring>
 #include <chrono>
+#include <list>
+#include <exception>
 #include <unistd.h>
 #include "opr.h"
+
+extern bool delete_arrays;
+extern vector<Opr*> operations;
+extern vector<void*(*)(void*)> functions;
+extern bool stop_receiver;
+extern bool stop_sender;
+extern bool inMemory;
+extern bool enable_recovery;
 
 int num_of_executors = 1;
 int executor_rank = 0;
@@ -27,11 +37,11 @@ int coordinator = 0;
 int max_buffer_size = 50000000;
 const auto comm = MPI_COMM_WORLD;
 MPI_Request receive_request = MPI_REQUEST_NULL;
-extern bool delete_arrays;
-extern vector<Opr*> operations;
-extern vector<void*(*)(void*)> functions;
-bool stop_receiver = false;
-extern bool inMemory;
+list<int> failed_executors;
+list<int> active_executors;
+extern bool skip_work;
+// max wait time in msecs when sending a message before we assume the receiver is dead
+int max_wait_time = 1000;
 
 void info ( const char *fmt, ... );
 
@@ -41,6 +51,47 @@ void deserialize ( void* &data, const char* buffer, size_t len, vector<int>* enc
 void delete_block ( void* &data, vector<int>* encoded_type );
 void delete_first_reduce_input ( int rid );
 
+void recover ( int failed_executor, int new_executor );
+
+void send_data ( int rank, void* data, int opr_id, int tag );
+
+bool member ( int n, list<int> v ) {
+  for ( auto it = v.begin(); it != v.end(); ++it )
+    if (*it == n)
+      return true;
+  return false;
+}
+
+struct {
+  MPI_Op acc;
+  bool exit;
+  bool total;
+  int count;
+} accumulator;
+
+class TPexception: public exception {
+public:
+  int err;
+  TPexception ( int err ) { this->err = err; }
+  virtual const char* what() const throw() {
+    static char* err_buffer = new char[1000];
+    int len;
+    if (err < 0)
+      sprintf(err_buffer,"Executor %d is not responding",abs(err));
+    else MPI_Error_string(err,err_buffer,&len);
+    return err_buffer;
+  }
+};
+
+void mpi_error ( int failed_executor,  TPexception ex ) {
+  info("MPI communication error: %s",ex.what());
+  if (enable_recovery && failed_executor >= 0) {
+    if (!member(failed_executor,failed_executors)) {
+      // send a message to the coordinator that there is a failed executor
+      send_data(0,new long(failed_executor),0,3);
+    }
+  } else MPI_Abort(comm,-1);
+}
 
 void handle_received_message ( int tag, int opr_id, void* data, int len ) {
   Opr* opr = operations[opr_id];
@@ -54,6 +105,50 @@ void handle_received_message ( int tag, int opr_id, void* data, int len ) {
     info("    received %d bytes from %d (opr %d)",len,opr->node,opr_id);
     opr->cached = data;
     opr->status = completed;
+  } else if (tag == 3) {  // on coordinator only
+    // the coordinator will decide who will replace a failed executor
+    int failed_executor = *(long*)data;
+    if (member(failed_executor,failed_executors)) {
+      skip_work = true;
+      failed_executors.push_back(failed_executor);
+      active_executors.remove(failed_executor);
+      int new_executor = 0;
+      for ( int i: active_executors )
+        if (i != coordinator)
+          new_executor = i;
+      info("The coordinator has decided to replace the failed executor %d with %d",
+           failed_executor,new_executor);
+      auto dt = new tuple<long*,long*>(new long(failed_executor),new long(new_executor));
+      // announce it to all nodes
+      for ( int i: active_executors )
+        send_data(i,dt,0,4);
+    }
+  } else if (tag == 4) {
+    // recovery at every executor (sent from coordinator)
+    auto dt = *(tuple<long*,long*>*)data;
+    int failed_executor = (int)*get<0>(dt);
+    int new_executor = (int)*get<1>(dt);
+    if (!member(failed_executor,failed_executors)) {
+      failed_executors.push_back(failed_executor);
+      active_executors.remove(failed_executor);
+    }
+    recover(failed_executor,new_executor);
+  } else if (tag == 5) {
+    // synchronize accumulation (on coordinator)
+    accumulator.count++;
+    accumulator.total = (accumulator.acc == MPI_LOR)
+                         ? (accumulator.total || data)
+                         : (accumulator.total && data);
+    if (!skip_work && accumulator.count == active_executors.size()) {
+      long n = accumulator.total ? 1L : 0L;
+      for ( int x: active_executors )
+        send_data(x,(void*)n,-1,6);
+    }
+  } else if (tag == 6) {
+    // release the barrier synchronization after accumulation
+    accumulator.exit = true;
+    accumulator.count = 0;
+    accumulator.total = (long)data == 1L;
   } else if (tag == 1 && opr->type == reduceOPR) {
     info("    received partial reduce result of %d bytes (opr %d)",
          len,opr_id);
@@ -162,12 +257,48 @@ void send_data ( int rank, void* data, int opr_id, int tag ) {
   *(int*)(buffer+2*sizeof(int)) = len;
   info("    sending %d bytes to %d (opr %d)",
        len+3*sizeof(int),rank,opr_id);
-  MPI_Send(buffer,len+3*sizeof(int),MPI_BYTE,rank,tag,comm);
+  if (!enable_recovery)
+    MPI_Send(buffer,len+3*sizeof(int),MPI_BYTE,rank,tag,comm);
+  else {
+    MPI_Request sr = MPI_REQUEST_NULL;
+    int ierr = MPI_Isend(buffer,len+3*sizeof(int),MPI_BYTE,rank,tag,comm,&sr);
+    if (ierr != MPI_SUCCESS)
+      throw new TPexception(ierr);
+    int count = 0;
+    int mtag;
+    MPI_Test(&sr,&mtag,MPI_STATUS_IGNORE);
+    while (mtag != 1 && count < max_wait_time) {
+      count++;
+      this_thread::sleep_for(chrono::milliseconds(1));
+    }
+    if (mtag != 1 && !skip_work) {
+      MPI_Cancel(&sr);
+      MPI_Request_free(&sr);
+      // executor rank is not responding => start recovery
+      throw new TPexception(-rank);
+    } else MPI_Request_free(&sr);
+  }
 }
 
+// accumulate values at the coordinator O(n)
+bool accumulate ( bool value, MPI_Op acc ) {
+  long n = value ? 1L : 0L;
+  send_data(coordinator,(void*)n,-1,5);
+  accumulator.acc = acc;
+  accumulator.exit = false;
+  while ( !accumulator.exit )
+    this_thread::sleep_for(chrono::milliseconds(1));
+  return accumulator.total;
+}
+
+// logical and of all b's from all executors (blocking)
 bool wait_all ( bool b ) {
   if (inMemory)
     return b;
+  if (skip_work)
+    return false;
+  if (enable_recovery)
+    return accumulate(b,MPI_LAND);
   int in[1] = { ( b ? 0 : 1 ) };
   int ret[1];
   MPI_Allreduce(in,ret,1,MPI_INT,MPI_LOR,comm);
@@ -175,7 +306,9 @@ bool wait_all ( bool b ) {
 }
 
 void mpi_barrier () {
-  MPI_Barrier(comm);
+  if (enable_recovery)
+    accumulate(false,MPI_LOR); // O(n)
+  else MPI_Barrier(comm);      // O(logn)
 }
 
 int getCoordinator () { return coordinator; }
@@ -201,6 +334,8 @@ void mpi_startup ( int argc, char* argv[], int block_dim_size ) {
   MPI_Comm_rank(comm,&executor_rank);
   MPI_Comm_size(comm,&num_of_executors);
   coordinator = 0;
+  for ( int i = 0; i < num_of_executors; i++ )
+    active_executors.push_back(i);
   char machine_name[256];
   gethostname(machine_name,255);
   int local_rank = 0;

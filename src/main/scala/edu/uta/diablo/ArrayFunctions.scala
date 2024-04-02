@@ -60,44 +60,44 @@ trait ArrayFunctions {
 
   // assign every operation to an executor
   def schedule[I] ( e: Plan[I] ) {
-    Runtime.schedule(e)
+   // Runtime.schedule(e)
   }
 
   // distributed evaluation of a scheduled plan using MPI
   def eval[I] ( e: Plan[I] ): Plan[I]
-    = Runtime.eval(e)
+    = e//Runtime.eval(e)
 
   // eager evaluation of a single operation
   def evalOpr ( opr_id: OprID ): Any
-    = Runtime.evalOpr(opr_id)
+    = ()//Runtime.evalOpr(opr_id)
 
   // collect the results of an evaluated plan at the master node
   def collect[I] ( e: Plan[I] ): Tensor[I]
-    = Runtime.collect(e)
+    = (0,0,Nil)//Runtime.collect(e)
 
   def clearPlans () {
-    Runtime.operations.foreach {
-        e => Runtime.initialize_opr(e)
-             e.status = PlanGenerator.notReady
-    }
+    //Runtime.operations.foreach {
+    //    e => Runtime.initialize_opr(e)
+    //         e.status = PlanGenerator.notReady
+    //}
   }
 
   // single-core, in-memory evaluation (for testing only)
   def evalMem[I] ( e: Plan[I] ): Tensor[I]
-    = inMem.eval(e)
+    = (0,0,Nil)//inMem.eval(e)
 
   // start communication in MPI
   def startup ( args: Array[String] ) {
-    Communication.mpi_startup(args)
+    //Communication.mpi_startup(args)
   }
 
   // finalize communication in MPI
   def end () {
-    Communication.mpi_finalize()
+    //Communication.mpi_finalize()
   }
 
   def isCoordinator (): Boolean
-    = Communication.isCoordinator()
+    = false//Communication.isCoordinator()
 
   // it is used in finding duplicate tasks
   val task_table = new mutable.HashMap[Int,OprID]()
