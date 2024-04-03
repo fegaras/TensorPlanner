@@ -4,9 +4,12 @@
 
 DIABLO depends on MPI, JDK 11, Spark 3.2.1, Scala 2.12.15, and sbt 1.6.2.
 
-Download and install either
-MVAPICH2 from [https://mvapich.cse.ohio-state.edu/downloads/](https://mvapich.cse.ohio-state.edu/downloads/)
-or open-mpi from [https://www.open-mpi.org/software/](https://www.open-mpi.org/software/).
+* Install either
+MVAPICH2 2.3 from [https://mvapich.cse.ohio-state.edu/downloads/](https://mvapich.cse.ohio-state.edu/downloads/)
+or open-mpi 5.0 from [https://www.open-mpi.org/software/](https://www.open-mpi.org/software/).
+* Install Scala 2.12 from [https://www.scala-lang.org/download/2.12.19.html](https://www.scala-lang.org/download/2.12.19.html).
+* Install sbt from [https://www.scala-sbt.org/download/](https://www.scala-sbt.org/download/).
+* Install Apache Spark 3.4 from [https://spark.apache.org/downloads.html](https://spark.apache.org/downloads.html).
 
 Edit the file `setup.sh` to point to your installation directories and set it up
 for MVAPICH2 (for open-mpi, use openmpi instead of mvapich):
@@ -25,7 +28,7 @@ Go to `TensorPlaner/tests/` and do:
 diablo mult.diablo
 crun-mvapich ./a.out 4234 10
 ```
-To test it on SDSC Expanse, build the system:
+To test it on SDSC Expanse (or on any SLURM-based cluster), build the system:
 ```bash
 sbatch expanse-mvapich-build.run
 ```
@@ -36,6 +39,7 @@ sbatch expanse-mvapich.run
 
 ### Synchronous DIABLO using Spark
 
+Go to `TensorPlaner/tests/` and do:
 ```bash
 build-diablo Multiply-diablo.scala
 run-diablo Multiply 1234 2345

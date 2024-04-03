@@ -21,6 +21,7 @@ echo "\"\"\")
   }
 }" >>cxxgen.sc
 
+mkdir -p classes
 scalac -d classes -cp ${JARS} cxxgen.sc >cxxgen.log
 
 exec mpic++ -O3 -DNDEBUG cxxgen.cpp -fopenmp -I${DIABLO_HOME}/include -L${DIABLO_HOME}/lib -ldiablo
