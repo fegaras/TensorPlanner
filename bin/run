@@ -1,16 +1,27 @@
 #/bin/bash
+exec() { echo "\$ $@" ; "$@" ; }
 
 # number of executors per node
-executors=2
+if [ -z $executors ]; then
+   executors=2
+fi
 
-mem=`awk '/MemFree/ { printf "%.0f", $2/1024/1024 }' /proc/meminfo`
-# max available memory in GB per executor
-mem=$[$mem/$executors]
-
-MPI_JAR=${HOME}/openmpi/lib/mpi.jar
-
-# run on 2 nodes: localhost and milos (disable firewall, enable passwordless ssh to localhost and to each other, must have the same TensorPlanner code)
-#mpirun -N $executors --bind-to socket --host localhost:-1,milos:-1 scala -classpath classes:${DIABLO_HOME}/lib/diablo.jar:${MPI_JAR} -J-Xmx${mem}g -J-Xms2g -J-Xss100m $*
-
-# run on localhost
-mpirun -N $executors --bind-to socket scala -classpath classes:${DIABLO_HOME}/lib/diablo.jar:${MPI_JAR} -J-Xmx${mem}g -J-Xms1g -J-Xss100m $*
+if [ "$mvapich" == "y" ]; then
+    export MV2_SMP_USE_CMA=0
+    export MV2_USE_RDMA_CM=0
+    export MV2_HOMOGENEOUS_CLUSTER=1
+    export MV2_ENABLE_AFFINITY=0
+    export MV2_USE_ALIGNED_ALLOC=1
+    export MV2_CPU_BINDING_LEVEL=socket
+    if [ "$debug" == "y" ]; then
+        exec mpirun -N $executors xterm -geometry 160x50 -hold -e gdb -ex run --args $*
+    else
+        exec mpirun -N $executors $*
+    fi
+else
+    if [ "$debug" == "y" ]; then
+        exec mpirun -N $executors --bind-to socket --use-hwthread-cpus xterm -geometry 160x50 -hold -e gdb -ex run --args $*
+    else
+        exec mpirun -N $executors --bind-to socket --use-hwthread-cpus $*
+    fi
+fi

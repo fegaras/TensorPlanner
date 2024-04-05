@@ -37,8 +37,8 @@ bool delete_arrays = true;
 const bool enable_partial_reduce = true;
 // evaluate the plan without MPI using 1 executor
 bool inMemory = false;
-bool enable_collect = true;
-bool enable_recovery;
+bool enable_collect = false;
+bool enable_recovery = false;
 bool skip_work = false;
 bool stop_receiver = false;
 bool stop_sender = false;
@@ -108,11 +108,14 @@ string sprint ( vector<int> v ) {
   ostringstream out;
   out << "(";
   auto it = v.begin();
+  int i = 0;
   if (v.size() > 0) {
     out << *(it++);
-    for ( ; it != v.end(); it++ )
+    for ( ; it != v.end() && i < 100; it++, i++ )
       out << "," << *it;
   }
+  if (i >= 100)
+    out << ",...";
   out << ")";
   return out.str();
 }
@@ -529,7 +532,7 @@ void schedule ( void* plan ) {
     }
   }
   if (!inMemory)
-    mpi_barrier();
+    mpi_barrier_no_recovery();
 }
 
 void* inMemEval ( int id, int tabs );
@@ -828,9 +831,9 @@ void kill_executor ( int executor ) {
   abort_count++;
   if (enable_recovery && executor_rank == executor
       && abort_count == steps_before_abort) {
-    info("Killing executor %d to test recovery",executor);
-//    if (!accumulator.exit)  // abort exit_poll
-//      send_data(getCoordinator(),false,5);
+    info("Committing suicide to test recovery");
+    if (!accumulator_exit())  // abort exit_poll
+      send_long(getCoordinator(),0L,5);
     skip_work = true;
     stop_sender = true;
     stop_receiver = true;
@@ -882,6 +885,7 @@ void work () {
       st = MPI_Wtime();
       if (exit) break;
     }
+    kill_executor(1);  // kill executor 1 to test recovery
     if (!ready_queue.empty() && !skip_work) {
       int opr_id;
       { lock_guard<mutex> lock(ready_mutex);
@@ -938,7 +942,7 @@ void* eval ( void* plan ) {
     ready_queue.push(x);
   info("Queue on %d: %s",executor_rank,sprint(*entries).c_str());
   if (!inMemory) {
-    mpi_barrier();
+    mpi_barrier_no_recovery();
     thread rrp(run_receiver);
     thread rsp(run_sender);
     work();
@@ -1076,11 +1080,11 @@ vector<int>* completed_front ( int failed_executor, int new_executor ) {
 // recovery from failure
 void recover ( int failed_executor, int new_executor ) {
   skip_work = true;
-  //accumulator.reset();
+  reset_accumulator();
   info("Recovering from the failed executor by replacing %d with %d",
        failed_executor,new_executor);
   vector<int>* front = completed_front(failed_executor,new_executor);
-  info("Completed front: %s",sprint(*front));
+  info("Completed front at recovery: %s",sprint(*front).c_str());
   for ( int opr_id: *front )
     for ( int c: *operations[opr_id]->consumers )
       if (operations[c]->type == reduceOPR)
@@ -1108,16 +1112,15 @@ void recover ( int failed_executor, int new_executor ) {
   skip_work = false;
 }
 
-vector<string> env_names { "inMemory", "trace", "collect" };
-vector<bool*> env_vars  { &inMemory, &trace, &enable_collect };
+vector<string> env_names { "inMemory", "trace", "collect", "recovery" };
+vector<bool*> env_vars  { &inMemory, &trace, &enable_collect, &enable_recovery };
 
 void startup ( int argc, char* argv[], int block_dim_size ) {
   static char name[100];
   for ( int i = 0; i < env_names.size(); i++ ) {
-    sprintf(name,"diablo_%s",env_names[i].c_str());
-    char* value = getenv(name);
+    char* value = getenv(env_names[i].c_str());
     if (value != nullptr)
-      *env_vars[i] = strcmp(value,"true") == 0;
+      *env_vars[i] = strcmp(value,"true") == 0 || strcmp(value,"y") == 0;
   }
   mpi_startup(argc,argv,block_dim_size);
 }

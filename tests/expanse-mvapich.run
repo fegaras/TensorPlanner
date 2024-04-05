@@ -28,7 +28,7 @@ export PATH="$SCALA_HOME/bin:$DIABLO_HOME/bin:$PATH"
 
 file="mult.diablo"
 echo compiling $file ...
-diablo $file
+tp $file
 
 ulimit -l unlimited
 ulimit -s unlimited
@@ -41,7 +41,5 @@ export MV2_USE_ALIGNED_ALLOC=1
 export MV2_CPU_BINDING_LEVEL=socket
 
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
-
-export diablo_collect=false
 
 srun --mpi=pmi2 -n $SLURM_NTASKS -c $SLURM_CPUS_PER_TASK ./a.out 20000 10

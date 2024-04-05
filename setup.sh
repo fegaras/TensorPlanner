@@ -1,6 +1,6 @@
 #/bin/bash
 
-export DIABLO_HOME=${HOME}/TensorPlanner
+export DIABLO_HOME="$(cd `dirname $0`/..; pwd -P)"
 
 export JAVA_HOME=/usr/lib/jvm/java-1.11.0-openjdk-amd64
 
@@ -8,7 +8,7 @@ export SCALA_HOME=${HOME}/system/scala-2.12.15
 
 export SPARK_HOME=${HOME}/spark-3.2.1-bin-hadoop3.2
 
-if [ -v mvapich ]; then
+if [ "$mvapich" == "y" ]; then
     export mvapich
     # install MVAPICH2 2.3.7 from https://mvapich.cse.ohio-state.edu/downloads/
     export MPI_HOME=${HOME}/mvapich

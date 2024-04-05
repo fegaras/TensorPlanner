@@ -1,9 +1,0 @@
-#/bin/bash
-
-# number of executors per node
-if [ -z $executors ]; then
-   executors=2
-fi
-
-#mpirun -N $executors --bind-to socket --use-hwthread-cpus gdb -ex run --args $*
-mpirun -N $executors --bind-to socket --use-hwthread-cpus xterm -geometry 160x50 -hold -e gdb -ex run --args $*

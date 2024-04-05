@@ -22,9 +22,13 @@ int check_communication ();
 
 void send_data ( int rank, void* data, int opr_id, int tag );
 
+void send_long ( int rank, long data, int tag );
+
 void mpi_startup ( int argc, char* argv[], int block_dim_size );
 
 void mpi_finalize ();
+
+void mpi_barrier_no_recovery ();
 
 void mpi_barrier ();
 
@@ -35,3 +39,8 @@ void kill_receiver ();
 void run_receiver ();
 
 int mpi_abort ();
+
+void reset_accumulator ();
+
+bool accumulator_exit ();
+
