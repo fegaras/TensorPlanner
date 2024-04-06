@@ -1,6 +1,6 @@
 #/bin/bash
 
-export DIABLO_HOME="$(cd `dirname $0`/..; pwd -P)"
+export DIABLO_HOME=${HOME}/TensorPlanner
 
 export JAVA_HOME=/usr/lib/jvm/java-1.11.0-openjdk-amd64
 
