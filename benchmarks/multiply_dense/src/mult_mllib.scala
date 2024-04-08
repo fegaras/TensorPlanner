@@ -26,8 +26,7 @@ object Multiply {
     val repeats = args(0).toInt   // how many times to repeat each experiment
     // each matrix has n*m elements
     val n = args(1).toInt
-    val m = if (args.length > 2) args(2).toInt else n
-    val sparsity = if (args.length > 3) args(3).toDouble else 0.01
+    val m = n
     parami(block_dim_size,1000)  // size of each dimension in a block
     val N = 1000
     parami(number_of_partitions,100)
@@ -42,7 +41,7 @@ object Multiply {
     LogManager.getRootLogger().setLevel(Level.WARN)
 
     def randomTile ( nd: Int, md: Int ): DenseMatrix = {
-      val max = 10
+      val max = 0.13
       val rand = new Random()
       new DenseMatrix(nd,md,Array.tabulate(nd*md){ i => rand.nextDouble()*max })
     }
@@ -58,8 +57,8 @@ object Multiply {
     val Am = randomMatrix(n,m).cache()
     val Bm = randomMatrix(m,n).cache()
 
-    val A = new BlockMatrix(Am,N,N).cache
-    val B = new BlockMatrix(Bm,N,N).cache
+    var A = new BlockMatrix(Am,N,N).cache
+    var B = new BlockMatrix(Bm,N,N).cache
 
     def map ( m: BlockMatrix, f: Double => Double ): BlockMatrix
       = new BlockMatrix(m.blocks.map{ case (i,a) => (i,new DenseMatrix(N,N,a.toArray.map(f))) },
@@ -69,28 +68,28 @@ object Multiply {
     def testMultiplyMLlib(): Double = {
       val t = System.currentTimeMillis()
       try {
-      val C = A.multiply(B)
-      val x = C.blocks.count
+        var C = A.multiply(B)
+        val x = C.blocks.count()
       } catch { case x: Throwable => println(x); return -1.0 }
       (System.currentTimeMillis()-t)/1000.0
     }
 
     def test ( name: String, f: => Double ) {
-      val cores = Runtime.getRuntime().availableProcessors()
       var i = 0
       var j = 0
       var s = 0.0
+      var max_time = 0.0
       while ( i < repeats && j < 10 ) {
         val t = f
         j += 1
         if (t > 0.0) {   // if f didn't crash
-          if(i > 0) s += t
+          s += t
+          max_time = Math.max(max_time, t)
           i += 1
           println("Try: "+i+"/"+j+" time: "+t)
         }
       }
-      if (i > 0) s = s/(i-1)
-      //print("*** %s cores=%d n=%d m=%d N=%d ".format(name,cores,n,m,N))
+      if (i > 1) s = (s-max_time)/(i-1)
       print("*** %s n=%d m=%d N=%d ".format(name,n,m,N))
       println("tries=%d %.3f secs".format(i,s))
     }

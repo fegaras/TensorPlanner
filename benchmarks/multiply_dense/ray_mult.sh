@@ -1,14 +1,8 @@
 #!/bin/bash
-#SBATCH -A uot166
-#SBATCH --job-name="ray_demo"
-#SBATCH --output="ray_mult.10.out"
-#SBATCH --partition=compute
-#SBATCH --nodes=5
-#SBATCH --ntasks-per-node=2
-#SBATCH --mem=249208M
-#SBATCH --export=ALL
-#SBATCH --time=10    # time limit in minutes
+#SBATCH --job-name="ray_mult"
+#SBATCH --output="ray_n_($N_NODES)_%j.out"
 
+export EXP_HOME="$(pwd -P)"
 node_count=$SLURM_NNODES
 echo "Number of nodes = " $node_count
 nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
@@ -22,9 +16,6 @@ ip_head=$head_node_ip:$port
 export ip_head
 echo "IP Head: $ip_head"
 
-module load openjdk
-source $HOME/venv/bin/activate
-
 echo "Starting HEAD at $head_node"
 srun --nodes=1 --ntasks=1 -w "$head_node" ray start --head --node-ip-address="$head_node_ip" --port=$port --num-cpus 64 --block &
 sleep 10
@@ -37,7 +28,7 @@ for((i=1;i<=worker_num; i++)); do
 	srun --nodes=1 --ntasks=1 -w "$node_i" ray start --address "$ip_head" --num-cpus 64 --block &
 	sleep 5
 done
-n=100000
-m=1000
-reps=10
-python3 $HOME/TPlanner_Exp/Ray/LinearRegression.py 64 $n $m $reps
+
+n=$1
+reps=$2
+python3 $EXP_HOME/src/Multiply_Ray.py $n $reps

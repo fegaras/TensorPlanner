@@ -1,14 +1,8 @@
 #!/bin/bash
-#SBATCH -A uot166
-#SBATCH --job-name="diablo"
-#SBATCH --output="run.log"
-#SBATCH --partition=compute
-#SBATCH --nodes=2
-#SBATCH --ntasks-per-node=128
-#SBATCH --mem=249208M
-#SBATCH --export=ALL
-#SBATCH --time=60    # time limit in minutes
+#SBATCH --job-name="sac_mult"
+#SBATCH --output="sac_n_($N_NODES)_%j.out"
 
+echo "SAC Multiply Job"
 nodes=$SLURM_NNODES
 echo "Number of nodes = " $nodes
 
@@ -22,13 +16,12 @@ echo "Number of executors = " $executors
 SPARK_OPTIONS="--driver-memory 24G --num-executors $executors --executor-cores 12 --executor-memory 24G --driver-java-options '-Xss512m' --supervise"
 
 export HADOOP_CONF_DIR=$HOME/expansecluster
-
-#module load openjdk hadoop spark
 module load cpu/0.15.4 gcc/7.5.0 openjdk hadoop/3.2.2 spark
 
 SW=/expanse/lustre/projects/uot166/fegaras
 
-export DIABLO_HOME=$HOME/TensorPlanner
+export EXP_HOME="$(pwd -P)"
+export DIABLO_HOME="$(cd `dirname $0`/../..; pwd -P)"
 export SCALA_HOME=$SW/scala-2.12.3
 
 PATH="$SCALA_HOME/bin:$PATH"
@@ -60,16 +53,14 @@ done
 rm -rf classes
 mkdir -p classes
 
-scala_files="mult-diablo.scala"
-for f in $scala_files; do
-    echo compiling $f ...
-    scalac -d classes -cp classes:${JARS}:${DIABLO_HOME}/lib/diablo.jar $f >/dev/null
-done
+f="mult_sac.scala"
+echo compiling $f ...
+scalac -d classes -cp classes:${JARS}:${DIABLO_HOME}/lib/diablo.jar ${EXP_HOME}/src/$f >/dev/null
 
-jar cf test.jar -C classes .
+jar cf sac.jar -C classes .
+n=$1
+echo "n: $n, m: $n"
+spark-submit --jars ${DIABLO_HOME}/lib/diablo.jar --class Multiply --master $MASTER $SPARK_OPTIONS sac.jar 4 $n
 
-spark-submit --jars ${DIABLO_HOME}/lib/diablo.jar --class Multiply --master $MASTER $SPARK_OPTIONS test.jar 1 10000 10
-
-myspark stop
 stop-dfs.sh
 myhadoop-cleanup.sh
