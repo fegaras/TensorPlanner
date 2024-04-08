@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name="ray_mult_openmp"
-#SBATCH --output="ray_openmp_n_($N_NODES)_%j.out"
+#SBATCH --output="ray_openmp_multiply_%j.out"
 
 module purge
 module load slurm cpu/0.17.3b  gcc/10.2.0 openmpi/4.1.3
@@ -19,6 +19,9 @@ ip_head=$head_node_ip:$port
 export ip_head
 echo "IP Head: $ip_head"
 
+#pip install -U "ray[default]"
+#pip install numpy
+
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 echo "Starting HEAD at $head_node"
 srun --nodes=1 --ntasks=1 -w "$head_node" ray start --head --node-ip-address="$head_node_ip" --port=$port --block &
@@ -35,5 +38,5 @@ done
 
 n=$1
 iters=$2
-echo "n: $n, m: $n, iterations: $iterations"
+echo "n: $n, m: $n, iterations: $iters"
 python3 $EXP_HOME/src/Multiply_Ray_Openmp.py $n $iters

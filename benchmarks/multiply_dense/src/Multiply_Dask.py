@@ -22,4 +22,4 @@ if __name__ == '__main__':
     print(len(res[0]))
     run_time = time.time()-start
     print("Time: ",run_time)
-    client.close()
+    client.shutdown()

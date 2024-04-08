@@ -3,26 +3,36 @@
 export EXP_HOME="$(pwd -P)"
 source $EXP_HOME/env_setup.sh
 
-command="sbatch -A $ACCOUNT_NAME -p compute  -N $N_NODES --ntasks-per-node=$N_TASKS_PER_NODE -c $N_CPUS --mem=$MEM_LIMIT --export=ALL -t $TIME_LIMIT"
+command="sbatch -A $ACCOUNT_NAME -p compute  -N $N_NODES --ntasks-per-node=$N_TASKS_PER_NODE -c $N_CPUS_PER_TASK --mem=$MEM_LIMIT --export=ALL -t $TIME_LIMIT"
 echo $command
 
-n=5000
+n=20000
 iterations=1
 
-$command tp_openmpi_mult.sh $n $iterations
+# TensorPlanner
+$command tp_mvapich_mult.sh $n $iterations
 
+# ScaLAPACK
 $command scalapack_mult.sh $n
 
+# Dask
 $command dask_mult.sh $n $iterations
 
+# Ray
 $command ray_mult.sh $n $iterations
 
+# Ray with OpenMP
+cd $EXP_HOME/src
 # build cython matrix multiplication with openmp
-python3 $EXP_HOME/src/matmult_setup.py build_ext --inplace
-# copy .so file to python_env
-cp matmult*.so $HOME/venv/lib/python3.8/site-packages/
+python3 matmult_setup.py build_ext --inplace
+# copy .so file to Exp_home
+cp matmult*.so ../
+cd $EXP_HOME
+python3 -c 'import sys; import os; sys.path.append(os.environ["EXP_HOME"])'
 $command ray_openmp_mult.sh $n $iterations
 
+# SAC
 $command sac_mult.sh $n
 
+# MLlib
 $command mllib_mult.sh $n

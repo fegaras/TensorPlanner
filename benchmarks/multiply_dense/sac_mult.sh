@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name="sac_mult"
-#SBATCH --output="sac_n_($N_NODES)_%j.out"
+#SBATCH --output="sac_multiply_%j.out"
 
 echo "SAC Multiply Job"
 nodes=$SLURM_NNODES
@@ -21,10 +21,6 @@ module load cpu/0.15.4 gcc/7.5.0 openjdk hadoop/3.2.2 spark
 SW=/expanse/lustre/projects/uot166/fegaras
 
 export EXP_HOME="$(pwd -P)"
-export DIABLO_HOME="$(cd `dirname $0`/../..; pwd -P)"
-export SCALA_HOME=$SW/scala-2.12.3
-
-PATH="$SCALA_HOME/bin:$PATH"
 
 # location of data storage and scratch space on every worker (on local SSD)
 scratch=/scratch/$USER/job_$SLURM_JOB_ID

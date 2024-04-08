@@ -1,15 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name="mllib_mult"
-#SBATCH --output="mllib_n_($N_NODES)_%j.out"
+#SBATCH --output="mllib_multiply_%j.out"
 
 export HADOOP_CONF_DIR=$HOME/expansecluster
 module load cpu/0.15.4 gcc/7.5.0 openjdk hadoop/3.2.2 spark
 SW=/expanse/lustre/projects/uot166/fegaras
 export EXP_HOME="$(pwd -P)"
-export DIABLO_HOME="$(cd `dirname $0`/../..; pwd -P)"
-export SCALA_HOME=$SW/scala-2.12.3
-
-PATH="$SCALA_HOME/bin:$PATH"
 
 JARS=.
 for I in `ls $SPARK_HOME/jars/*.jar -I *unsafe*`; do
@@ -19,7 +15,7 @@ done
 rm -rf classes
 mkdir -p classes
 
-f="multiply.scala"
+f="mult_mllib.scala"
 echo compiling $f ...
 scalac -d classes -cp classes:${JARS}:${DIABLO_HOME}/lib/diablo.jar ${EXP_HOME}/src/$f >/dev/null
 

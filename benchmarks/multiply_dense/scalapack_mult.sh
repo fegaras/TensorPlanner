@@ -1,8 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name="scalapack_mult"
-#SBATCH --output="scalapack_n_($N_NODES)_%j.out"
+#SBATCH --output="scalapack_multiply_%j.out"
 
 echo "Scalapack Multiply Job"
+nodes=$SLURM_NNODES
+echo "Number of nodes = " $nodes
+
 module purge
 module load slurm cpu/0.17.3b  gcc/10.2.0 openmpi/4.1.3 intel-mkl/2020.4.304
 export OMP_NUM_THREADS=64

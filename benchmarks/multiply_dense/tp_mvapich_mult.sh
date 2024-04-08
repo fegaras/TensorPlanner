@@ -1,8 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name="tp_mult"
-#SBATCH --output="tp_mvapich_n_($N_NODES)_%j.out"
+#SBATCH --output=tp_mvapich_multiply_%j.out
 
 echo "TensorPlanner Multiply Job"
+nodes=$SLURM_NNODES
+echo "Number of nodes = " $nodes
 module purge
 module load slurm cpu/0.17.3b gcc/10.2.0/npcyll4 mvapich2/2.3.7/iyjtn3x
 export EXP_HOME="$(pwd -P)"

@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name="ray_mult"
-#SBATCH --output="ray_n_($N_NODES)_%j.out"
+#SBATCH --output=ray_multiply_%j.out
 
 export EXP_HOME="$(pwd -P)"
 node_count=$SLURM_NNODES
@@ -15,6 +15,9 @@ port=6379
 ip_head=$head_node_ip:$port
 export ip_head
 echo "IP Head: $ip_head"
+
+#pip install -U "ray[default]"
+#pip install numpy
 
 echo "Starting HEAD at $head_node"
 srun --nodes=1 --ntasks=1 -w "$head_node" ray start --head --node-ip-address="$head_node_ip" --port=$port --num-cpus 64 --block &

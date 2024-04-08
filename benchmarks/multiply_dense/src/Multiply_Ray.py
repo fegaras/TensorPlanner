@@ -40,8 +40,7 @@ def multiply_matrices(x,y):
 				ret_tensor[i][j] = add_blocks.remote(ret_tensor[i][j],multiply_blocks.remote(x[i][k],y[k][j]))
 	return ret_tensor
 
-def get_matrix(x_id):
-    x_val = ray.get(x_id)
+def get_matrix(x_val):
     x = [[ray.get(x_val[i][j]) for j in range(len(x_val[0]))] for i in range(len(x_val))]
     return x
 

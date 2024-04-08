@@ -34,7 +34,7 @@ int main(int argc, char **argv) {
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &procs);
 
-    if(rank == 0) std::cout << "n: " << n << " " << argv[1] << std::endl;
+    if(rank == 0) std::cout << "n: " << n << std::endl;
     // Create a 2D process grid
     MKL_INT dims[2] = {0, 0};
     MPI_Dims_create(procs, 2, dims);
