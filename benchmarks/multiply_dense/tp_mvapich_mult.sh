@@ -13,7 +13,8 @@ rm -rf classes
 mkdir -p classes
 file="mult_tp.diablo"
 echo compiling $file ...
-diablo ${EXP_HOME}/src/$file
+tp ${EXP_HOME}/src/$file
+echo "Compilation done..."
 
 ulimit -l unlimited
 ulimit -s unlimited
@@ -26,8 +27,8 @@ export MV2_USE_ALIGNED_ALLOC=1
 export MV2_CPU_BINDING_LEVEL=socket
 
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
-export diablo_collect=false
-export diablo_trace=false
+export collect=false
+export trace=false
 
 n=$1
 iterations=$2
