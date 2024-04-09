@@ -1,0 +1,26 @@
+var N = args(0).toInt;
+var M = args(1).toInt;
+var D = args(2).toInt;
+var iterations = args(3).toInt;
+var sparsity = 0.01;
+
+var alpha = 0.002;
+var beta = 0.02;
+
+var R = tensor*(N)(M)[ ((i,j),random()) | i <- 0..(N-1), j <- 0..(M-1), random() < sparsity ];
+var P = tensor*(N,D)[ ((i,j),random()) | i <- 0..(N-1), j <- 0..(D-1) ];
+var Q = tensor*(D,M)[ ((i,j),random()/n) | i <- 0..(D-1), j <- 0..(M-1) ];
+
+var iter = 0;
+while(iter < iterations) {
+    var E1 = tensor*(N,M) (P @ Q);
+    var E2 = tensor*(N,M) (R-E1);
+    var P1 = tensor*(N,D)[ ((i,k),+/v) | ((i,j),e) <- E2, ((k,jj),q) <- Q, jj == j,
+                            let v = 2.0 * alpha * e * q, group by (i,k) ];
+    P = tensor*(N,D)[ ((i,j), p1 + p - alpha * beta * p) | ((i,j),p1) <- P1, ((ii,jj),p) <- P, ii==i,jj==j ];
+    var Q1 = tensor*(D,M)[ ((k,j),+/v) | ((i,j),e) <- E2, ((ii,k),p) <- P, ii == i,
+                            let v = 2*alpha*e*p, group by (k,j) ];
+    Q = tensor*(D,M)[ ((k,j), q1 + q - alpha * beta * q) | ((k,j),q1) <- Q1, ((kk,jj),q) <- Q, jj==j,kk==k ];
+    iter = iter + 1;
+}
+Q;

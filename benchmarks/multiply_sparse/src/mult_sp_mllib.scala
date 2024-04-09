@@ -20,36 +20,41 @@ object Multiply {
     val repeats = args(0).toInt   // how many times to repeat each experiment
     // each matrix has n*m elements
     val n = args(1).toInt
-    val m = n
+    val iterations = args(2).toInt
+    val sparsity = 0.01
     parami(block_dim_size,1000)  // size of each dimension in a block
     val N = 1000
     parami(number_of_partitions,100)
 
     val conf = new SparkConf().setAppName("multiply")
     spark_context = new SparkContext(conf)
-    val spark = SparkSession.builder().config(conf).getOrCreate()
-    import spark.implicits._
 
     conf.set("spark.logConf","false")
     conf.set("spark.eventLog.enabled","false")
     LogManager.getRootLogger().setLevel(Level.WARN)
 
-    def randomTile ( nd: Int, md: Int ): DenseMatrix = {
-      val max = 0.13
-      val rand = new Random()
-      new DenseMatrix(nd,md,Array.tabulate(nd*md){ i => rand.nextDouble()*max })
+    val rand = new Random()
+    def random() = rand.nextDouble()
+
+    def randomTileSparse ( nd: Int, md: Int ): SparseMatrix = {
+      var entries = scala.collection.mutable.ArrayBuffer[(Int,Int,Double)]()
+      for (i <- 0 to nd-1; j <- 0 to md-1) {
+        if (random() < sparsity)
+          entries += ((i,j,random()))
+      }
+      SparseMatrix.fromCOO(nd,md,entries)
     }
 
-    def randomMatrix ( rows: Int, cols: Int ): RDD[((Int, Int),org.apache.spark.mllib.linalg.Matrix)] = {
+    def randomSparseMatrix ( rows: Int, cols: Int ): RDD[((Int, Int),org.apache.spark.mllib.linalg.Matrix)] = {
       val l = Random.shuffle((0 until (rows+N-1)/N).toList)
       val r = Random.shuffle((0 until (cols+N-1)/N).toList)
       spark_context.parallelize(for { i <- l; j <- r } yield (i,j),number_of_partitions)
-                   .map{ case (i,j) => ((i,j),randomTile(if ((i+1)*N > rows) rows%N else N,
-                                                         if ((j+1)*N > cols) cols%N else N)) }
+            .map{ case (i,j) => ((i,j),randomTileSparse(if ((i+1)*N > rows) rows%N else N,
+                              if ((j+1)*N > cols) cols%N else N)) }
     }
 
-    val Am = randomMatrix(n,m).cache()
-    val Bm = randomMatrix(m,n).cache()
+    val Am = randomSparseMatrix(n,m).cache()
+    val Bm = randomSparseMatrix(m,n).cache()
 
     var A = new BlockMatrix(Am,N,N).cache
     var B = new BlockMatrix(Bm,N,N).cache
@@ -58,12 +63,13 @@ object Multiply {
       = new BlockMatrix(m.blocks.map{ case (i,a) => (i,new DenseMatrix(N,N,a.toArray.map(f))) },
               m.rowsPerBlock,m.colsPerBlock)
 
-    // matrix multiplication of Dense-Dense tiled matrices in MLlib.linalg
+    // matrix multiplication of sparse-sparse tiled matrices in MLlib.linalg
     def testMultiplyMLlib(): Double = {
       val t = System.currentTimeMillis()
       try {
-        var C = A.multiply(B)
-        val x = C.blocks.count()
+      for(iter <- 0 to reps-1)
+        A = A.multiply(B)
+      val x = A.blocks.count
       } catch { case x: Throwable => println(x); return -1.0 }
       (System.currentTimeMillis()-t)/1000.0
     }
@@ -84,11 +90,11 @@ object Multiply {
         }
       }
       if (i > 1) s = (s-max_time)/(i-1)
-      print("*** %s n=%d m=%d N=%d ".format(name,n,m,N))
+      print("*** %s n=%d m=%d N=%d ".format(name,n,n,N))
       println("tries=%d %.3f secs".format(i,s))
     }
  
-    test("MLlib Multiply",testMultiplyMLlib)
+    test("MLlib Multiply sparse-sparse",testMultiplyMLlib)
     spark_context.stop()
   }
 }

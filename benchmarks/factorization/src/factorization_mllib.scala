@@ -9,7 +9,7 @@ import scala.collection.Seq
 import scala.util.Random
 import Math._
 
-object Multiply {
+object Factorization {
   /* The size of an object */
   def sizeof ( x: AnyRef ): Long = {
     import org.apache.spark.util.SizeEstimator.estimate
@@ -20,22 +20,25 @@ object Multiply {
     val repeats = args(0).toInt   // how many times to repeat each experiment
     // each matrix has n*m elements
     val n = args(1).toInt
-    val m = n
+    val m = args(2).toInt
+    val d = args(3).toInt
+    val iterations = args(4).toInt
+    val sparsity = 0.01
+    val alpha = 0.002
+    val beta = 0.02
+  
     parami(block_dim_size,1000)  // size of each dimension in a block
     val N = 1000
     parami(number_of_partitions,100)
 
-    val conf = new SparkConf().setAppName("multiply")
+    val conf = new SparkConf().setAppName("factorization")
     spark_context = new SparkContext(conf)
-    val spark = SparkSession.builder().config(conf).getOrCreate()
-    import spark.implicits._
-
     conf.set("spark.logConf","false")
     conf.set("spark.eventLog.enabled","false")
     LogManager.getRootLogger().setLevel(Level.WARN)
 
     def randomTile ( nd: Int, md: Int ): DenseMatrix = {
-      val max = 0.13
+      val max = 0.1
       val rand = new Random()
       new DenseMatrix(nd,md,Array.tabulate(nd*md){ i => rand.nextDouble()*max })
     }
@@ -43,27 +46,54 @@ object Multiply {
     def randomMatrix ( rows: Int, cols: Int ): RDD[((Int, Int),org.apache.spark.mllib.linalg.Matrix)] = {
       val l = Random.shuffle((0 until (rows+N-1)/N).toList)
       val r = Random.shuffle((0 until (cols+N-1)/N).toList)
-      spark_context.parallelize(for { i <- l; j <- r } yield (i,j),number_of_partitions)
+      spark_context.parallelize(for { i <- l; j <- r } yield (i,j))
                    .map{ case (i,j) => ((i,j),randomTile(if ((i+1)*N > rows) rows%N else N,
                                                          if ((j+1)*N > cols) cols%N else N)) }
     }
 
-    val Am = randomMatrix(n,m).cache()
-    val Bm = randomMatrix(m,n).cache()
+    def randomTileSparse ( nd: Int, md: Int ): SparseMatrix = {
+      val max = 10
+      val rand = new Random()
+      var entries = scala.collection.mutable.ArrayBuffer[(Int,Int,Double)]()
+      for (i <- 0 to nd-1; j <- 0 to md-1) {
+        if (rand.nextDouble() < sparsity)
+          entries += ((i,j,rand.nextDouble()*max))
+      }
+      SparseMatrix.fromCOO(nd,md,entries)
+    }
 
-    var A = new BlockMatrix(Am,N,N).cache
-    var B = new BlockMatrix(Bm,N,N).cache
+    def randomSparseMatrix ( rows: Int, cols: Int ): RDD[((Int, Int),org.apache.spark.mllib.linalg.Matrix)] = {
+      val l = Random.shuffle((0 until (rows+N-1)/N).toList)
+      val r = Random.shuffle((0 until (cols+N-1)/N).toList)
+      spark_context.parallelize(for { i <- l; j <- r } yield (i,j),number_of_partitions)
+            .map{ case (i,j) => ((i,j),randomTileSparse(if ((i+1)*N > rows) rows%N else N,
+                              if ((j+1)*N > cols) cols%N else N)) }
+    }
+
+    val Rm = randomSparseMatrix(n,m).cache()
+    val Pm = randomMatrix(n,d).cache()
+    val Qm = randomMatrix(d,m).cache()
+
+    val R = new BlockMatrix(Rm,N,N).cache
+    val Pinit = new BlockMatrix(Pm,N,N).cache
+    val Qinit = new BlockMatrix(Qm,N,N).cache
 
     def map ( m: BlockMatrix, f: Double => Double ): BlockMatrix
       = new BlockMatrix(m.blocks.map{ case (i,a) => (i,new DenseMatrix(N,N,a.toArray.map(f))) },
               m.rowsPerBlock,m.colsPerBlock)
 
-    // matrix multiplication of Dense-Dense tiled matrices in MLlib.linalg
-    def testMultiplyMLlib(): Double = {
+    def testFactorizationMLlib(): Double = {
       val t = System.currentTimeMillis()
+      var E = R
+      var P = Pinit
+      var Q = Qinit
       try {
-        var C = A.multiply(B)
-        val x = C.blocks.count()
+        for(iter <- 0 to iterations-1) {
+          E = R.subtract(P.multiply(Q))
+          P = P.add(map(map(E.multiply(Q.transpose),2*_).subtract(map(P,beta*_)),alpha*_))
+          Q = Q.add(map(map(E.transpose.multiply(P),2*_).transpose.subtract(map(Q,beta*_)),alpha*_))
+        }
+        val x = E.blocks.count+P.blocks.count+Q.blocks.count
       } catch { case x: Throwable => println(x); return -1.0 }
       (System.currentTimeMillis()-t)/1000.0
     }
@@ -84,11 +114,11 @@ object Multiply {
         }
       }
       if (i > 1) s = (s-max_time)/(i-1)
-      print("*** %s n=%d m=%d N=%d ".format(name,n,m,N))
+      print("*** %s n=%d, m=%d, d=%d, N=%d ".format(name,n,m,d,N))
       println("tries=%d %.3f secs".format(i,s))
     }
  
-    test("MLlib Multiply",testMultiplyMLlib)
+    test("MLlib Factorization",testFactorizationMLlib)
     spark_context.stop()
   }
 }

@@ -1,0 +1,19 @@
+#!/bin/bash
+
+export EXP_HOME="$(pwd -P)"
+source $EXP_HOME/env_setup.sh
+
+command="sbatch -A $ACCOUNT_NAME -p compute  -N $N_NODES --ntasks-per-node=$N_TASKS_PER_NODE -c $N_CPUS_PER_TASK --mem=$MEM_LIMIT --export=ALL -t $TIME_LIMIT"
+echo $command
+
+n=20000
+iterations=1
+
+# TensorPlanner
+$command tp_mvapich_mult.sh $n $iterations
+
+# SAC
+$command sac_mult.sh $n $iterations
+
+# MLlib
+$command mllib_mult.sh $n $iterations
