@@ -1,8 +1,10 @@
+import os
 import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
-import pandas as pd
 import time
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 class CustomDataset(Dataset):
     def __init__(self, n, m):
@@ -29,6 +31,7 @@ class Trainer:
 
     def _run_batch(self, source, targets):
         output = self.model(source)
+        output = output.squeeze(-1)
         loss = torch.nn.MSELoss()
         err = loss(output,targets)
         err.backward()
@@ -40,6 +43,9 @@ class Trainer:
             self._run_batch(source, targets)
 
     def train(self, max_epochs: int):
+        local_rank = int(os.environ["LOCAL_RANK"])
+        self.model = DDP(self.model)
+
         for epoch in range(max_epochs):
             self._run_epoch(epoch)
 
@@ -59,7 +65,6 @@ def prepare_dataloader(dataset: Dataset, batch_size: int):
     )
 
 def test(dataloader, model):
-    size = len(dataloader.dataset)
     num_batches = len(dataloader)
     model.eval()
     test_loss = 0
@@ -82,7 +87,6 @@ def main(total_epochs, n, m, batch_size):
     test_data = prepare_dataloader(test_dataset, batch_size)
     test(test_data,trainer.model)
 
-
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description='simple distributed training job')
@@ -91,5 +95,6 @@ if __name__ == "__main__":
     parser.add_argument('total_epochs', type=int, help='Total epochs to train the model')
     parser.add_argument('--batch_size', default=32, type=int, help='Input batch size on each device (default: 32)')
     args = parser.parse_args()
-
+    dist.init_process_group(backend="gloo")
     main(args.total_epochs, args.n, args.m, args.batch_size)
+    dist.destroy_process_group()

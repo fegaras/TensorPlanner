@@ -3,15 +3,18 @@
 #SBATCH --output="mllib_factorization_%j.out"
 
 export HADOOP_CONF_DIR=$HOME/expansecluster
+
+##########################
+# Load required modules
+##########################
 module load cpu/0.15.4 gcc/7.5.0 openjdk hadoop/3.2.2 spark
-SW=/expanse/lustre/projects/uot166/fegaras
-export EXP_HOME="$(pwd -P)"
 
 JARS=.
 for I in `ls $SPARK_HOME/jars/*.jar -I *unsafe*`; do
     JARS=$JARS:$I
 done
 
+export EXP_HOME="$(pwd -P)"
 rm -rf classes
 mkdir -p classes
 

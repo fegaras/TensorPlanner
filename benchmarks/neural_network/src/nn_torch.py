@@ -1,17 +1,17 @@
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
-import pandas as pd
 import time
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 class CustomDataset(Dataset):
     def __init__(self, n, m, nb_classes):
         self.n = n
         self.m = m
         X = torch.randn(n,m)
-        #y = torch.randint(nb_classes, (n,), dtype=torch.int64)
-        #y = torch.empty(n, dtype=torch.long).random_(nb_classes)
         y = torch.randn(n, nb_classes).softmax(dim=1)
         self.data = [(torch.index_select(X,0,torch.tensor([idx])),torch.index_select(y,0,torch.tensor([idx]))) for idx in range(n)]
 
@@ -57,6 +57,9 @@ class Trainer:
             self._run_batch(source, targets)
 
     def train(self, max_epochs: int):
+        local_rank = int(os.environ["LOCAL_RANK"])
+        self.model = DDP(self.model)
+        
         for epoch in range(max_epochs):
             self._run_epoch(epoch)
 
@@ -76,7 +79,6 @@ def prepare_dataloader(dataset: Dataset, batch_size: int):
     )
 
 def test(dataloader, model):
-    size = len(dataloader.dataset)
     num_batches = len(dataloader)
     model.eval()
     test_loss = 0
@@ -111,4 +113,6 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', default=32, type=int, help='Input batch size on each device (default: 32)')
     args = parser.parse_args()
 
+    dist.init_process_group(backend="gloo")
     main(args.total_epochs, args.n, args.m, args.nb_classes, args.batch_size)
+    dist.destroy_process_group()

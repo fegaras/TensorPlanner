@@ -6,9 +6,13 @@ echo "Scalapack Multiply Job"
 nodes=$SLURM_NNODES
 echo "Number of nodes = " $nodes
 
+##########################
+# Load required modules
+##########################
 module purge
 module load slurm cpu/0.17.3b  gcc/10.2.0 openmpi/4.1.3 intel-mkl/2020.4.304
-export OMP_NUM_THREADS=64
+
+export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export EXP_HOME="$(pwd -P)"
 
 mpicxx -fopenmp -o $EXP_HOME/sc_mult $EXP_HOME/src/mult_scalapack.cpp  \

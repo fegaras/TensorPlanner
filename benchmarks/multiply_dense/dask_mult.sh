@@ -4,11 +4,12 @@
 
 nodes=$SLURM_NNODES
 echo "Number of nodes = " $nodes
+
+##########################
+# Load required modules
+##########################
 module purge
 module load slurm cpu/0.17.3b  gcc/10.2.0 openmpi/4.1.3
-
-#python3 -m pip install "dask[complete]"
-#pip install dask_mpi --upgrade
 
 export EXP_HOME="$(pwd -P)"
 n=$1

@@ -6,10 +6,13 @@ echo "TensorPlanner Factorization Job"
 nodes=$SLURM_NNODES
 echo "Number of nodes = " $nodes
 
+##########################
+# Load required modules
+##########################
 module purge
 module load slurm cpu/0.17.3b  gcc/10.2.0/npcyll4 openmpi/4.1.3
-export EXP_HOME="$(pwd -P)"
 
+export EXP_HOME="$(pwd -P)"
 rm -rf classes
 mkdir -p classes
 file="factorization_tp.diablo"
@@ -21,6 +24,9 @@ ulimit -l unlimited
 ulimit -s unlimited
 
 export collect=false
+##########################
+# Set trace=true to print generated plan, schedules and execution logs
+##########################
 export trace=false
 
 SOCKETS=2

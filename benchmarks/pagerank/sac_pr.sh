@@ -16,11 +16,11 @@ echo "Number of executors = " $executors
 SPARK_OPTIONS="--driver-memory 24G --num-executors $executors --executor-cores 12 --executor-memory 24G --driver-java-options '-Xss512m' --supervise"
 
 export HADOOP_CONF_DIR=$HOME/expansecluster
+
+##########################
+# Load required modules
+##########################
 module load cpu/0.15.4 gcc/7.5.0 openjdk hadoop/3.2.2 spark
-
-SW=/expanse/lustre/projects/uot166/fegaras
-
-export EXP_HOME="$(pwd -P)"
 
 # location of data storage and scratch space on every worker (on local SSD)
 scratch=/scratch/$USER/job_$SLURM_JOB_ID
@@ -46,6 +46,7 @@ for I in `ls $SPARK_HOME/jars/*.jar -I *unsafe*`; do
     JARS=$JARS:$I
 done
 
+export EXP_HOME="$(pwd -P)"
 rm -rf classes
 mkdir -p classes
 

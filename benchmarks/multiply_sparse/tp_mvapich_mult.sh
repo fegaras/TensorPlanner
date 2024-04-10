@@ -6,10 +6,13 @@ echo "TensorPlanner Multiply Job"
 nodes=$SLURM_NNODES
 echo "Number of nodes = " $nodes
 
+##########################
+# Load required modules
+##########################
 module purge
 module load slurm cpu/0.17.3b gcc/10.2.0/npcyll4 mvapich2/2.3.7/iyjtn3x
-export EXP_HOME="$(pwd -P)"
 
+export EXP_HOME="$(pwd -P)"
 rm -rf classes
 mkdir -p classes
 file="mult_sp_tp.diablo"
