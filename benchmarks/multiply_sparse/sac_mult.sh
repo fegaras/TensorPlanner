@@ -56,9 +56,10 @@ scalac -d classes -cp classes:${JARS}:${DIABLO_HOME}/lib/diablo.jar ${EXP_HOME}/
 
 jar cf sac.jar -C classes .
 n=$1
-iterations=$2
-echo "n: $n, m: $n"
-spark-submit --jars ${DIABLO_HOME}/lib/diablo.jar --class Multiply --master $MASTER $SPARK_OPTIONS sac.jar 4 $n $iterations
+m=$2
+iterations=$3
+echo "n: $n, m: $m, iterations: $iterations"
+spark-submit --jars ${DIABLO_HOME}/lib/diablo.jar --class Multiply --master $MASTER $SPARK_OPTIONS sac.jar 4 $n $m $iterations
 
 stop-dfs.sh
 myhadoop-cleanup.sh

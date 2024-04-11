@@ -31,5 +31,6 @@ done
 export EXP_HOME="$(pwd -P)"
 
 n=$1
-reps=$2
-python3 $EXP_HOME/src/Multiply_Ray.py $n $reps
+m=$2
+iterations=$3
+python3 $EXP_HOME/src/Multiply_Ray.py $n $m $iterations

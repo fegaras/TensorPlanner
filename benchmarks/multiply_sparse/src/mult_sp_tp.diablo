@@ -1,9 +1,10 @@
 var N = args(0).toInt;
-var iterations = args(1).toInt;
+var M = args(1).toInt;
+var iterations = args(2).toInt;
 var sparsity = 0.01;
 
-var Az = tensor*(N)(N)[ ((i,j),random()) | i <-0..(N-1), j<-0..(N-1), random() < sparsity ];
-var Bz = tensor*(N)(N)[ ((i,j),random()/N) | i <-0..(N-1), j<-0..(N-1), random() < sparsity  ];
+var Az = tensor*(N)(M)[ ((i,j),random()) | i <-0..(N-1), j<-0..(N-1), random() < sparsity ];
+var Bz = tensor*(M)(N)[ ((i,j),random()/N) | i <-0..(N-1), j<-0..(N-1), random() < sparsity  ];
 
 var iter = 0;
 while(iter < iterations) {

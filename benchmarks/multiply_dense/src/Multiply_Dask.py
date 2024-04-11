@@ -9,8 +9,7 @@ import time
 if __name__ == '__main__':
     initialize()
     N = 1000
-    n,iterations = int(sys.argv[1]), int(sys.argv[2])
-    m=n
+    n,m,iterations = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
     print(f"n: {n}, m: {m}, iterations: {iterations}")
     client = Client()
     xd = da.random.normal(0.13, 0.5, size=(n, m), chunks=(N,N))

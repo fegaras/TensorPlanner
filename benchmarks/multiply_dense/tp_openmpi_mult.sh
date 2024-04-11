@@ -28,7 +28,8 @@ export trace=false
 
 SOCKETS=2
 n=$1
-iterations=$2
+m=$2
+iterations=$3
 echo "n: $n, iterations: $iterations"
 # for each expanse node: 2 sockets, 1 executor per socket, 64 threads per executor
-mpirun -N $SOCKETS --bind-to socket a.out $n $iterations
+mpirun -N $SOCKETS --bind-to socket a.out $n $m $iterations

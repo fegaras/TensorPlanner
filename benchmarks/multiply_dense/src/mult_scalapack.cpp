@@ -25,7 +25,7 @@ extern "C" {
 }
 
 int main(int argc, char **argv) {
-    const MKL_INT n = atoi(argv[1]), iZero = 0, iOne = 1; // Matrix size
+    const MKL_INT n = atoi(argv[1]), m = atoi(argv[2]), iZero = 0, iOne = 1; // Matrix size
     const MKL_INT nb = 1000; // Block size (adjust as needed)
 
     // Initialize MPI (required for Scalapack)
@@ -51,9 +51,9 @@ int main(int argc, char **argv) {
     // Allocate local memory for matrix A, B, and C
     MKL_INT myArows, myAcols, myBrows, myBcols, myCrows, myCcols;
     myArows = numroc_(&n, &nb, &myrow, &iZero, &prow);
-    myAcols = numroc_(&n, &nb, &mycol, &iZero, &pcol);
+    myAcols = numroc_(&m, &nb, &mycol, &iZero, &pcol);
 
-    myBrows = numroc_(&n, &nb, &myrow, &iZero, &prow);
+    myBrows = numroc_(&m, &nb, &myrow, &iZero, &prow);
     myBcols = numroc_(&n, &nb, &mycol, &iZero, &pcol);
 
     myCrows = numroc_(&n, &nb, &myrow, &iZero, &prow);
@@ -74,12 +74,12 @@ int main(int argc, char **argv) {
     MKL_INT descA[9], descB[9], descC[9];
     MKL_INT info;
 
-    descinit_(descA, &n, &n, &nb, &nb, &irsrc, &icsrc, &icontxt, &myArows, &info);
-    descinit_(descB, &n, &n, &nb, &nb, &irsrc, &icsrc, &icontxt, &myBrows, &info);
+    descinit_(descA, &n, &m, &nb, &nb, &irsrc, &icsrc, &icontxt, &myArows, &info);
+    descinit_(descB, &m, &n, &nb, &nb, &irsrc, &icsrc, &icontxt, &myBrows, &info);
     descinit_(descC, &n, &n, &nb, &nb, &irsrc, &icsrc, &icontxt, &myCrows, &info);
 
     auto start = std::chrono::steady_clock::now();
-    pdgemm_(&trans, &trans, &n, &n, &n, &alpha, myA.data(), &iOne, &iOne, descA,
+    pdgemm_(&trans, &trans, &n, &n, &m, &alpha, myA.data(), &iOne, &iOne, descA,
         myB.data(), &iOne, &iOne, descB, &beta, myC.data(), &iOne, &iOne, descC);
     auto end = std::chrono::steady_clock::now();
     auto scalapack_time = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();

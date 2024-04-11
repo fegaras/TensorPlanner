@@ -38,12 +38,13 @@ class Trainer:
 
     def _run_epoch(self, epoch):
         b_sz = len(next(iter(self.train_data))[0])
-        print(f"[Epoch {epoch} | Batchsize: {b_sz} | Steps: {len(self.train_data)}")
+        local_rank = int(os.environ["LOCAL_RANK"])
+        if(local_rank == 0):
+            print(f"[Epoch {epoch} | Batchsize: {b_sz} | Steps: {len(self.train_data)}")
         for source, targets in self.train_data:
             self._run_batch(source, targets)
 
     def train(self, max_epochs: int):
-        local_rank = int(os.environ["LOCAL_RANK"])
         self.model = DDP(self.model)
 
         for epoch in range(max_epochs):
@@ -74,7 +75,9 @@ def test(dataloader, model):
             loss = torch.mean((pred - y) ** 2)
             test_loss += loss.item()
     test_loss /= num_batches
-    print(f"Test Error: {test_loss}\n")
+    local_rank = int(os.environ["LOCAL_RANK"])
+    if(local_rank == 0):
+        print(f"Test Error: {test_loss}\n")
 
 def main(total_epochs, n, m, batch_size):
     dataset, model = load_train_objs(n, m)
@@ -82,7 +85,9 @@ def main(total_epochs, n, m, batch_size):
     start = time.time()
     trainer = Trainer(model, train_data)
     trainer.train(total_epochs)
-    print(f"Linear Regression, n: {n}, m: {m}, time: {time.time()-start}")
+    local_rank = int(os.environ["LOCAL_RANK"])
+    if(local_rank == 0):
+        print(f"Linear Regression, n: {n}, m: {m}, time: {time.time()-start}")
     test_dataset = CustomDataset(100,m)
     test_data = prepare_dataloader(test_dataset, batch_size)
     test(test_data,trainer.model)

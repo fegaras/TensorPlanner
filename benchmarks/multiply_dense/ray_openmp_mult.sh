@@ -32,6 +32,7 @@ done
 export EXP_HOME="$(pwd -P)"
 
 n=$1
-iters=$2
-echo "n: $n, m: $n, iterations: $iters"
-python3 $EXP_HOME/src/Multiply_Ray_Openmp.py $n $iters
+m=$2
+iterations=$3
+echo "n: $n, m: $m, iterations: $iterations"
+python3 $EXP_HOME/src/Multiply_Ray_Openmp.py $n $m $iterations

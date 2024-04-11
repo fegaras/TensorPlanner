@@ -35,5 +35,6 @@ export collect=false
 export trace=false
 
 n=$1
-iterations=$2
-srun --mpi=pmi2 -n $SLURM_NTASKS -c $SLURM_CPUS_PER_TASK ./a.out $n $iterations
+m=$2
+iterations=$3
+srun --mpi=pmi2 -n $SLURM_NTASKS -c $SLURM_CPUS_PER_TASK ./a.out $n $m $iterations

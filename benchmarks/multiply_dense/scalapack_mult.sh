@@ -23,4 +23,5 @@ mpicxx -fopenmp -o $EXP_HOME/sc_mult $EXP_HOME/src/mult_scalapack.cpp  \
 
 echo "Compilation done..."
 n=$1
-srun -n $SLURM_NTASKS $EXP_HOME/sc_mult $n
+m=$2
+srun -n $SLURM_NTASKS $EXP_HOME/sc_mult $n $m

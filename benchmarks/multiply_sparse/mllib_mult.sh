@@ -57,9 +57,10 @@ start-dfs.sh
 myspark start
 
 n=$1
-iterations=$2
-echo "n: $n, m: $n, iterations: $iterations"
-spark-submit --jars ${DIABLO_HOME}/lib/diablo.jar --class Multiply --master $MASTER $SPARK_OPTIONS mllib.jar 4 $n $iterations
+m=$2
+iterations=$3
+echo "n: $n, m: $m, iterations: $iterations"
+spark-submit --jars ${DIABLO_HOME}/lib/diablo.jar --class Multiply --master $MASTER $SPARK_OPTIONS mllib.jar 4 $n $m $iterations
 
 myspark stop
 stop-dfs.sh

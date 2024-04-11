@@ -20,7 +20,7 @@ object Multiply {
     val repeats = args(0).toInt   // how many times to repeat each experiment
     // each matrix has n*m elements
     val n = args(1).toInt
-    val m = n
+    val m = args(2).toInt
     parami(block_dim_size,1000)  // size of each dimension in a block
     val N = 1000
     parami(number_of_partitions,100)

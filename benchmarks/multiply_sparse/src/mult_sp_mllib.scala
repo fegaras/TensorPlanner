@@ -20,7 +20,8 @@ object Multiply {
     val repeats = args(0).toInt   // how many times to repeat each experiment
     // each matrix has n*m elements
     val n = args(1).toInt
-    val iterations = args(2).toInt
+    val m = args(2).toInt
+    val iterations = args(3).toInt
     val sparsity = 0.01
     parami(block_dim_size,1000)  // size of each dimension in a block
     val N = 1000
@@ -90,7 +91,7 @@ object Multiply {
         }
       }
       if (i > 1) s = (s-max_time)/(i-1)
-      print("*** %s n=%d m=%d N=%d ".format(name,n,n,N))
+      print("*** %s n=%d m=%d N=%d ".format(name,n,m,N))
       println("tries=%d %.3f secs".format(i,s))
     }
  

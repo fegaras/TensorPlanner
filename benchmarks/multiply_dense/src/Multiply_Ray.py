@@ -4,8 +4,7 @@ import sys
 import time
 import numpy as np
 
-n, iterations = int(sys.argv[1]), int(sys.argv[2])
-m = n
+n, m, iterations = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
 print(f"iterations: {iterations}, n: {n}, m: {m}")
 ray.init(address=os.environ["ip_head"])
 

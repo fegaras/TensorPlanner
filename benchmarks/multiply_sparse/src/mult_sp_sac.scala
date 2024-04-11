@@ -20,7 +20,8 @@ object Multiply {
     val repeats = args(0).toInt   // how many times to repeat each experiment
     // each matrix has n*m elements
     val n = args(1).toInt
-    val iterations = args(2).toInt
+    val m = args(2).toInt
+    val iterations = args(3).toInt
     val sparsity = 0.01
 
     def pr ( x: (Any,Any) ) {
@@ -36,8 +37,8 @@ object Multiply {
       var t = System.currentTimeMillis()
       try {
         val plan = q("""
-            var Az = tensor*(n)(n)[ ((i,j),random()) | i <- 0..(n-1), j <- 0..(n-1), random() < sparsity ];
-            var Bz = tensor*(n)(n)[ ((i,j),random()/n) | i <- 0..(n-1), j <- 0..(n-1), random() < sparsity ];
+            var Az = tensor*(n)(m)[ ((i,j),random()) | i <- 0..(n-1), j <- 0..(m-1), random() < sparsity ];
+            var Bz = tensor*(m)(n)[ ((i,j),random()/n) | i <- 0..(m-1), j <- 0..(n-1), random() < sparsity ];
             var iter = 0;
             while(iter < iterations) {
                 Az = tensor*(n)(n)[ ((i,j),+/c) | ((i,k),a) <- Az, ((kk,j),b) <- Bz, k == kk, let c = a*b, group by (i,j) ];
@@ -66,7 +67,7 @@ object Multiply {
         }
       }
       if (i > 1) s = (s-max_time)/(i-1)
-      print("*** %s n=%d m=%d N=%d ".format(name,n,n,N))
+      print("*** %s n=%d m=%d N=%d ".format(name,n,m,N))
       println("tries=%d %.3f secs".format(i,s))
     }
 
