@@ -10,9 +10,9 @@ object Multiply {
     val N = block_dim_size
 
     val conf = new SparkConf().setAppName("multiply")
-    spark_context = new SparkContext(conf)
     conf.set("spark.logConf","false")
     conf.set("spark.eventLog.enabled","false")
+    spark_context = new SparkContext(conf)
     LogManager.getRootLogger().setLevel(Level.WARN)
     param(groupByJoin,false)
     param(use_map_join,false)

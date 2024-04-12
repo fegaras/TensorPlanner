@@ -26,12 +26,9 @@ object Multiply {
     parami(number_of_partitions,100)
 
     val conf = new SparkConf().setAppName("multiply")
-    spark_context = new SparkContext(conf)
-    val spark = SparkSession.builder().config(conf).getOrCreate()
-    import spark.implicits._
-
     conf.set("spark.logConf","false")
     conf.set("spark.eventLog.enabled","false")
+    spark_context = new SparkContext(conf)
     LogManager.getRootLogger().setLevel(Level.WARN)
 
     def randomTile ( nd: Int, md: Int ): DenseMatrix = {

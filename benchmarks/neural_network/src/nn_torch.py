@@ -52,8 +52,8 @@ class Trainer:
 
     def _run_epoch(self, epoch):
         b_sz = len(next(iter(self.train_data))[0])
-        local_rank = int(os.environ["LOCAL_RANK"])
-        if(local_rank == 0):
+        global_rank = int(os.environ["RANK"])
+        if(global_rank == 0):
             print(f"[Epoch {epoch} | Batchsize: {b_sz} | Steps: {len(self.train_data)}")
         for source, targets in self.train_data:
             self._run_batch(source, targets)
@@ -89,8 +89,8 @@ def test(dataloader, model):
             loss = torch.mean((pred - y) ** 2)
             test_loss += loss.item()
     test_loss /= num_batches
-    local_rank = int(os.environ["LOCAL_RANK"])
-    if(local_rank == 0):
+    global_rank = int(os.environ["RANK"])
+    if(global_rank == 0):
         print(f"Test Error: {test_loss}\n")
 
 def main(total_epochs, n, m, nb_classes, batch_size):
@@ -99,8 +99,8 @@ def main(total_epochs, n, m, nb_classes, batch_size):
     start = time.time()
     trainer = Trainer(model, train_data, optimizer)
     trainer.train(total_epochs)
-    local_rank = int(os.environ["LOCAL_RANK"])
-    if(local_rank == 0):
+    global_rank = int(os.environ["RANK"])
+    if(global_rank == 0):
         print(f"Neural Network, n: {n}, m: {m}, time: {time.time()-start}")
     test_dataset = CustomDataset(100,m,nb_classes)
     test_data = prepare_dataloader(test_dataset, batch_size)

@@ -28,10 +28,9 @@ object Multiply {
     parami(number_of_partitions,100)
 
     val conf = new SparkConf().setAppName("multiply")
-    spark_context = new SparkContext(conf)
-
     conf.set("spark.logConf","false")
     conf.set("spark.eventLog.enabled","false")
+    spark_context = new SparkContext(conf)
     LogManager.getRootLogger().setLevel(Level.WARN)
 
     val rand = new Random()
@@ -68,7 +67,7 @@ object Multiply {
     def testMultiplyMLlib(): Double = {
       val t = System.currentTimeMillis()
       try {
-      for(iter <- 0 to reps-1)
+      for(iter <- 0 to iterations-1)
         A = A.multiply(B)
       val x = A.blocks.count
       } catch { case x: Throwable => println(x); return -1.0 }
