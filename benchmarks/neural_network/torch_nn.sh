@@ -17,8 +17,8 @@ MASTER_IP=$MASTER_ADDR:$MASTER_PORT
 export MASTER_IP
 echo "Node IP: $MASTER_IP"
 
-#export MASTER_ADDR=$(scontrol show hostname ${SLURM_NODELIST} | head -n 1)
-#echo Node IP: $MASTER_ADDR
+source "$PYTHON_ENV/bin/activate" # Activate the virtual environment
+
 export LOGLEVEL=ERROR
 
 export EXP_HOME="$(pwd -P)"
@@ -27,6 +27,7 @@ n=$1
 m=$2
 iterations=$3
 num_classes=$4
+echo "n: $n, m: $m, iterations: $iterations"
 
 srun torchrun --nnodes $N_NODES --nproc_per_node $N_TASKS_PER_NODE \
 --rdzv_id=100 --rdzv_backend=c10d --rdzv_endpoint=$MASTER_IP \

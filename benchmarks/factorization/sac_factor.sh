@@ -20,7 +20,7 @@ export HADOOP_CONF_DIR=$HOME/expansecluster
 ##########################
 # Load required modules
 ##########################
-module load cpu/0.15.4 gcc/7.5.0 openjdk hadoop/3.2.2 spark
+module load $SPARK_MODULES
 
 # location of data storage and scratch space on every worker (on local SSD)
 scratch=/scratch/$USER/job_$SLURM_JOB_ID
@@ -52,7 +52,7 @@ mkdir -p classes
 
 f="factorization_sac.scala"
 echo compiling $f ...
-scalac -d classes -cp classes:${JARS}:${DIABLO_HOME}/lib/diablo.jar ${EXP_HOME}/src/$f >/dev/null
+scalac -d classes -cp classes:${JARS}:${TP_HOME}/lib/diablo.jar ${EXP_HOME}/src/$f >/dev/null
 
 jar cf sac.jar -C classes .
 n=$1
@@ -60,7 +60,7 @@ m=$2
 d=$3
 iterations=$4
 echo "n: $n, m: $m, d: $d, iterations: $iterations"
-spark-submit --jars ${DIABLO_HOME}/lib/diablo.jar --class Factorization --master $MASTER $SPARK_OPTIONS sac.jar 4 $n $m $d $iterations
+spark-submit --jars ${TP_HOME}/lib/diablo.jar --class Factorization --master $MASTER $SPARK_OPTIONS sac.jar 4 $n $m $d $iterations
 
 stop-dfs.sh
 myhadoop-cleanup.sh

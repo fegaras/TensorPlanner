@@ -7,7 +7,7 @@ export HADOOP_CONF_DIR=$HOME/expansecluster
 ##########################
 # Load required modules
 ##########################
-module load cpu/0.15.4 gcc/7.5.0 openjdk hadoop/3.2.2 spark
+module load $SPARK_MODULES
 
 export EXP_HOME="$(pwd -P)"
 
@@ -21,7 +21,7 @@ mkdir -p classes
 
 f="mult_sp_mllib.scala"
 echo compiling $f ...
-scalac -d classes -cp classes:${JARS}:${DIABLO_HOME}/lib/diablo.jar ${EXP_HOME}/src/$f >/dev/null
+scalac -d classes -cp classes:${JARS}:${TP_HOME}/lib/diablo.jar ${EXP_HOME}/src/$f >/dev/null
 
 jar cf mllib.jar -C classes .
 
@@ -60,7 +60,7 @@ n=$1
 m=$2
 iterations=$3
 echo "n: $n, m: $m, iterations: $iterations"
-spark-submit --jars ${DIABLO_HOME}/lib/diablo.jar --class Multiply --master $MASTER $SPARK_OPTIONS mllib.jar 4 $n $m $iterations
+spark-submit --jars ${TP_HOME}/lib/diablo.jar --class Multiply --master $MASTER $SPARK_OPTIONS mllib.jar 4 $n $m $iterations
 
 myspark stop
 stop-dfs.sh

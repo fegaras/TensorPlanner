@@ -15,6 +15,7 @@ ip_head=$head_node_ip:$port
 export ip_head
 echo "IP Head: $ip_head"
 
+source "$PYTHON_ENV/bin/activate" # Activate the virtual environment
 echo "Starting HEAD at $head_node"
 srun --nodes=1 --ntasks=1 -w "$head_node" ray start --head --node-ip-address="$head_node_ip" --port=$port --num-cpus 64 --block &
 sleep 10
@@ -33,4 +34,5 @@ export EXP_HOME="$(pwd -P)"
 n=$1
 m=$2
 iterations=$3
+echo "n: $n, m: $m, iterations: $iterations"
 python3 $EXP_HOME/src/Multiply_Ray.py $n $m $iterations

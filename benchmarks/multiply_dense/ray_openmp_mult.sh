@@ -15,6 +15,7 @@ ip_head=$head_node_ip:$port
 export ip_head
 echo "IP Head: $ip_head"
 
+source "$PYTHON_ENV/bin/activate" # Activate the virtual environment
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 echo "Starting HEAD at $head_node"
 srun --nodes=1 --ntasks=1 -w "$head_node" ray start --head --node-ip-address="$head_node_ip" --port=$port --block &

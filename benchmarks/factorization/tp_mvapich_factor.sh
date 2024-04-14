@@ -10,7 +10,7 @@ echo "Number of nodes = " $nodes
 # Load required modules
 ##########################
 module purge
-module load slurm cpu/0.17.3b gcc/10.2.0/npcyll4 mvapich2/2.3.7/iyjtn3x
+module load $TP_MVAPICH2_MODULES
 
 export EXP_HOME="$(pwd -P)"
 rm -rf classes
@@ -38,4 +38,5 @@ n=$1
 m=$2
 d=$3
 iterations=$4
+echo "n: $n, m: $m, d: $d, iterations: $iterations"
 srun --mpi=pmi2 -n $SLURM_NTASKS -c $SLURM_CPUS_PER_TASK ./a.out $n $m $d $iterations

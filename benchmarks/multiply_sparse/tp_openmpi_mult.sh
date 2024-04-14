@@ -10,7 +10,7 @@ echo "Number of nodes = " $nodes
 # Load required modules
 ##########################
 module purge
-module load slurm cpu/0.17.3b  gcc/10.2.0/npcyll4 openmpi/4.1.3
+module load $TP_OPENMPI_MODULES
 
 export EXP_HOME="$(pwd -P)"
 rm -rf classes

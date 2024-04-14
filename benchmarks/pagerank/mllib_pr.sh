@@ -7,7 +7,7 @@ export HADOOP_CONF_DIR=$HOME/expansecluster
 ##########################
 # Load required modules
 ##########################
-module load cpu/0.15.4 gcc/7.5.0 openjdk hadoop/3.2.2 spark
+module load $SPARK_MODULES
 
 JARS=.
 for I in `ls $SPARK_HOME/jars/*.jar -I *unsafe*`; do
@@ -20,7 +20,7 @@ mkdir -p classes
 
 f="pagerank_mllib.scala"
 echo compiling $f ...
-scalac -d classes -cp classes:${JARS}:${DIABLO_HOME}/lib/diablo.jar ${EXP_HOME}/src/$f >/dev/null
+scalac -d classes -cp classes:${JARS}:${TP_HOME}/lib/diablo.jar ${EXP_HOME}/src/$f >/dev/null
 
 jar cf mllib.jar -C classes .
 
@@ -59,7 +59,7 @@ myspark start
 n=$1
 iterations=$2
 echo "n: $n, iterations: $iterations"
-spark-submit --jars ${DIABLO_HOME}/lib/diablo.jar --class PageRank --master $MASTER $SPARK_OPTIONS mllib.jar 4 $n $iterations
+spark-submit --jars ${TP_HOME}/lib/diablo.jar --class PageRank --master $MASTER $SPARK_OPTIONS mllib.jar 4 $n $iterations
 
 myspark stop
 stop-dfs.sh
