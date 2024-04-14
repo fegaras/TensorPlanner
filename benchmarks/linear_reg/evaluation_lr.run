@@ -9,7 +9,14 @@ m=5000
 iterations=10
 
 # TensorPlanner
-$command tp_mvapich_lr.sh $n $m $iterations
+##########################
+# Use Either OpenMPI or MVAPICH2
+##########################
+if [ "$use_mvapich" == "y" ]; then
+    $command tp_mvapich_lr.sh $n $m $iterations
+else
+    $command tp_openmpi_lr.sh $n $m $iterations
+fi
 
 # PyTorch
 $command torch_lr.sh $n $m $iterations

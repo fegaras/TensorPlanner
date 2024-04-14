@@ -8,7 +8,14 @@ n=10000
 iterations=10
 
 # TensorPlanner
-$command tp_mvapich_pr.sh $n $iterations
+##########################
+# Use Either OpenMPI or MVAPICH2
+##########################
+if [ "$use_mvapich" == "y" ]; then
+    $command tp_mvapich_pr.sh $n $iterations
+else
+    $command tp_openmpi_pr.sh $n $iterations
+fi
 
 # SAC
 $command sac_pr.sh $n $iterations

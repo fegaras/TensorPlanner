@@ -10,7 +10,14 @@ iterations=10
 num_classes=2
 
 # TensorPlanner
-$command tp_mvapich_nn.sh $n $m $iterations
+##########################
+# Use Either OpenMPI or MVAPICH2
+##########################
+if [ "$use_mvapich" == "y" ]; then
+    $command tp_mvapich_nn.sh $n $m $iterations
+else
+    $command tp_openmpi_nn.sh $n $m $iterations
+fi
 
 # PyTorch
 $command torch_nn.sh $n $m $iterations $num_classes

@@ -29,7 +29,6 @@ export SPARK_MODULES="slurm cpu/0.15.4 gcc/7.5.0 openjdk hadoop/3.2.2 spark"
 # Load ScaLAPACK modules
 export ScaLAPACK_MODULES="slurm cpu/0.17.3b  gcc/10.2.0 openmpi/4.1.3 intel-mkl/2020.4.304"
 
-
 ##########################
 # Create python virtual environment
 ##########################
@@ -56,6 +55,11 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 pip install pandas
 
 export PATH="$PYTHON_ENV/bin:$SCALA_HOME/bin:$TP_HOME/bin:$PATH"
+
+##########################
+# If uisng MVAPICH2 set use_mvapich="y", otherwise, set use_mvapich="n"
+##########################
+export use_mvapich="y"
 
 ##########################
 # Set up SLURM job configuration
