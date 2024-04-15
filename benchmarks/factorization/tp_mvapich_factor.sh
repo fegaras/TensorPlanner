@@ -2,6 +2,7 @@
 #SBATCH --job-name="tp_factorization"
 #SBATCH --output=tp_mvapich_factorization_%j.out
 
+source ../env_setup.sh
 echo "TensorPlanner Factorization Job"
 nodes=$SLURM_NNODES
 echo "Number of nodes = " $nodes

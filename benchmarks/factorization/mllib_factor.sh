@@ -2,6 +2,7 @@
 #SBATCH --job-name="mllib_factorization"
 #SBATCH --output="mllib_factorization_%j.out"
 
+source ../env_setup.sh
 export HADOOP_CONF_DIR=$HOME/expansecluster
 
 ##########################

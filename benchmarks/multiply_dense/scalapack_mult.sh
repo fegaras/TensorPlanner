@@ -2,7 +2,8 @@
 #SBATCH --job-name="scalapack_mult"
 #SBATCH --output="scalapack_multiply_%j.out"
 
-echo "Scalapack Multiply Job"
+source ../env_setup.sh
+echo "ScaLAPACK matrix multiplication Job"
 nodes=$SLURM_NNODES
 echo "Number of nodes = " $nodes
 

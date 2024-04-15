@@ -2,6 +2,8 @@
 #SBATCH --job-name="ray_mult"
 #SBATCH --output=ray_multiply_%j.out
 
+source ../env_setup.sh
+echo "Ray matrix multiplication job"
 node_count=$SLURM_NNODES
 echo "Number of nodes = " $node_count
 nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")

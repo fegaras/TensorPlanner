@@ -2,7 +2,8 @@
 #SBATCH --job-name="tp_mult"
 #SBATCH --output=tp_mvapich_multiply_%j.out
 
-echo "TensorPlanner Multiply Job"
+source ../env_setup.sh
+echo "TensorPlanner sparse matrix multiplication Job"
 nodes=$SLURM_NNODES
 echo "Number of nodes = " $nodes
 

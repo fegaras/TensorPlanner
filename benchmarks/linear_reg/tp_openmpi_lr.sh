@@ -2,6 +2,7 @@
 #SBATCH --job-name="tp_lr"
 #SBATCH --output=tp_openmpi_lr_%j.out
 
+source ../env_setup.sh
 echo "TensorPlanner Linear Regression Job"
 nodes=$SLURM_NNODES
 echo "Number of nodes = " $nodes

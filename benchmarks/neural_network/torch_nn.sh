@@ -2,6 +2,7 @@
 #SBATCH --job-name="torch_nn"
 #SBATCH --output=torch_nn_%j.out
 
+source ../env_setup.sh
 echo "PyTorch Neural Network Job"
 nodes=$SLURM_NNODES
 echo "Number of nodes = " $nodes

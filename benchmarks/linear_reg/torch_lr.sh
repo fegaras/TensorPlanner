@@ -2,6 +2,7 @@
 #SBATCH --job-name="torch_lr"
 #SBATCH --output=torch_lr_%j.out
 
+source ../env_setup.sh
 echo "PyTorch Linear Regression Job"
 nodes=$SLURM_NNODES
 echo "Number of nodes = " $nodes

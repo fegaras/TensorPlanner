@@ -2,6 +2,8 @@
 #SBATCH --job-name="dask_mult"
 #SBATCH --output="dask_multiply_%j.out"
 
+source ../env_setup.sh
+echo "Dask matrix multiplication job"
 nodes=$SLURM_NNODES
 echo "Number of nodes = " $nodes
 

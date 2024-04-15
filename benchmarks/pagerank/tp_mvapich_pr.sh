@@ -2,6 +2,7 @@
 #SBATCH --job-name="tp_pagerank"
 #SBATCH --output=tp_mvapich_pagerank_%j.out
 
+source ../env_setup.sh
 echo "TensorPlanner Pagerank Job"
 nodes=$SLURM_NNODES
 echo "Number of nodes = " $nodes

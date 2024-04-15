@@ -2,6 +2,7 @@
 #SBATCH --job-name="sac_pagerank"
 #SBATCH --output="sac_pagerank_%j.out"
 
+source ../env_setup.sh
 echo "SAC Pagerank Job"
 nodes=$SLURM_NNODES
 echo "Number of nodes = " $nodes

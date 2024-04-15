@@ -2,6 +2,7 @@
 #SBATCH --job-name="sac_factorization"
 #SBATCH --output="sac_factorization_%j.out"
 
+source ../env_setup.sh
 echo "SAC Factorization Job"
 nodes=$SLURM_NNODES
 echo "Number of nodes = " $nodes

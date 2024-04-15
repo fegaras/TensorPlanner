@@ -2,6 +2,8 @@
 #SBATCH --job-name="mllib_pagerank"
 #SBATCH --output="mllib_pagerank_%j.out"
 
+source ../env_setup.sh
+echo "MLlib Pagerank Job"
 export HADOOP_CONF_DIR=$HOME/expansecluster
 
 ##########################
@@ -24,7 +26,6 @@ scalac -d classes -cp classes:${JARS}:${TP_HOME}/lib/diablo.jar ${EXP_HOME}/src/
 
 jar cf mllib.jar -C classes .
 
-echo "MLlib Pagerank Job"
 nodes=$SLURM_NNODES
 echo "Number of nodes = " $nodes
 

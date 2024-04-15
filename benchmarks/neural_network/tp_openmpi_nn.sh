@@ -2,6 +2,7 @@
 #SBATCH --job-name="tp_nn"
 #SBATCH --output=tp_openmpi_nn_%j.out
 
+source ../env_setup.sh
 echo "TensorPlanner Neural Network Job"
 nodes=$SLURM_NNODES
 echo "Number of nodes = " $nodes

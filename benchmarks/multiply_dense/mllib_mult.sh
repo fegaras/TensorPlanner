@@ -2,6 +2,8 @@
 #SBATCH --job-name="mllib_mult"
 #SBATCH --output="mllib_multiply_%j.out"
 
+source ../env_setup.sh
+echo "MLlib matrix multiplication job"
 export HADOOP_CONF_DIR=$HOME/expansecluster
 
 ##########################

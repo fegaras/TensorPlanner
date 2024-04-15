@@ -2,7 +2,8 @@
 #SBATCH --job-name="sac_mult"
 #SBATCH --output="sac_multiply_%j.out"
 
-echo "SAC Multiply Job"
+source ../env_setup.sh
+echo "SAC sparse matrix multiplication Job"
 nodes=$SLURM_NNODES
 echo "Number of nodes = " $nodes
 

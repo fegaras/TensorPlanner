@@ -1,7 +1,10 @@
 #!/bin/bash
 
 SW=/expanse/lustre/projects/uot166/fegaras
-export TP_HOME="$(cd `dirname $0`/..; pwd -P)"
+##########################
+# Set TensorPlanner root directory as TP_HOME
+##########################
+export TP_HOME="$HOME/TensorPlanner"
 
 ##########################
 # Point to Scala and Spark installations
@@ -21,7 +24,7 @@ export JARS=${JARS}
 # Required modules (modify based on available modules on cluster)
 ##########################
 # Load GCC and OpenMPI 4.1
-export TP_OPENMPI_MODULES="slurm cpu/0.17.3b  gcc/10.2.0/npcyll4 openmpi/4.1.3"
+export TP_OPENMPI_MODULES="slurm cpu/0.17.3b gcc/10.2.0/npcyll4 openmpi/4.1.3"
 # Load GCC and MVAPICH2 2.3
 export TP_MVAPICH2_MODULES="slurm cpu/0.17.3b gcc/10.2.0/npcyll4 mvapich2/2.3.7/iyjtn3x"
 # Load JDK, Spark and hadoop
@@ -29,31 +32,10 @@ export SPARK_MODULES="slurm cpu/0.15.4 gcc/7.5.0 openjdk hadoop/3.2.2 spark"
 # Load ScaLAPACK modules
 export ScaLAPACK_MODULES="slurm cpu/0.17.3b  gcc/10.2.0 openmpi/4.1.3 intel-mkl/2020.4.304"
 
-##########################
-# Create python virtual environment
-##########################
 export PYTHON_ENV="$HOME/venv"
-python3 -m venv $PYTHON_ENV
-
 source "$PYTHON_ENV/bin/activate" # Activate the virtual environment
 
-##########################
-# Install dependencies
-##########################
-# Install Ray: https://docs.ray.io/en/latest/ray-overview/installation.html
-pip install -U "ray[default]"
-# Install NumPy
-pip install numpy
-# Install Dask: https://docs.dask.org/en/stable/install.html
-pip install "dask[complete]"
-pip install dask_mpi --upgrade
-# Install Cython: 
-pip install cython
-# install PyTorch: https://pytorch.org/
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-# install pandas
-pip install pandas
-
+# Add libraries to Path
 export PATH="$PYTHON_ENV/bin:$SCALA_HOME/bin:$TP_HOME/bin:$PATH"
 
 ##########################

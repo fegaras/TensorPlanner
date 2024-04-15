@@ -2,6 +2,8 @@
 #SBATCH --job-name="ray_mult_openmp"
 #SBATCH --output="ray_openmp_multiply_%j.out"
 
+source ../env_setup.sh
+echo "Ray with OpenMP matrix multiplication job"
 node_count=$SLURM_NNODES
 echo "Number of nodes = " $node_count
 nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
