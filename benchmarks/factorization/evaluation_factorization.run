@@ -1,5 +1,6 @@
 #!/bin/bash
 
+source ../env_setup.sh
 command="sbatch -A $ACCOUNT_NAME -p compute  -N $N_NODES --ntasks-per-node=$N_TASKS_PER_NODE -c $N_CPUS_PER_TASK --mem=$MEM_LIMIT --export=ALL -t $TIME_LIMIT"
 echo $command
 
