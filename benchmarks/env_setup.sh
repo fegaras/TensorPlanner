@@ -13,6 +13,7 @@ export TP_HOME="$HOME/TensorPlanner"
 export SCALA_HOME=$SW/scala-2.12.3
 # Install Spark 3: https://spark.apache.org/downloads.html
 export SPARK_HOME=$SW/spark-3.1.2-bin-hadoop3.2
+export DIABLO_HOME=$TP_HOME
 
 JARS=${TP_HOME}/lib/diablo.jar
 for I in ${SPARK_HOME}/jars/*.jar; do
@@ -30,8 +31,10 @@ export TP_MVAPICH2_MODULES="slurm cpu/0.17.3b gcc/10.2.0/npcyll4 mvapich2/2.3.7/
 # Load JDK, Spark and hadoop
 export SPARK_MODULES="slurm cpu/0.15.4 gcc/7.5.0 openjdk hadoop/3.2.2 spark"
 # Load ScaLAPACK modules
-export ScaLAPACK_MODULES="slurm cpu/0.17.3b  gcc/10.2.0 openmpi/4.1.3 intel-mkl/2020.4.304"
+export ScaLAPACK_MODULES="slurm cpu/0.17.3b gcc/10.2.0 openmpi/4.1.3 intel-mkl/2020.4.304"
 
+module purge
+module load $TP_OPENMPI_MODULES
 export PYTHON_ENV="$HOME/venv"
 source "$PYTHON_ENV/bin/activate" # Activate the virtual environment
 
