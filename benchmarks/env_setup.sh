@@ -15,6 +15,17 @@ export SCALA_HOME=$SW/scala-2.12.3
 export SPARK_HOME=$SW/spark-3.1.2-bin-hadoop3.2
 export DIABLO_HOME=$TP_HOME
 
+# Expanse node: 128 cores (126 available), 256 GB RAM
+#   executor-cores = 12   (10 executors/node)
+#   executor-memory = 24GB
+#   driver-memory = 24GB
+##########################
+# Set up Spark configurations: driver-memory, executor-cores and executor-memory
+##########################
+export SPARK_DRIVER_MEM=24G
+export SPARK_EXECUTOR_N_CORES=12
+export SPARK_EXECUTOR_MEM=24G
+
 JARS=${TP_HOME}/lib/diablo.jar
 for I in ${SPARK_HOME}/jars/*.jar; do
     JARS=${JARS}:$I

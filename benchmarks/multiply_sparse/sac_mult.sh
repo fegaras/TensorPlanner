@@ -14,13 +14,14 @@ echo "Number of nodes = " $nodes
 executors=$((nodes*10-1))
 echo "Number of executors = " $executors
 
-SPARK_OPTIONS="--driver-memory 24G --num-executors $executors --executor-cores 12 --executor-memory 24G --driver-java-options '-Xss512m' --supervise"
+SPARK_OPTIONS="--driver-memory $SPARK_DRIVER_MEM --num-executors $executors --executor-cores $SPARK_EXECUTOR_N_CORES --executor-memory $SPARK_EXECUTOR_MEM --driver-java-options '-Xss512m' --supervise"
 
 export HADOOP_CONF_DIR=$HOME/expansecluster
 
 ##########################
 # Load required modules
 ##########################
+module purge
 module load $SPARK_MODULES
 
 # location of data storage and scratch space on every worker (on local SSD)
