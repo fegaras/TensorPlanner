@@ -53,20 +53,59 @@ int serialize ( ostringstream &out, const void* data, vector<int>* encoded_type,
     switch ((*encoded_type)[loc+1]) {
     case 0: {
       auto x = (Vec<int>*)data;
-      put_int(out,x->size());
-      out.write((const char*)x->buffer(),sizeof(int)*x->size());
+      int n = x->size();
+      put_int(out,n);
+      int* buffer = x->buffer();
+      if(is_GPU()) {
+        int* cpu_buffer = new int[n];
+        #pragma omp target teams distribute parallel for is_device_ptr(buffer) map(from: cpu_buffer[0:n])
+        for(int i = 0; i < n; i++)
+          cpu_buffer[i] = buffer[i];
+
+        out.write((const char*)cpu_buffer,sizeof(int)*n);
+        delete[] cpu_buffer;
+      }
+      else {
+        out.write((const char*)buffer,sizeof(int)*n);
+      }
       return loc+2;
     }
     case 1: {
       auto x = (Vec<long>*)data;
-      put_int(out,x->size());
-      out.write((const char*)x->buffer(),sizeof(long)*x->size());
+      int n = x->size();
+      put_int(out,n);
+      long* buffer = x->buffer();
+      if(is_GPU()) {
+        long* cpu_buffer = new long[n];
+        #pragma omp target teams distribute parallel for is_device_ptr(buffer) map(from: cpu_buffer[0:n])
+        for(int i = 0; i < n; i++)
+          cpu_buffer[i] = buffer[i];
+
+        out.write((const char*)cpu_buffer,sizeof(long)*n);
+        delete[] cpu_buffer;
+      }
+      else {
+        out.write((const char*)buffer,sizeof(long)*n);
+      }
       return loc+2;
     }
     case 3: {
       auto x = (Vec<double>*)data;
-      put_int(out,x->size());
-      out.write((const char*)x->buffer(),sizeof(double)*x->size());
+      int n = x->size();
+      put_int(out,n);
+      double* buffer = x->buffer();
+      if(is_GPU()) {
+        double* cpu_buffer = new double[n];
+        #pragma omp target teams distribute parallel for is_device_ptr(buffer) map(from: cpu_buffer[0:n])
+        for(int i = 0; i < n; i++)
+          cpu_buffer[i] = buffer[i];
+
+        out.write((const char*)cpu_buffer,sizeof(double)*n);
+        delete[] cpu_buffer;
+      }
+      else {
+        out.write((const char*)buffer,sizeof(double)*n);
+      }
       return loc+2;
     }
     default:
@@ -123,21 +162,54 @@ int deserialize ( istringstream &in, void* &data, vector<int>* encoded_type, int
     case 0: {
       int len = get_int(in);
       Vec<int>* x = new Vec<int>(len);
-      in.read((char*)x->buffer(),sizeof(int)*len);
+      int* buffer = x->buffer();
+      if(is_GPU()) {
+        int* cpu_buffer = new int[len];
+        in.read((char*)cpu_buffer,sizeof(int)*len);
+        #pragma omp target teams distribute parallel for is_device_ptr(buffer) map(to: cpu_buffer[0:len])
+        for(int i = 0; i < len; i++)
+          buffer[i] = cpu_buffer[i];
+        delete[] cpu_buffer;
+      }
+      else {
+        in.read((char*)buffer,sizeof(int)*len);
+      }
       data = x;
       return loc+2;
     }
     case 1: {
       int len = get_int(in);
       Vec<long>* x = new Vec<long>(len);
-      in.read((char*)x->buffer(),sizeof(long)*len);
+      long* buffer = x->buffer();
+      if(is_GPU()) {
+        long* cpu_buffer = new long[len];
+        in.read((char*)cpu_buffer,sizeof(long)*len);
+        #pragma omp target teams distribute parallel for is_device_ptr(buffer) map(to: cpu_buffer[0:len])
+        for(int i = 0; i < len; i++)
+          buffer[i] = cpu_buffer[i];
+        delete[] cpu_buffer;
+      }
+      else {
+        in.read((char*)buffer,sizeof(long)*len);
+      }
       data = x;
       return loc+2;
     }
     case 3: {
       int len = get_int(in);
       Vec<double>* x = new Vec<double>(len);
-      in.read((char*)x->buffer(),sizeof(double)*len);
+      double* buffer = x->buffer();
+      if(is_GPU()) {
+        double* cpu_buffer = new double[len];
+        in.read((char*)cpu_buffer,sizeof(double)*len);
+        #pragma omp target teams distribute parallel for is_device_ptr(buffer) map(to: cpu_buffer[0:len])
+        for(int i = 0; i < len; i++)
+          buffer[i] = cpu_buffer[i];
+        delete[] cpu_buffer;
+      }
+      else {
+        in.read((char*)buffer,sizeof(double)*len);
+      }
       data = x;
       return loc+2;
     }

@@ -16,15 +16,21 @@
 
 #include "tensor.h"
 
-
 // Create a dense boolean array and initialize it with the values of the boolean tensor init (if not null).
 // It converts the sparse tensor init to a complete dense array where missing values are zero
 Vec<bool>* array_buffer_bool ( int dsize, int ssize, tuple<Vec<int>*,Vec<bool>*>* init = nullptr ) {
   auto buffer = new Vec<bool>(dsize*ssize);
   bool* bv = buffer->buffer();
-  #pragma omp parallel for
-  for (int i = 0; i < buffer->size(); i++ )
-    bv[i] = false;
+  if(is_GPU()) {
+    #pragma omp target teams distribute parallel for is_device_ptr(bv)
+    for (int i = 0; i < buffer->size(); i++ )
+      bv[i] = false;
+  }
+  else {
+    #pragma omp parallel for
+    for (int i = 0; i < buffer->size(); i++ )
+      bv[i] = false;
+  }
   if (init != nullptr) {
     #pragma omp parallel for
     for ( int i = 0; i < get<0>(*init)->size()-1; i++ ) {

@@ -339,6 +339,16 @@ bool isCoordinator () {
   return executor_rank == coordinator;
 }
 
+int get_local_rank() {
+  int local_rank = 0;
+  char* lc = getenv("OMPI_COMM_WORLD_LOCAL_RANK");
+  if (lc == nullptr)
+    lc = getenv("MV2_COMM_WORLD_LOCAL_RANK");
+  if (lc != nullptr)
+    local_rank = atoi(lc);
+  return local_rank;
+}
+
 void mpi_startup ( int argc, char* argv[], int block_dim_size ) {
   // can fit 5 blocks of double
   max_buffer_size = max(100000LU,5*sizeof(double)*block_dim_size*block_dim_size);
@@ -360,17 +370,16 @@ void mpi_startup ( int argc, char* argv[], int block_dim_size ) {
     active_executors.push_back(i);
   char machine_name[256];
   gethostname(machine_name,255);
-  int local_rank = 0;
-  char* lc = getenv("OMPI_COMM_WORLD_LOCAL_RANK");
-  if (lc == nullptr)
-    lc = getenv("MV2_COMM_WORLD_LOCAL_RANK");
-  if (lc != nullptr)
-    local_rank = atoi(lc);
+  int local_rank = get_local_rank();
   int ts;
+  int num_devices = omp_get_num_devices();
+  if(local_rank < num_devices)
+    omp_set_default_device(local_rank);
+  int dev_id = omp_get_default_device();
   #pragma omp parallel
   { ts = omp_get_num_threads(); }
-  printf("Using executor %d: %s/%d (threads: %d)\n",
-         executor_rank,machine_name,local_rank,ts);
+  printf("Using executor %d: %s/%d (threads: %d)\nNumber of GPUs: %d, device: %d\n",
+         executor_rank,machine_name,local_rank,ts,num_devices,dev_id);
   reset_accumulator();
 }
 

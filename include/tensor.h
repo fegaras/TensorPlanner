@@ -26,6 +26,7 @@
 #include <stdint.h>
 #include "mpi.h"
 #include "omp.h"
+#include "blocks.h"
 
 using namespace std;
 
@@ -33,7 +34,6 @@ extern int block_count;
 extern int block_created;
 extern int max_blocks;
 extern bool trace_delete;
-
 
 /* Array blocks are C arrays with length */
 template< typename T >
@@ -50,7 +50,12 @@ private:
 public:
   Vec ( size_t len = 0 ): length(len) {
     try {
-      data = (len == 0) ? nullptr : new T[len];
+      if(is_GPU()) {
+        data = (T*)(uintptr_t)new_block(sizeof(T), len);
+      }
+      else {
+        data = (len == 0) ? nullptr : new T[len];
+      }
     } catch ( bad_alloc &ex ) {
       cerr << "*** cannot allocate " << (len*sizeof(T)) << " bytes" << endl;
       abort();
@@ -61,8 +66,13 @@ public:
   }
 
   Vec ( vector<T>* x ): length(x->size()), data(new T[length]) {
-    for (int i = 0; i < length; i++ )
-      data[i] = (*x)[i];
+    if(is_GPU()) {
+      data = (T*)(uintptr_t)new_block(sizeof(T), length);
+    }
+    else {
+      for (int i = 0; i < length; i++ )
+        data[i] = (*x)[i];
+    }
     block_count++;
     block_created++;
     max_blocks = max(max_blocks,block_count);
@@ -71,13 +81,40 @@ public:
 
   inline size_t size () const { return length; }
 
-  inline T* buffer () const { return data; }
+  inline T* buffer () const {
+    if(is_GPU()) {
+      int loc = (uintptr_t)data;
+      T* gpu_block = (T*)get_block(loc);
+      return gpu_block;
+    }
+    return data;
+  }
 
   inline T& operator[] ( unsigned int n ) {
+    if(is_GPU()) {
+      int loc = (uintptr_t)data;
+      T* gpu_block = (T*)get_block(loc);
+      // read data from GPU
+      T ret;
+      #pragma omp target is_device_ptr(gpu_block) map(from: ret)
+      ret = gpu_block[n];
+
+      return ret;
+    }
     return data[n];
   }
 
   inline const T& operator[] ( unsigned int n ) const {
+    if(is_GPU()) {
+      int loc = (uintptr_t)data;
+      T* gpu_block = (T*)get_block(loc);
+      // read data from GPU
+      T ret;
+      #pragma omp target is_device_ptr(gpu_block) map(from: ret)
+      ret = gpu_block[n];
+
+      return ret;
+    }
     return data[n];
   }
 
@@ -90,8 +127,14 @@ public:
   ~Vec () {
     block_count--;
     max_blocks = max(max_blocks,block_count);
-    delete[] data;
-    data = nullptr;
+    if(is_GPU()) {
+      int loc = (uintptr_t)data;
+      delete_block(loc);
+    }
+    else {
+      delete[] data;
+      data = nullptr;
+    }
   }
 };
 
@@ -99,9 +142,16 @@ template< typename T >
 Vec<T>* array_buffer_dense ( size_t dsize, const T zero ) {
   Vec<T>* a = new Vec<T>(dsize);
   T* av = a->buffer();
-  #pragma omp parallel for
-  for ( int i = 0; i < dsize; i++ )
-    av[i] = zero;
+  if(is_GPU()) {
+    #pragma omp target teams distribute parallel for is_device_ptr(av)
+    for ( int i = 0; i < dsize; i++ )
+      av[i] = zero;
+  }
+  else {
+    #pragma omp parallel for
+    for ( int i = 0; i < dsize; i++ )
+      av[i] = zero;
+  }
   return a;
 }
 
@@ -332,9 +382,16 @@ Vec<T>* array_buffer ( int dsize, int ssize, T zero,
                        tuple<Vec<int>*,Vec<int>*,Vec<T>*>* init = nullptr ) {
   auto buffer = new Vec<T>(dsize*ssize);
   T* bv = buffer->buffer();
-  #pragma omp parallel for
-  for (int i = 0; i < buffer->size(); i++ )
-    bv[i] = zero;
+  if(is_GPU()) {
+    #pragma omp target teams distribute parallel for is_device_ptr(bv)
+    for (int i = 0; i < buffer->size(); i++ )
+      bv[i] = zero;
+  }
+  else {
+    #pragma omp parallel for
+    for (int i = 0; i < buffer->size(); i++ )
+      bv[i] = zero;
+  }
   if (init != nullptr) {
     #pragma omp parallel for
     for ( int i = 0; i < get<0>(*init)->size()-1; i++ ) {
@@ -354,9 +411,16 @@ template< typename T >
 Vec<T>* array_buffer_sparse ( int ssize, T zero, tuple<Vec<int>*,Vec<T>*>* init = nullptr ) {
   auto buffer = new Vec<T>(ssize);
   T* bv = buffer->buffer();
+  if(is_GPU()) {
+    #pragma omp target teams distribute parallel for is_device_ptr(bv)
+    for (int i = 0; i < buffer->size(); i++ )
+      bv[i] = zero;
+  }
+  else {
   #pragma omp parallel for
   for (int i = 0; i < buffer->size(); i++ )
     bv[i] = zero;
+  }
   if (init != nullptr) {
     #pragma omp parallel for
     for ( int j = 0; j < get<0>(*init)->size()-1; j++ )
@@ -371,7 +435,13 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
      array2tensor ( int dn, int sn, T zero, Vec<T>* buffer ) {
   T* bv = buffer->buffer();
   auto dense = new Vec<int>(dn+1);
-  int* dv = dense->buffer();
+  int* dense_buffer = dense->buffer();
+  int* dv;
+  if(is_GPU())
+    dv = new int[(dn+1)];
+  else
+    dv = dense->buffer();
+
   auto sparse = new vector<int>();
   auto values = new vector<T>();
   dv[0] = 0;
@@ -384,6 +454,12 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
       }
     }
     dv[i+1] = sparse->size();
+  }
+  if(is_GPU()) {
+    #pragma omp target teams distribute parallel for is_device_ptr(dense_buffer) map(to: dv[0:dn+1])
+    for (int i = 0; i < dn+1; i++ )
+      dense_buffer[i] = dv[i];
+    delete[] dv;
   }
   delete buffer;
   return new tuple<Vec<int>*,Vec<int>*,Vec<T>*>(dense,new Vec<int>(sparse),new Vec<T>(values));
@@ -418,11 +494,21 @@ Vec<T>* merge_tensors ( const Vec<T>* x, const Vec<T>* y, T(*op)(tuple<T,T>*), c
   T* yv = y->buffer();
   // don't create a tuple during loop
   auto t = new tuple<T,T>(zero,zero);
-  #pragma omp parallel for
-  for ( int i = 0; i < len; i++ ) {
-    get<0>(*t) = xv[i];
-    get<1>(*t) = yv[i];
-    av[i] = op(t);
+  if(is_GPU()) {
+    #pragma omp target teams distribute parallel for is_device_ptr(av,xv,yv)
+    for ( int i = 0; i < len; i++ ) {
+      get<0>(*t) = xv[i];
+      get<1>(*t) = yv[i];
+      av[i] = op(t);
+    }
+  }
+  else {
+    #pragma omp parallel for
+    for ( int i = 0; i < len; i++ ) {
+      get<0>(*t) = xv[i];
+      get<1>(*t) = yv[i];
+      av[i] = op(t);
+    }
   }
   delete t;
   return a;
@@ -437,7 +523,12 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
   int i = 0;
   int len = min(get<0>(*x)->size(),get<0>(*y)->size())-1;
   auto dense = new Vec<int>(len+1);
-  int* dv = dense->buffer();
+  int* buffer = dense->buffer();
+  int* dv;
+  if(is_GPU())
+    dv = new int[(len+1)];
+  else
+    dv = dense->buffer();
   auto sparse = new vector<int>();
   auto values = new vector<T>();
   dv[0] = 0;
@@ -498,6 +589,12 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
     }
     i++;
     dv[i] = sparse->size();
+  }
+  if(is_GPU()) {
+    #pragma omp target teams distribute parallel for is_device_ptr(buffer) map(to: dv[0:len])
+    for(int j = 0; j < len; j++)
+      buffer[j] = dv[j];
+    delete[] dv;
   }
   delete t;
   return new tuple<Vec<int>*,Vec<int>*,Vec<T>*>(dense,new Vec<int>(sparse),new Vec<T>(values));

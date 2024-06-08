@@ -371,11 +371,20 @@ object CXXCodeGenerator {
         case Call("for",List(VarDecl(i,tp,MethodCall(Range(n1,n2,n3),"par",null)),b))
           => val m = get_arrays(b)
              val nb = m.foldLeft[Expr](b){ case (r,(v,u)) => subst(u,Var(v),r) }
-             "{ "+m.map{ case (v,u) => "auto "+v+" = "+makeC(u,tabs,false)+"->buffer(); " }.mkString("")+"\n"+
-              tab(tabs-1)+"#pragma omp parallel for\n" +
-              tab(tabs-1)+"for ( int "+i+" = "+makeC(n1,tabs,false)+"; "+i+
+             val data = m.map{ case (v,u) => v}.mkString(",")
+             val loop_text = tab(tabs-1)+"for ( int "+i+" = "+makeC(n1,tabs,false)+"; "+i+
                  " <= "+makeC(n2,tabs,false)+"; "+i+" += "+makeC(n3,tabs,false)+" )\n"+
                  tab(tabs)+makeC(nb,tabs+1,true)+"; }"
+             "{ "+m.map{ case (v,u) => "auto "+v+" = "+makeC(u,tabs,false)+"->buffer(); " }.mkString("")+"\n"+
+              tab(tabs-1)+"if(omp_get_num_devices() > 0 && omp_get_default_device() == get_local_rank()) {\n" +
+              tab(tabs)+"int dev = omp_get_default_device();\n" +
+              "#pragma omp target teams distribute parallel for collapse(2) device(dev) is_device_ptr("+data+")\n" +
+              loop_text +
+              "\n"+tab(tabs)+"else {\n" +
+              "#pragma omp parallel for collapse(2)\n" +
+              loop_text +
+              "\n}\n"
+
         case Call("for",List(VarDecl(i,tp,Range(n1,n2,n3)),b))
           => "for ( int "+i+" = "+makeC(n1,tabs,false)+"; "+i+
                  " <= "+makeC(n2,tabs,false)+"; "+i+" += "+makeC(n3,tabs,false)+" )\n"+

@@ -1122,5 +1122,6 @@ void startup ( int argc, char* argv[], int block_dim_size ) {
     if (value != nullptr)
       *env_vars[i] = strcmp(value,"true") == 0 || strcmp(value,"y") == 0;
   }
+  init_blocks();
   mpi_startup(argc,argv,block_dim_size);
 }

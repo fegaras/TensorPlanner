@@ -44,3 +44,5 @@ void reset_accumulator ();
 
 bool accumulator_exit ();
 
+int get_local_rank();
+

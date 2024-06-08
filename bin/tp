@@ -26,7 +26,7 @@ mkdir -p classes
 scalac -d classes -cp ${JARS} cxxgen.sc >cxxgen.log
 
 if [ "$debug" == "y" ]; then
-    exec mpic++ -g cxxgen.cpp -fopenmp -I${DIABLO_HOME}/include -L${DIABLO_HOME}/lib -ldiablo
+    exec mpic++ -g cxxgen.cpp -fopenmp -foffload=nvptx-none -fcf-protection=none -fno-stack-protector -no-pie -I${DIABLO_HOME}/include -L${DIABLO_HOME}/lib -ldiablo
 else
-    exec mpic++ -O3 -DNDEBUG cxxgen.cpp -fopenmp -I${DIABLO_HOME}/include -L${DIABLO_HOME}/lib -ldiablo
+    exec mpic++ -O3 -DNDEBUG cxxgen.cpp -fopenmp -foffload=nvptx-none -fcf-protection=none -fno-stack-protector -no-pie -I${DIABLO_HOME}/include -L${DIABLO_HOME}/lib -ldiablo
 fi
