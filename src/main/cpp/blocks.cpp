@@ -33,7 +33,6 @@ int new_block(size_t t, size_t len) {
     int device_id = omp_get_default_device();
     void* d_block = omp_target_alloc(len*t, device_id);
     gc_first = (int)(uintptr_t)blocks[gc_first];
-    printf("gc_first: %d\n",gc_first);
     blocks[loc] = d_block;
     return loc;
 }

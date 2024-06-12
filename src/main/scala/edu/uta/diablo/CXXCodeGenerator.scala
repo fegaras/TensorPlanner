@@ -306,7 +306,10 @@ object CXXCodeGenerator {
     = e match {
         case Index(a,i)
           if freevars(a).intersect(exclude).isEmpty
-          => Map(new_var() -> a)
+          => i.foldLeft(Map[String,Expr]()) {case (accumulator,ii) => accumulator++get_arrays(ii,exclude)} ++ Map(new_var() -> a)
+        case Nth(x,i)
+          if freevars(e).intersect(exclude).isEmpty
+          => Map(new_var() -> e)
         case _ => accumulate[Map[String,Expr]](e,get_arrays(_,exclude),_++_,Map())
       }
 
@@ -371,12 +374,33 @@ object CXXCodeGenerator {
         case Call("for",List(VarDecl(i,tp,MethodCall(Range(n1,n2,n3),"par",null)),b))
           => val m = get_arrays(b)
              val nb = m.foldLeft[Expr](b){ case (r,(v,u)) => subst(u,Var(v),r) }
-             val data = m.map{ case (v,u) => v}.mkString(",")
-             val loop_text = tab(tabs-1)+"for ( int "+i+" = "+makeC(n1,tabs,false)+"; "+i+
-                 " <= "+makeC(n2,tabs,false)+"; "+i+" += "+makeC(n3,tabs,false)+" )\n"+
+             val n1_m = get_arrays(n1)
+             val n1_b = n1_m.foldLeft[Expr](n1){ case (r,(v,u)) => subst(u,Var(v),r) }
+             val n2_m = get_arrays(n2)
+             val n2_b = n2_m.foldLeft[Expr](n2){ case (r,(v,u)) => subst(u,Var(v),r) }
+             val n3_m = get_arrays(n3)
+             val n3_b = n3_m.foldLeft[Expr](n3){ case (r,(v,u)) => subst(u,Var(v),r) }
+             val all_m = m ++ n1_m ++ n2_m ++ n3_m
+             val data = all_m.flatMap{
+                case (v,u) => 
+                  u match {
+                    case Nth(_,i) if(i < 3) => List()
+                    case _ => List(v)
+                  }
+                case _ => List()
+              }.mkString(",")
+             val loop_text = tab(tabs-1)+"for ( int "+i+" = "+makeC(n1_b,tabs,false)+"; "+i+
+                 " <= "+makeC(n2_b,tabs,false)+"; "+i+" += "+makeC(n3_b,tabs,false)+" )\n"+
                  tab(tabs)+makeC(nb,tabs+1,true)+"; }"
-             "{ "+m.map{ case (v,u) => "auto "+v+" = "+makeC(u,tabs,false)+"->buffer(); " }.mkString("")+"\n"+
-              tab(tabs-1)+"if(omp_get_num_devices() > 0 && omp_get_default_device() == get_local_rank()) {\n" +
+             "{ "+all_m.flatMap{ 
+                  case (v,u) => 
+                  u match {
+                    case Nth(_,i) if(i < 3) => List("auto "+v+" = "+makeC(u,tabs,false)+"; ")
+                    case _ => List("auto "+v+" = "+makeC(u,tabs,false)+"->buffer(); ")
+                  }
+                  case _ => List()
+                }.mkString("")+"\n"+
+              tab(tabs-1)+"if(is_GPU()) {\n" +
               tab(tabs)+"int dev = omp_get_default_device();\n" +
               "#pragma omp target teams distribute parallel for collapse(2) device(dev) is_device_ptr("+data+")\n" +
               loop_text +

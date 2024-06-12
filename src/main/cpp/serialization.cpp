@@ -26,6 +26,8 @@ void put_int ( ostringstream &out, const uintptr_t i ) {
 }
 
 int serialize ( ostringstream &out, const void* data, vector<int>* encoded_type, int loc ) {
+  int device_id = omp_get_default_device();
+  int host_id = omp_get_initial_device();
   switch ((*encoded_type)[loc]) {
   case 0: case 1: // index
     put_int(out,(uintptr_t)data);
@@ -58,9 +60,8 @@ int serialize ( ostringstream &out, const void* data, vector<int>* encoded_type,
       int* buffer = x->buffer();
       if(is_GPU()) {
         int* cpu_buffer = new int[n];
-        #pragma omp target teams distribute parallel for is_device_ptr(buffer) map(from: cpu_buffer[0:n])
-        for(int i = 0; i < n; i++)
-          cpu_buffer[i] = buffer[i];
+        // copy values from device to host
+        omp_target_memcpy(cpu_buffer, buffer, sizeof(int)*n, 0, 0, host_id, device_id);
 
         out.write((const char*)cpu_buffer,sizeof(int)*n);
         delete[] cpu_buffer;
@@ -77,9 +78,8 @@ int serialize ( ostringstream &out, const void* data, vector<int>* encoded_type,
       long* buffer = x->buffer();
       if(is_GPU()) {
         long* cpu_buffer = new long[n];
-        #pragma omp target teams distribute parallel for is_device_ptr(buffer) map(from: cpu_buffer[0:n])
-        for(int i = 0; i < n; i++)
-          cpu_buffer[i] = buffer[i];
+        // copy values from device to host
+        omp_target_memcpy(cpu_buffer, buffer, sizeof(long)*n, 0, 0, host_id, device_id);
 
         out.write((const char*)cpu_buffer,sizeof(long)*n);
         delete[] cpu_buffer;
@@ -96,9 +96,8 @@ int serialize ( ostringstream &out, const void* data, vector<int>* encoded_type,
       double* buffer = x->buffer();
       if(is_GPU()) {
         double* cpu_buffer = new double[n];
-        #pragma omp target teams distribute parallel for is_device_ptr(buffer) map(from: cpu_buffer[0:n])
-        for(int i = 0; i < n; i++)
-          cpu_buffer[i] = buffer[i];
+        // copy values from device to host
+        omp_target_memcpy(cpu_buffer, buffer, sizeof(double)*n, 0, 0, host_id, device_id);
 
         out.write((const char*)cpu_buffer,sizeof(double)*n);
         delete[] cpu_buffer;
@@ -130,6 +129,8 @@ uintptr_t get_int ( istringstream &in ) {
 }
 
 int deserialize ( istringstream &in, void* &data, vector<int>* encoded_type, int loc ) {
+  int device_id = omp_get_default_device();
+  int host_id = omp_get_initial_device();
   switch ((*encoded_type)[loc]) {
   case 0: case 1: // index
     data = (void*)get_int(in);
@@ -166,9 +167,8 @@ int deserialize ( istringstream &in, void* &data, vector<int>* encoded_type, int
       if(is_GPU()) {
         int* cpu_buffer = new int[len];
         in.read((char*)cpu_buffer,sizeof(int)*len);
-        #pragma omp target teams distribute parallel for is_device_ptr(buffer) map(to: cpu_buffer[0:len])
-        for(int i = 0; i < len; i++)
-          buffer[i] = cpu_buffer[i];
+        // copy values from host to device
+        omp_target_memcpy(buffer, cpu_buffer, sizeof(int)*len, 0, 0, device_id, host_id);
         delete[] cpu_buffer;
       }
       else {
@@ -184,9 +184,8 @@ int deserialize ( istringstream &in, void* &data, vector<int>* encoded_type, int
       if(is_GPU()) {
         long* cpu_buffer = new long[len];
         in.read((char*)cpu_buffer,sizeof(long)*len);
-        #pragma omp target teams distribute parallel for is_device_ptr(buffer) map(to: cpu_buffer[0:len])
-        for(int i = 0; i < len; i++)
-          buffer[i] = cpu_buffer[i];
+        // copy values from host to device
+        omp_target_memcpy(buffer, cpu_buffer, sizeof(long)*len, 0, 0, device_id, host_id);
         delete[] cpu_buffer;
       }
       else {
@@ -202,9 +201,8 @@ int deserialize ( istringstream &in, void* &data, vector<int>* encoded_type, int
       if(is_GPU()) {
         double* cpu_buffer = new double[len];
         in.read((char*)cpu_buffer,sizeof(double)*len);
-        #pragma omp target teams distribute parallel for is_device_ptr(buffer) map(to: cpu_buffer[0:len])
-        for(int i = 0; i < len; i++)
-          buffer[i] = cpu_buffer[i];
+        // copy values from host to device
+        omp_target_memcpy(buffer, cpu_buffer, sizeof(double)*len, 0, 0, device_id, host_id);
         delete[] cpu_buffer;
       }
       else {

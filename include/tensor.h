@@ -95,11 +95,11 @@ public:
       int loc = (uintptr_t)data;
       T* gpu_block = (T*)get_block(loc);
       // read data from GPU
-      T ret;
-      #pragma omp target is_device_ptr(gpu_block) map(from: ret)
-      ret = gpu_block[n];
+      T* ret = new T[1];
+      #pragma omp target is_device_ptr(gpu_block) map(from: ret[0:1])
+      ret[0] = gpu_block[n];
 
-      return ret;
+      return ret[0];
     }
     return data[n];
   }
@@ -109,11 +109,11 @@ public:
       int loc = (uintptr_t)data;
       T* gpu_block = (T*)get_block(loc);
       // read data from GPU
-      T ret;
-      #pragma omp target is_device_ptr(gpu_block) map(from: ret)
-      ret = gpu_block[n];
+      T* ret = new T[1];
+      #pragma omp target is_device_ptr(gpu_block) map(from: ret[0:1])
+      ret[0] = gpu_block[n];
 
-      return ret;
+      return ret[0];
     }
     return data[n];
   }
@@ -142,16 +142,11 @@ template< typename T >
 Vec<T>* array_buffer_dense ( size_t dsize, const T zero ) {
   Vec<T>* a = new Vec<T>(dsize);
   T* av = a->buffer();
-  if(is_GPU()) {
-    #pragma omp target teams distribute parallel for is_device_ptr(av)
-    for ( int i = 0; i < dsize; i++ )
-      av[i] = zero;
-  }
-  else {
-    #pragma omp parallel for
-    for ( int i = 0; i < dsize; i++ )
-      av[i] = zero;
-  }
+  int device_id = omp_get_default_device();
+  #pragma omp target teams if (is_GPU()) device(device_id) is_device_ptr(av)
+  #pragma omp parallel for
+  for ( int i = 0; i < dsize; i++ )
+    av[i] = zero;
   return a;
 }
 
@@ -382,16 +377,11 @@ Vec<T>* array_buffer ( int dsize, int ssize, T zero,
                        tuple<Vec<int>*,Vec<int>*,Vec<T>*>* init = nullptr ) {
   auto buffer = new Vec<T>(dsize*ssize);
   T* bv = buffer->buffer();
-  if(is_GPU()) {
-    #pragma omp target teams distribute parallel for is_device_ptr(bv)
-    for (int i = 0; i < buffer->size(); i++ )
-      bv[i] = zero;
-  }
-  else {
-    #pragma omp parallel for
-    for (int i = 0; i < buffer->size(); i++ )
-      bv[i] = zero;
-  }
+  int device_id = omp_get_default_device();
+  #pragma omp target teams if (is_GPU()) device(device_id) is_device_ptr(bv)
+  #pragma omp parallel for
+  for (int i = 0; i < buffer->size(); i++ )
+    bv[i] = zero;
   if (init != nullptr) {
     #pragma omp parallel for
     for ( int i = 0; i < get<0>(*init)->size()-1; i++ ) {
@@ -411,16 +401,11 @@ template< typename T >
 Vec<T>* array_buffer_sparse ( int ssize, T zero, tuple<Vec<int>*,Vec<T>*>* init = nullptr ) {
   auto buffer = new Vec<T>(ssize);
   T* bv = buffer->buffer();
-  if(is_GPU()) {
-    #pragma omp target teams distribute parallel for is_device_ptr(bv)
-    for (int i = 0; i < buffer->size(); i++ )
-      bv[i] = zero;
-  }
-  else {
+  int device_id = omp_get_default_device();
+  #pragma omp target teams if(is_GPU()) device(device_id) is_device_ptr(bv)
   #pragma omp parallel for
   for (int i = 0; i < buffer->size(); i++ )
     bv[i] = zero;
-  }
   if (init != nullptr) {
     #pragma omp parallel for
     for ( int j = 0; j < get<0>(*init)->size()-1; j++ )
@@ -456,9 +441,10 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
     dv[i+1] = sparse->size();
   }
   if(is_GPU()) {
-    #pragma omp target teams distribute parallel for is_device_ptr(dense_buffer) map(to: dv[0:dn+1])
-    for (int i = 0; i < dn+1; i++ )
-      dense_buffer[i] = dv[i];
+    int device_id = omp_get_default_device();
+    int host_id = omp_get_initial_device();
+    // copy values from host to device
+    omp_target_memcpy(dense_buffer, dv, sizeof(int)*(dn+1), 0, 0, device_id, host_id);
     delete[] dv;
   }
   delete buffer;
@@ -495,11 +481,10 @@ Vec<T>* merge_tensors ( const Vec<T>* x, const Vec<T>* y, T(*op)(tuple<T,T>*), c
   // don't create a tuple during loop
   auto t = new tuple<T,T>(zero,zero);
   if(is_GPU()) {
-    #pragma omp target teams distribute parallel for is_device_ptr(av,xv,yv)
+    int device_id = omp_get_default_device();
+    #pragma omp target teams distribute parallel for device(device_id) is_device_ptr(av,xv,yv)
     for ( int i = 0; i < len; i++ ) {
-      get<0>(*t) = xv[i];
-      get<1>(*t) = yv[i];
-      av[i] = op(t);
+      av[i] = xv[i]+yv[i];
     }
   }
   else {
@@ -591,9 +576,10 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
     dv[i] = sparse->size();
   }
   if(is_GPU()) {
-    #pragma omp target teams distribute parallel for is_device_ptr(buffer) map(to: dv[0:len])
-    for(int j = 0; j < len; j++)
-      buffer[j] = dv[j];
+    int device_id = omp_get_default_device();
+    int host_id = omp_get_initial_device();
+    // copy values from host to device
+    omp_target_memcpy(buffer, dv, sizeof(int)*(len+1), 0, 0, device_id, host_id);
     delete[] dv;
   }
   delete t;
