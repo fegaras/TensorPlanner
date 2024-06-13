@@ -199,9 +199,9 @@ void schedule_plan ( void* plan ) {
   int col_cnt = num_of_executors/row_cnt;
 
   while ( !task_queue.empty() ) {
-    int c = task_queue.front();
+    int cur = task_queue.front();
     task_queue.pop();
-    Opr* opr = operations[c];
+    Opr* opr = operations[cur];
     // add more ready nodes
     for ( int c: *opr->consumers ) {
       Opr* copr = operations[c];

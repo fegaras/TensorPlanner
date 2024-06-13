@@ -796,8 +796,8 @@ void enqueue_ready_operations ( int opr_id ) {
         if (copr->node == executor_rank
             && !hasCachedValue(copr)) {
           bool cv = true;
-          for ( int c: *copr->children )
-            cv = cv && hasCachedValue(operations[c]);
+          for ( int ch: *copr->children )
+            cv = cv && hasCachedValue(operations[ch]);
           lock_guard<mutex> lock(ready_mutex);
           if (cv && copr->status == notReady) {
             copr->status = ready;
@@ -1070,8 +1070,8 @@ vector<int>* completed_front ( int failed_executor, int new_executor ) {
         buffer->push_back(c);
       else if (executor_rank == 0 && opr->type == loadOPR)
         buffer->push_back(c);
-      else for ( int c: *opr->children)
-             opr_queue.push(c);
+      else for ( int ch: *opr->children)
+            opr_queue.push(ch);
     }
   }
   return buffer;
