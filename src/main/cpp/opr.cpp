@@ -23,7 +23,7 @@ Vec<bool>* array_buffer_bool ( int dsize, int ssize, tuple<Vec<int>*,Vec<bool>*>
   bool* bv = buffer->buffer();
     #pragma omp target teams if(is_GPU()) is_device_ptr(bv)
     #pragma omp parallel for
-    for (int i = 0; i < buffer->size(); i++ )
+    for (int i = 0; i < dsize*ssize; i++ )
       bv[i] = false;
   if (init != nullptr) {
     #pragma omp parallel for

@@ -25,8 +25,10 @@ void put_int ( ostringstream &out, const uintptr_t i ) {
   out.write((const char*)&i,sizeof(uintptr_t));
 }
 
+extern int executor_rank;
+
 int serialize ( ostringstream &out, const void* data, vector<int>* encoded_type, int loc ) {
-  int device_id = omp_get_default_device();
+  int device_id = get_gpu_id();
   int host_id = omp_get_initial_device();
   switch ((*encoded_type)[loc]) {
   case 0: case 1: // index
@@ -62,7 +64,6 @@ int serialize ( ostringstream &out, const void* data, vector<int>* encoded_type,
         int* cpu_buffer = new int[n];
         // copy values from device to host
         omp_target_memcpy(cpu_buffer, buffer, sizeof(int)*n, 0, 0, host_id, device_id);
-
         out.write((const char*)cpu_buffer,sizeof(int)*n);
         delete[] cpu_buffer;
       }
@@ -80,7 +81,6 @@ int serialize ( ostringstream &out, const void* data, vector<int>* encoded_type,
         long* cpu_buffer = new long[n];
         // copy values from device to host
         omp_target_memcpy(cpu_buffer, buffer, sizeof(long)*n, 0, 0, host_id, device_id);
-
         out.write((const char*)cpu_buffer,sizeof(long)*n);
         delete[] cpu_buffer;
       }
@@ -98,7 +98,6 @@ int serialize ( ostringstream &out, const void* data, vector<int>* encoded_type,
         double* cpu_buffer = new double[n];
         // copy values from device to host
         omp_target_memcpy(cpu_buffer, buffer, sizeof(double)*n, 0, 0, host_id, device_id);
-
         out.write((const char*)cpu_buffer,sizeof(double)*n);
         delete[] cpu_buffer;
       }
@@ -129,7 +128,7 @@ uintptr_t get_int ( istringstream &in ) {
 }
 
 int deserialize ( istringstream &in, void* &data, vector<int>* encoded_type, int loc ) {
-  int device_id = omp_get_default_device();
+  int device_id = get_gpu_id();
   int host_id = omp_get_initial_device();
   switch ((*encoded_type)[loc]) {
   case 0: case 1: // index

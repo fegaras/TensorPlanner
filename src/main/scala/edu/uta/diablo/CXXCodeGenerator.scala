@@ -401,11 +401,11 @@ object CXXCodeGenerator {
                   case _ => List()
                 }.mkString("")+"\n"+
               tab(tabs-1)+"if(is_GPU()) {\n" +
-              tab(tabs)+"int dev = omp_get_default_device();\n" +
-              "#pragma omp target teams distribute parallel for collapse(2) device(dev) is_device_ptr("+data+")\n" +
+              tab(tabs)+"int dev = get_gpu_id();\n" +
+              "#pragma omp target teams distribute parallel for device(dev) is_device_ptr("+data+")\n" +
               loop_text +
               "\n"+tab(tabs)+"else {\n" +
-              "#pragma omp parallel for collapse(2)\n" +
+              "#pragma omp parallel for\n" +
               loop_text +
               "\n}\n"
 
