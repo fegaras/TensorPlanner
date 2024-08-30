@@ -93,9 +93,9 @@ int serialize(const void *data, char *buffer, vector<int> *encoded_type, int loc
     case 0:
     {
       auto x = (Vec<int> *)data;
-      uintptr_t n = x->size();
-      put_data(buffer + (*pos), (const char *)(uintptr_t)&n, sizeof(uintptr_t), 1);
-      *pos = *pos + sizeof(uintptr_t);
+      int n = x->size();
+      put_data(buffer + (*pos), (const char *)&n, sizeof(int), 1);
+      *pos = *pos + sizeof(int);
       int *block_data = x->buffer();
       copy_data(buffer + (*pos), (const char *)block_data, sizeof(int) * n, n);
       *pos = *pos + (sizeof(int) * n);
@@ -104,9 +104,9 @@ int serialize(const void *data, char *buffer, vector<int> *encoded_type, int loc
     case 1:
     {
       auto x = (Vec<long> *)data;
-      uintptr_t n = x->size();
-      put_data(buffer + (*pos), (const char *)(uintptr_t)&n, sizeof(uintptr_t), 1);
-      *pos = *pos + sizeof(uintptr_t);
+      int n = x->size();
+      put_data(buffer + (*pos), (const char *)&n, sizeof(int), 1);
+      *pos = *pos + sizeof(int);
       long *block_data = x->buffer();
       copy_data(buffer + (*pos), (const char *)block_data, sizeof(long) * n, n);
       *pos = *pos + (sizeof(long) * n);
@@ -115,9 +115,9 @@ int serialize(const void *data, char *buffer, vector<int> *encoded_type, int loc
     case 3:
     {
       auto x = (Vec<double> *)data;
-      uintptr_t n = x->size();
-      put_data(buffer + (*pos), (const char *)(uintptr_t)&n, sizeof(uintptr_t), 1);
-      *pos = *pos + sizeof(uintptr_t);
+      int n = x->size();
+      put_data(buffer + (*pos), (const char *)&n, sizeof(int), 1);
+      *pos = *pos + sizeof(int);
       double *block_data = x->buffer();
       copy_data(buffer + (*pos), (const char *)block_data, sizeof(double) * n, n);
       *pos = *pos + (sizeof(double) * n);
@@ -195,9 +195,9 @@ int deserialize(void *&data, const char *buffer, vector<int> *encoded_type, int 
     {
     case 0:
     {
-      uintptr_t len;
-      get_data((char*)&len, buffer + (*pos), sizeof(uintptr_t), 1);
-      *pos = *pos + sizeof(uintptr_t);
+      int len;
+      get_data((char*)&len, buffer + (*pos), sizeof(int), 1);
+      *pos = *pos + sizeof(int);
       Vec<int> *x = new Vec<int>(len);
       int *block_data = x->buffer();
       copy_data((char*)block_data, buffer + (*pos), sizeof(int) * len, len);
@@ -207,9 +207,9 @@ int deserialize(void *&data, const char *buffer, vector<int> *encoded_type, int 
     }
     case 1:
     {
-      uintptr_t len;
-      get_data((char*)&len, buffer + (*pos), sizeof(uintptr_t), 1);
-      *pos = *pos + sizeof(uintptr_t);
+      int len;
+      get_data((char*)&len, buffer + (*pos), sizeof(int), 1);
+      *pos = *pos + sizeof(int);
       Vec<long> *x = new Vec<long>(len);
       long *block_data = x->buffer();
       copy_data((char*)block_data, buffer + (*pos), sizeof(long) * len, len);
@@ -219,9 +219,9 @@ int deserialize(void *&data, const char *buffer, vector<int> *encoded_type, int 
     }
     case 3:
     {
-      uintptr_t len;
-      get_data((char*)&len, buffer + (*pos), sizeof(uintptr_t), 1);
-      *pos = *pos + sizeof(uintptr_t);
+      int len;
+      get_data((char*)&len, buffer + (*pos), sizeof(int), 1);
+      *pos = *pos + sizeof(int);
       Vec<double> *x = new Vec<double>(len);
       double *block_data = x->buffer();
       copy_data((char*)block_data, buffer + (*pos), sizeof(double) * len, len);
