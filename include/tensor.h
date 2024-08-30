@@ -68,6 +68,11 @@ public:
   Vec ( vector<T>* x ): length(x->size()), data(new T[length]) {
     if(is_GPU()) {
       data = (T*)(uintptr_t)new_block(sizeof(T), length);
+      int device_id = get_gpu_id();
+      T* gpu_block = (T*)get_block((uintptr_t)data);
+      #pragma omp target teams distribute parallel for device(device_id) is_device_ptr(gpu_block) map(to: (*x)[0:length])
+      for ( int i = 0; i < length; i++ )
+        gpu_block[i] = (*x)[i];
     }
     else {
       for (int i = 0; i < length; i++ )
@@ -96,7 +101,8 @@ public:
       T* gpu_block = (T*)get_block(loc);
       // read data from GPU
       T* ret = new T[1];
-      #pragma omp target is_device_ptr(gpu_block) map(from: ret[0:1])
+      int device_id = get_gpu_id();
+      #pragma omp target device(device_id) is_device_ptr(gpu_block) map(from: ret[0:1])
       ret[0] = gpu_block[n];
 
       return ret[0];
@@ -110,7 +116,8 @@ public:
       T* gpu_block = (T*)get_block(loc);
       // read data from GPU
       T* ret = new T[1];
-      #pragma omp target is_device_ptr(gpu_block) map(from: ret[0:1])
+      int device_id = get_gpu_id();
+      #pragma omp target device(device_id) is_device_ptr(gpu_block) map(from: ret[0:1])
       ret[0] = gpu_block[n];
 
       return ret[0];

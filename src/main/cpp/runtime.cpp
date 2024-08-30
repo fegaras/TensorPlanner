@@ -128,6 +128,32 @@ string sprint ( Opr* opr ) {
     .append(sprint(*opr->consumers));
 }
 
+void print_block_data_array(ostringstream &out, const double* data, int n) {
+  out << "(";
+  auto it = data;
+  int i = 0;
+  out << *(it++);
+  for ( ; i < min(n,10); it++, i++ )
+    out << "," << *it;
+  if (i >= 10)
+    out << ",...";
+  out << ")";
+}
+
+void print_block_data(ostringstream &out, const void* data, size_t len, int n) {
+  if(is_GPU()) {
+    int device_id = get_gpu_id();
+    int host_id = omp_get_initial_device();
+    double* cpu_buffer = new double[n];
+    omp_target_memcpy(cpu_buffer, (const double*)data, len, 0, 0, host_id, device_id);
+    print_block_data_array(out, (const double*)cpu_buffer, n);
+    delete[] cpu_buffer;
+  }
+  else {
+    print_block_data_array(out, (const double*)data, n);
+  }
+}
+
 // print the task data
 int print_block ( ostringstream &out, const void* data,
                   vector<int>* encoded_type, int loc ) {
@@ -748,6 +774,8 @@ void enqueue_reduce_opr ( int opr_id, int rid ) {
       // completed final reduce
       info("    completed reduce opr %d",rid);
       reduce_opr->status = computed;
+      info("*-> result of opr %d:%s  %s",rid,
+       oprNames[reduce_opr->type],print_block(reduce_opr).c_str());
       enqueue_ready_operations(rid);
     } else {
       // completed local reduce => send it to the reduce owner

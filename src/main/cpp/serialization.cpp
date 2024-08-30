@@ -19,208 +19,226 @@
 #include <cstring>
 #include <stdint.h>
 
-void info ( const char *fmt, ... );
-
-void put_int ( ostringstream &out, const uintptr_t i ) {
-  out.write((const char*)&i,sizeof(uintptr_t));
-}
+void info(const char *fmt, ...);
 
 extern int executor_rank;
 
-int serialize ( ostringstream &out, const void* data, vector<int>* encoded_type, int loc ) {
-  int device_id = get_gpu_id();
-  int host_id = omp_get_initial_device();
-  switch ((*encoded_type)[loc]) {
-  case 0: case 1: // index
-    put_int(out,(uintptr_t)data);
-    return loc+1;
-  case 10: { // tuple
-    switch ((*encoded_type)[loc+1]) {
-      case 0:
-        return loc+2;
-      case 2: {
-        auto x = (tuple<void*,void*>*)data;
-        int l2 = serialize(out,get<0>(*x),encoded_type,loc+2);
-        return serialize(out,get<1>(*x),encoded_type,l2);
-      }
-      case 3: {
-        auto x = (tuple<void*,void*,void*>*)data;
-        int l2 = serialize(out,get<0>(*x),encoded_type,loc+2);
-        int l3 = serialize(out,get<1>(*x),encoded_type,l2);
-        return serialize(out,get<2>(*x),encoded_type,l3);
-      }
+void copy_data(char *data, const char *buffer, size_t len, int n)
+{
+  if (is_GPU())
+  {
+    int device_id = get_gpu_id();
+#pragma omp target teams device(device_id) is_device_ptr(buffer,data)
+#pragma omp parallel for
+    for (int i = 0; i < n; i++)
+      data[i] = buffer[i];
+  }
+  else
+  {
+    memcpy(data, buffer, len);
+  }
+}
+
+void put_data(char *buffer, const char *data, size_t len, int n)
+{
+  if (is_GPU())
+  {
+    int device_id = get_gpu_id();
+    int host_id = omp_get_initial_device();
+    omp_target_memcpy(buffer, data, len, 0, 0, device_id, host_id);
+  }
+  else
+  {
+    memcpy(buffer, data, len);
+  }
+}
+
+int serialize(const void *data, char *buffer, vector<int> *encoded_type, int loc, int *pos)
+{
+  uintptr_t i;
+  switch ((*encoded_type)[loc])
+  {
+  case 0:
+  case 1: // index
+    i = (uintptr_t)data;
+    put_data(buffer + (*pos), (const char*)&i, sizeof(uintptr_t), 1);
+    *pos = *pos + sizeof(uintptr_t);
+    return loc + 1;
+  case 10:
+  { // tuple
+    switch ((*encoded_type)[loc + 1])
+    {
+    case 0:
+      return loc + 2;
+    case 2:
+    {
+      auto x = (tuple<void *, void *> *)data;
+      int l2 = serialize(get<0>(*x), buffer, encoded_type, loc + 2, pos);
+      return serialize(get<1>(*x), buffer, encoded_type, l2, pos);
+    }
+    case 3:
+    {
+      auto x = (tuple<void *, void *, void *> *)data;
+      int l2 = serialize(get<0>(*x), buffer, encoded_type, loc + 2, pos);
+      int l3 = serialize(get<1>(*x), buffer, encoded_type, l2, pos);
+      return serialize(get<2>(*x), buffer, encoded_type, l3, pos);
+    }
     default:
-      info("Unknown tuple: %d",(*encoded_type)[loc+1]);
+      info("Unknown tuple: %d", (*encoded_type)[loc + 1]);
     }
   }
-  case 11:  // Vec
-    switch ((*encoded_type)[loc+1]) {
-    case 0: {
-      auto x = (Vec<int>*)data;
-      int n = x->size();
-      put_int(out,n);
-      int* buffer = x->buffer();
-      if(is_GPU()) {
-        int* cpu_buffer = new int[n];
-        // copy values from device to host
-        omp_target_memcpy(cpu_buffer, buffer, sizeof(int)*n, 0, 0, host_id, device_id);
-        out.write((const char*)cpu_buffer,sizeof(int)*n);
-        delete[] cpu_buffer;
-      }
-      else {
-        out.write((const char*)buffer,sizeof(int)*n);
-      }
-      return loc+2;
+  case 11: // Vec
+    switch ((*encoded_type)[loc + 1])
+    {
+    case 0:
+    {
+      auto x = (Vec<int> *)data;
+      uintptr_t n = x->size();
+      put_data(buffer + (*pos), (const char *)(uintptr_t)&n, sizeof(uintptr_t), 1);
+      *pos = *pos + sizeof(uintptr_t);
+      int *block_data = x->buffer();
+      copy_data(buffer + (*pos), (const char *)block_data, sizeof(int) * n, n);
+      *pos = *pos + (sizeof(int) * n);
+      return loc + 2;
     }
-    case 1: {
-      auto x = (Vec<long>*)data;
-      int n = x->size();
-      put_int(out,n);
-      long* buffer = x->buffer();
-      if(is_GPU()) {
-        long* cpu_buffer = new long[n];
-        // copy values from device to host
-        omp_target_memcpy(cpu_buffer, buffer, sizeof(long)*n, 0, 0, host_id, device_id);
-        out.write((const char*)cpu_buffer,sizeof(long)*n);
-        delete[] cpu_buffer;
-      }
-      else {
-        out.write((const char*)buffer,sizeof(long)*n);
-      }
-      return loc+2;
+    case 1:
+    {
+      auto x = (Vec<long> *)data;
+      uintptr_t n = x->size();
+      put_data(buffer + (*pos), (const char *)(uintptr_t)&n, sizeof(uintptr_t), 1);
+      *pos = *pos + sizeof(uintptr_t);
+      long *block_data = x->buffer();
+      copy_data(buffer + (*pos), (const char *)block_data, sizeof(long) * n, n);
+      *pos = *pos + (sizeof(long) * n);
+      return loc + 2;
     }
-    case 3: {
-      auto x = (Vec<double>*)data;
-      int n = x->size();
-      put_int(out,n);
-      double* buffer = x->buffer();
-      if(is_GPU()) {
-        double* cpu_buffer = new double[n];
-        // copy values from device to host
-        omp_target_memcpy(cpu_buffer, buffer, sizeof(double)*n, 0, 0, host_id, device_id);
-        out.write((const char*)cpu_buffer,sizeof(double)*n);
-        delete[] cpu_buffer;
-      }
-      else {
-        out.write((const char*)buffer,sizeof(double)*n);
-      }
-      return loc+2;
+    case 3:
+    {
+      auto x = (Vec<double> *)data;
+      uintptr_t n = x->size();
+      put_data(buffer + (*pos), (const char *)(uintptr_t)&n, sizeof(uintptr_t), 1);
+      *pos = *pos + sizeof(uintptr_t);
+      double *block_data = x->buffer();
+      copy_data(buffer + (*pos), (const char *)block_data, sizeof(double) * n, n);
+      *pos = *pos + (sizeof(double) * n);
+      return loc + 2;
     }
     default:
-      info("Unknown Vec: %d",(*encoded_type)[loc+1]);
+      info("Unknown Vec: %d", (*encoded_type)[loc + 1]);
     }
   default:
-    return loc+1;
+    return loc + 1;
   }
 }
 
-int serialize ( void* data, char* buffer, vector<int>* encoded_type ) {
-  ostringstream out;
-  serialize(out,data,encoded_type,0);
-  memcpy(buffer,out.str().c_str(),out.tellp());
-  return out.tellp();
+int serialize(void *data, char *buffer, vector<int> *encoded_type)
+{
+  int pos = 0;
+  serialize(data, buffer, encoded_type, 0, &pos);
+  return pos;
 }
 
-uintptr_t get_int ( istringstream &in ) {
-  uintptr_t n;
-  in.read((char*)&n,sizeof(uintptr_t));
-  return n;
-}
-
-int deserialize ( istringstream &in, void* &data, vector<int>* encoded_type, int loc ) {
-  int device_id = get_gpu_id();
-  int host_id = omp_get_initial_device();
-  switch ((*encoded_type)[loc]) {
-  case 0: case 1: // index
-    data = (void*)get_int(in);
-    return loc+1;
-  case 10: { // tuple
-    switch ((*encoded_type)[loc+1]) {
-      case 0:
-        return loc+2;
-      case 2: {
-        void *x1, *x2;
-        int l2 = deserialize(in,x1,encoded_type,loc+2);
-        int l3 = deserialize(in,x2,encoded_type,l2);
-        data = new tuple<void*,void*>(x1,x2);
-        return l3;
-      }
-      case 3: {
-        void *x1, *x2, *x3;
-        int l2 = deserialize(in,x1,encoded_type,loc+2);
-        int l3 = deserialize(in,x2,encoded_type,l2);
-        int l4 = deserialize(in,x3,encoded_type,l3);
-        data = new tuple<void*,void*,void*>(x1,x2,x3);
-        return l4;
-      }
-      default:
-        info("Unknown tuple: %d",(*encoded_type)[loc+1]);
-    }
+void get_data(char *data, const char *buffer, size_t len, int n)
+{
+  if (is_GPU())
+  {
+    int device_id = get_gpu_id();
+    int host_id = omp_get_initial_device();
+    omp_target_memcpy(data, buffer, len, 0, 0, host_id, device_id);
   }
-  case 11:  // Vec
-    switch ((*encoded_type)[loc+1]) {
-    case 0: {
-      int len = get_int(in);
-      Vec<int>* x = new Vec<int>(len);
-      int* buffer = x->buffer();
-      if(is_GPU()) {
-        int* cpu_buffer = new int[len];
-        in.read((char*)cpu_buffer,sizeof(int)*len);
-        // copy values from host to device
-        omp_target_memcpy(buffer, cpu_buffer, sizeof(int)*len, 0, 0, device_id, host_id);
-        delete[] cpu_buffer;
-      }
-      else {
-        in.read((char*)buffer,sizeof(int)*len);
-      }
-      data = x;
-      return loc+2;
+  else
+  {
+    memcpy(data, buffer, len);
+  }
+}
+
+int deserialize(void *&data, const char *buffer, vector<int> *encoded_type, int loc, int *pos)
+{
+  uintptr_t i;
+  switch ((*encoded_type)[loc])
+  {
+  case 0:
+  case 1: // index
+    get_data((char*)&i, buffer + (*pos), sizeof(uintptr_t), 1);
+    data = (void*)i;
+    *pos = *pos + sizeof(uintptr_t);
+    return loc + 1;
+  case 10:
+  { // tuple
+    switch ((*encoded_type)[loc + 1])
+    {
+    case 0:
+      return loc + 2;
+    case 2:
+    {
+      void *x1, *x2;
+      int l2 = deserialize(x1, buffer, encoded_type, loc + 2, pos);
+      int l3 = deserialize(x2, buffer, encoded_type, l2, pos);
+      data = new tuple<void *, void *>(x1, x2);
+      return l3;
     }
-    case 1: {
-      int len = get_int(in);
-      Vec<long>* x = new Vec<long>(len);
-      long* buffer = x->buffer();
-      if(is_GPU()) {
-        long* cpu_buffer = new long[len];
-        in.read((char*)cpu_buffer,sizeof(long)*len);
-        // copy values from host to device
-        omp_target_memcpy(buffer, cpu_buffer, sizeof(long)*len, 0, 0, device_id, host_id);
-        delete[] cpu_buffer;
-      }
-      else {
-        in.read((char*)buffer,sizeof(long)*len);
-      }
-      data = x;
-      return loc+2;
-    }
-    case 3: {
-      int len = get_int(in);
-      Vec<double>* x = new Vec<double>(len);
-      double* buffer = x->buffer();
-      if(is_GPU()) {
-        double* cpu_buffer = new double[len];
-        in.read((char*)cpu_buffer,sizeof(double)*len);
-        // copy values from host to device
-        omp_target_memcpy(buffer, cpu_buffer, sizeof(double)*len, 0, 0, device_id, host_id);
-        delete[] cpu_buffer;
-      }
-      else {
-        in.read((char*)buffer,sizeof(double)*len);
-      }
-      data = x;
-      return loc+2;
+    case 3:
+    {
+      void *x1, *x2, *x3;
+      int l2 = deserialize(x1, buffer, encoded_type, loc + 2, pos);
+      int l3 = deserialize(x2, buffer, encoded_type, l2, pos);
+      int l4 = deserialize(x3, buffer, encoded_type, l3, pos);
+      data = new tuple<void *, void *, void *>(x1, x2, x3);
+      return l4;
     }
     default:
-      info("Unknown Vec: %d",(*encoded_type)[loc+1]);
+      info("Unknown tuple: %d", (*encoded_type)[loc + 1]);
+    }
+  }
+  case 11: // Vec
+    switch ((*encoded_type)[loc + 1])
+    {
+    case 0:
+    {
+      uintptr_t len;
+      get_data((char*)&len, buffer + (*pos), sizeof(uintptr_t), 1);
+      *pos = *pos + sizeof(uintptr_t);
+      Vec<int> *x = new Vec<int>(len);
+      int *block_data = x->buffer();
+      copy_data((char*)block_data, buffer + (*pos), sizeof(int) * len, len);
+      *pos = *pos + sizeof(int) * len;
+      data = x;
+      return loc + 2;
+    }
+    case 1:
+    {
+      uintptr_t len;
+      get_data((char*)&len, buffer + (*pos), sizeof(uintptr_t), 1);
+      *pos = *pos + sizeof(uintptr_t);
+      Vec<long> *x = new Vec<long>(len);
+      long *block_data = x->buffer();
+      copy_data((char*)block_data, buffer + (*pos), sizeof(long) * len, len);
+      *pos = *pos + sizeof(long) * len;
+      data = x;
+      return loc + 2;
+    }
+    case 3:
+    {
+      uintptr_t len;
+      get_data((char*)&len, buffer + (*pos), sizeof(uintptr_t), 1);
+      *pos = *pos + sizeof(uintptr_t);
+      Vec<double> *x = new Vec<double>(len);
+      double *block_data = x->buffer();
+      copy_data((char*)block_data, buffer + (*pos), sizeof(double) * len, len);
+      *pos = *pos + sizeof(double) * len;
+      data = x;
+      return loc + 2;
+    }
+    default:
+      info("Unknown Vec: %d", (*encoded_type)[loc + 1]);
     }
   default:
-    return loc+1;
+    return loc + 1;
   }
 }
 
-void deserialize ( void* &data, const char* buffer, size_t len, vector<int>* encoded_type ) {
-  string s(buffer,len);
-  istringstream in(s);
-  in.seekg(0,ios::beg);
-  deserialize(in,data,encoded_type,0);
+void deserialize(void *&data, const char *buffer, size_t len, vector<int> *encoded_type)
+{
+  int pos = 0;
+  deserialize(data, buffer, encoded_type, 0, &pos);
 }

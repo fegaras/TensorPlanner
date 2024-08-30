@@ -20,7 +20,11 @@ bool isCoordinator();
 
 int check_communication ();
 
+int check_communication_gpu ();
+
 void send_data ( int rank, void* data, int opr_id, int tag );
+
+void send_data_gpu ( int rank, void* data, int opr_id, int tag );
 
 void send_long ( int rank, long data, int tag );
 

@@ -1,0 +1,47 @@
+#!/bin/bash
+#SBATCH -A uot166
+#SBATCH --job-name="tp_mult"
+#SBATCH --output="tp_mult.out"
+#SBATCH --partition=gpu
+#SBATCH --nodes=2
+#SBATCH --gpus=4
+#SBATCH --ntasks-per-node=4
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=377300M
+#SBATCH --export=ALL
+#SBATCH --time=10 #time limit in minutes
+
+module purge
+module load slurm gpu/0.15.4 gcc-nvptx/11.3.1
+export MPI_HOME=$HOME/openmpi-5.0.3
+
+export PATH="$MPI_HOME/bin:$PATH"
+export LD_LIBRARY_PATH="$MPI_HOME/lib:$LD_LIBRARY_PATH"
+
+export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+
+SW=/expanse/lustre/projects/uot166/fegaras
+export DIABLO_HOME=${HOME}/TP_GPU/TensorPlanner
+export SCALA_HOME=$SW/scala-2.12.3
+export SPARK_HOME=$SW/spark-3.1.2-bin-hadoop3.2
+
+JARS=${DIABLO_HOME}/lib/diablo.jar
+for I in core sql; do
+    JARS=${JARS}:`ls ${SPARK_HOME}/jars/spark-${I}*.jar`
+done
+export JARS=${JARS}
+
+export PATH="$SCALA_HOME/bin:$DIABLO_HOME/bin:$PATH"
+
+file="mult.diablo"
+echo compiling $file ...
+tp $file
+
+ulimit -l unlimited
+ulimit -s unlimited
+
+SOCKETS=2
+GPUS=4
+
+# for each expanse node: 4 gpus, 1 executor per gpus
+mpirun -N GPUS a.out 20000 1
