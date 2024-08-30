@@ -70,9 +70,10 @@ public:
       data = (T*)(uintptr_t)new_block(sizeof(T), length);
       int device_id = get_gpu_id();
       T* gpu_block = (T*)get_block((uintptr_t)data);
-      #pragma omp target teams distribute parallel for device(device_id) is_device_ptr(gpu_block) map(to: (*x)[0:length])
+      T* x_data = (*x).data();
+      #pragma omp target teams distribute parallel for device(device_id) is_device_ptr(gpu_block) map(to: x_data[0:length])
       for ( int i = 0; i < length; i++ )
-        gpu_block[i] = (*x)[i];
+        gpu_block[i] = x_data[i];
     }
     else {
       for (int i = 0; i < length; i++ )
