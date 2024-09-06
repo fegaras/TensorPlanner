@@ -2,7 +2,7 @@
 
 ### Installation
 
-DIABLO depends on MPI, JDK 11, Spark 3.2.1, Scala 2.12.15, and sbt 1.6.2.
+TensorPlanner depends on MPI, JDK 11, Spark 3.2.1, Scala 2.12.15, and sbt 1.6.2.
 
 * Install either
 open-mpi 5.0 from [https://www.open-mpi.org/software/](https://www.open-mpi.org/software/) or
@@ -43,7 +43,7 @@ Go to `tests`, edit `expanse-openmpi.run`, and do:
 sbatch expanse-openmpi.run
 ```
 
-### Synchronous DIABLO using Spark
+### Synchronous TensorPlanner using Spark
 
 Go to `TensorPlaner/tests/` and do:
 ```bash
