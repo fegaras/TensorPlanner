@@ -1,11 +1,12 @@
 var N = args(0).toInt;
-var reps = args(1).toInt;
+var M = args(1).toInt;
+var iterations = args(2).toInt;
 
-var Az = tensor*(N,N)[ ((i,j),random()) | i <-0..(N-1), j<-0..(N-1) ];
-var Bz = tensor*(N,N)[ ((i,j),random()/N) | i <-0..(N-1), j<-0..(N-1) ];
+var Az = tensor*(N,M)[ ((i,j),random()) | i <-0..(N-1), j<-0..(M-1) ];
+var Bz = tensor*(M,N)[ ((i,j),random()/N) | i <-0..(M-1), j<-0..(N-1) ];
 
 var iter = 0;
-while(iter < reps) {
+while(iter < iterations) {
     Az = tensor*(N,N) (Az @ Bz);
     iter = iter + 1;
 }

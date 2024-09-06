@@ -2,12 +2,15 @@
 #SBATCH --job-name="mllib_mult"
 #SBATCH --output="mllib_multiply_%j.out"
 
+source ../env_setup.sh
+echo "MLlib sparse matrix multiplication Job"
 export HADOOP_CONF_DIR=$HOME/expansecluster
 
 ##########################
 # Load required modules
 ##########################
-module load cpu/0.15.4 gcc/7.5.0 openjdk hadoop/3.2.2 spark
+module purge
+module load $SPARK_MODULES
 
 export EXP_HOME="$(pwd -P)"
 
@@ -21,7 +24,7 @@ mkdir -p classes
 
 f="mult_sp_mllib.scala"
 echo compiling $f ...
-scalac -d classes -cp classes:${JARS}:${DIABLO_HOME}/lib/diablo.jar ${EXP_HOME}/src/$f >/dev/null
+scalac -d classes -cp classes:${JARS}:${TP_HOME}/lib/diablo.jar ${EXP_HOME}/src/$f >/dev/null
 
 jar cf mllib.jar -C classes .
 
@@ -35,7 +38,7 @@ echo "Number of nodes = " $nodes
 executors=$((nodes*10-1))
 echo "Number of executors = " $executors
 
-SPARK_OPTIONS="--driver-memory 24G --num-executors $executors --executor-cores 12 --executor-memory 24G --driver-java-options '-Xss512m' --supervise"
+SPARK_OPTIONS="--driver-memory $SPARK_DRIVER_MEM --num-executors $executors --executor-cores $SPARK_EXECUTOR_N_CORES --executor-memory $SPARK_EXECUTOR_MEM --driver-java-options '-Xss512m' --supervise"
 
 # location of data storage and scratch space on every worker (on local SSD)
 scratch=/scratch/$USER/job_$SLURM_JOB_ID
@@ -57,9 +60,10 @@ start-dfs.sh
 myspark start
 
 n=$1
-iterations=$2
-echo "n: $n, m: $n, iterations: $iterations"
-spark-submit --jars ${DIABLO_HOME}/lib/diablo.jar --class Multiply --master $MASTER $SPARK_OPTIONS mllib.jar 4 $n $iterations
+m=$2
+iterations=$3
+echo "n: $n, m: $m, iterations: $iterations"
+spark-submit --jars ${TP_HOME}/lib/diablo.jar --class Multiply --master $MASTER $SPARK_OPTIONS mllib.jar 4 $n $m $iterations
 
 myspark stop
 stop-dfs.sh

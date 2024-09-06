@@ -2,6 +2,7 @@
 #SBATCH --job-name="tp_lr"
 #SBATCH --output=tp_mvapich_lr_%j.out
 
+source ../env_setup.sh
 echo "TensorPlanner Linear Regression Job"
 nodes=$SLURM_NNODES
 echo "Number of nodes = " $nodes
@@ -10,7 +11,7 @@ echo "Number of nodes = " $nodes
 # Load required modules
 ##########################
 module purge
-module load slurm cpu/0.17.3b gcc/10.2.0/npcyll4 mvapich2/2.3.7/iyjtn3x
+module load $TP_MVAPICH2_MODULES
 
 export EXP_HOME="$(pwd -P)"
 rm -rf classes
@@ -37,4 +38,5 @@ export trace=false
 n=$1
 m=$2
 iterations=$3
+echo "n: $n, m: $m, iterations: $iterations"
 srun --mpi=pmi2 -n $SLURM_NTASKS -c $SLURM_CPUS_PER_TASK ./a.out $n $m $iterations

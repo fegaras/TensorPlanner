@@ -2,7 +2,8 @@
 #SBATCH --job-name="scalapack_mult"
 #SBATCH --output="scalapack_multiply_%j.out"
 
-echo "Scalapack Multiply Job"
+source ../env_setup.sh
+echo "ScaLAPACK matrix multiplication Job"
 nodes=$SLURM_NNODES
 echo "Number of nodes = " $nodes
 
@@ -10,7 +11,7 @@ echo "Number of nodes = " $nodes
 # Load required modules
 ##########################
 module purge
-module load slurm cpu/0.17.3b  gcc/10.2.0 openmpi/4.1.3 intel-mkl/2020.4.304
+module load $ScaLAPACK_MODULES
 
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export EXP_HOME="$(pwd -P)"
@@ -23,4 +24,6 @@ mpicxx -fopenmp -o $EXP_HOME/sc_mult $EXP_HOME/src/mult_scalapack.cpp  \
 
 echo "Compilation done..."
 n=$1
-srun -n $SLURM_NTASKS $EXP_HOME/sc_mult $n
+m=$2
+echo "n: $n, m: $m"
+srun -n $SLURM_NTASKS $EXP_HOME/sc_mult $n $m

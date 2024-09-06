@@ -2,6 +2,7 @@
 #SBATCH --job-name="tp_factorization"
 #SBATCH --output=tp_openmpi_factorization_%j.out
 
+source ../env_setup.sh
 echo "TensorPlanner Factorization Job"
 nodes=$SLURM_NNODES
 echo "Number of nodes = " $nodes
@@ -10,7 +11,7 @@ echo "Number of nodes = " $nodes
 # Load required modules
 ##########################
 module purge
-module load slurm cpu/0.17.3b  gcc/10.2.0/npcyll4 openmpi/4.1.3
+module load $TP_OPENMPI_MODULES
 
 export EXP_HOME="$(pwd -P)"
 rm -rf classes

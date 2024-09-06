@@ -1,18 +1,24 @@
 #!/bin/bash
 
-export EXP_HOME="$(pwd -P)"
-source $EXP_HOME/env_setup.sh
-
+source ../env_setup.sh
 command="sbatch -A $ACCOUNT_NAME -p compute  -N $N_NODES --ntasks-per-node=$N_TASKS_PER_NODE -c $N_CPUS_PER_TASK --mem=$MEM_LIMIT --export=ALL -t $TIME_LIMIT"
 echo $command
 
-n=20000
-m=20000
+# Set the matrix dimensions and iterations
+n=5000
+m=5000
 d=1000
 iterations=10
 
 # TensorPlanner
-$command tp_mvapich_factor.sh $n $m $d $iterations
+##########################
+# Use Either OpenMPI or MVAPICH2
+##########################
+if [ "$use_mvapich" == "y" ]; then
+    $command tp_mvapich_factor.sh $n $m $d $iterations
+else
+    $command tp_openmpi_factor.sh $n $m $d $iterations
+fi
 
 # SAC
 $command sac_factor.sh $n $m $d $iterations

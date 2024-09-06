@@ -20,17 +20,17 @@ object Multiply {
     val repeats = args(0).toInt   // how many times to repeat each experiment
     // each matrix has n*m elements
     val n = args(1).toInt
-    val iterations = args(2).toInt
+    val m = args(2).toInt
+    val iterations = args(3).toInt
     val sparsity = 0.01
     parami(block_dim_size,1000)  // size of each dimension in a block
     val N = 1000
     parami(number_of_partitions,100)
 
     val conf = new SparkConf().setAppName("multiply")
-    spark_context = new SparkContext(conf)
-
     conf.set("spark.logConf","false")
     conf.set("spark.eventLog.enabled","false")
+    spark_context = new SparkContext(conf)
     LogManager.getRootLogger().setLevel(Level.WARN)
 
     val rand = new Random()
@@ -67,7 +67,7 @@ object Multiply {
     def testMultiplyMLlib(): Double = {
       val t = System.currentTimeMillis()
       try {
-      for(iter <- 0 to reps-1)
+      for(iter <- 0 to iterations-1)
         A = A.multiply(B)
       val x = A.blocks.count
       } catch { case x: Throwable => println(x); return -1.0 }
@@ -90,7 +90,7 @@ object Multiply {
         }
       }
       if (i > 1) s = (s-max_time)/(i-1)
-      print("*** %s n=%d m=%d N=%d ".format(name,n,n,N))
+      print("*** %s n=%d m=%d N=%d ".format(name,n,m,N))
       println("tries=%d %.3f secs".format(i,s))
     }
  

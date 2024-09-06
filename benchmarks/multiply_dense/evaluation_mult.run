@@ -1,25 +1,44 @@
 #!/bin/bash
 
+source ../env_setup.sh
 export EXP_HOME="$(pwd -P)"
-source $EXP_HOME/env_setup.sh
 
 command="sbatch -A $ACCOUNT_NAME -p compute  -N $N_NODES --ntasks-per-node=$N_TASKS_PER_NODE -c $N_CPUS_PER_TASK --mem=$MEM_LIMIT --export=ALL -t $TIME_LIMIT"
 echo $command
 
+# Set the matrix dimensions
 n=20000
+m=20000
+##########################
+# iterations is used to create a chain matrix multiplication, e.g.:
+## for(int i = 0; i < iterations; i++); do
+##	A = A @ B;
+## return A;
+# if iterations > 1, n must be equal to m
+##########################
 iterations=1
 
 # TensorPlanner
-$command tp_mvapich_mult.sh $n $iterations
+##########################
+# Use Either OpenMPI or MVAPICH2
+##########################
+if [ "$use_mvapich" == "y" ]; then
+    $command tp_mvapich_mult.sh $n $m $iterations
+else
+    $command tp_openmpi_mult.sh $n $m $iterations
+fi
 
 # ScaLAPACK
-$command scalapack_mult.sh $n
+##########################
+# Omit iterations because no lazy evaluation
+##########################
+$command scalapack_mult.sh $n $m
 
 # Dask
-$command dask_mult.sh $n $iterations
+$command dask_mult.sh $n $m $iterations
 
 # Ray
-$command ray_mult.sh $n $iterations
+$command ray_mult.sh $n $m $iterations
 
 # Ray with OpenMP
 cd $EXP_HOME/src
@@ -29,10 +48,16 @@ python3 matmult_setup.py build_ext --inplace
 cp matmult*.so ../
 cd $EXP_HOME
 python3 -c 'import sys; import os; sys.path.append(os.environ["EXP_HOME"])'
-$command ray_openmp_mult.sh $n $iterations
+$command ray_openmp_mult.sh $n $m $iterations
 
 # SAC
-$command sac_mult.sh $n
+##########################
+# Iterations omitted as too slow for iterations
+##########################
+$command sac_mult.sh $n $m
 
 # MLlib
-$command mllib_mult.sh $n
+##########################
+# Iterations omitted as too slow for iterations
+##########################
+$command mllib_mult.sh $n $m

@@ -10,9 +10,9 @@ object Multiply {
     val N = block_dim_size
 
     val conf = new SparkConf().setAppName("tiles")
-    spark_context = new SparkContext(conf)
     conf.set("spark.logConf","false")
     conf.set("spark.eventLog.enabled","false")
+    spark_context = new SparkContext(conf)
     LogManager.getRootLogger().setLevel(Level.WARN)
     param(groupByJoin,false)
     param(use_map_join,false)
@@ -20,7 +20,7 @@ object Multiply {
     val repeats = args(0).toInt // how many times to repeat each experiment
     // each matrix has n*m elements
     val n = args(1).toInt
-    val m = n
+    val m = args(2).toInt
 
     def pr ( x: (Any,Any) ) {
       val z = x._2.asInstanceOf[(Any,Any,Array[Double])]

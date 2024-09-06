@@ -9,7 +9,7 @@ var beta = 0.02;
 
 var R = tensor*(N)(M)[ ((i,j),random()) | i <- 0..(N-1), j <- 0..(M-1), random() < sparsity ];
 var P = tensor*(N,D)[ ((i,j),random()) | i <- 0..(N-1), j <- 0..(D-1) ];
-var Q = tensor*(D,M)[ ((i,j),random()/n) | i <- 0..(D-1), j <- 0..(M-1) ];
+var Q = tensor*(D,M)[ ((i,j),random()/N) | i <- 0..(D-1), j <- 0..(M-1) ];
 
 var iter = 0;
 while(iter < iterations) {

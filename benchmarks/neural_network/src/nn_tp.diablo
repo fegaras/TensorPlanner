@@ -16,7 +16,7 @@ var A_arr1 = tensor*(n,m) [ ((i,j),random()) | i <- 0..(n-1), j <- 0..(m-1)];
 var A_arr2 = tensor*(n,m) [ ((i,j),random()) | i <- 0..(n-1), j <- 0..(m-1)];
 
 var iter = 0;
-while(iter < reps) {
+while(iter < iterations) {
     iter = iter + 1;
     var A_curr = X_d;
     A_arr1 = A_curr;

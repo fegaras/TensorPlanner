@@ -1,18 +1,24 @@
 #!/bin/bash
 
-export EXP_HOME="$(pwd -P)"
-source $EXP_HOME/env_setup.sh
-
+source ../env_setup.sh
 command="sbatch -A $ACCOUNT_NAME -p compute  -N $N_NODES --ntasks-per-node=$N_TASKS_PER_NODE -c $N_CPUS_PER_TASK --mem=$MEM_LIMIT --export=ALL -t $TIME_LIMIT"
 echo $command
 
+# Set the data size, feature size, iterations(epochs) and number of classes
 n=20000
 m=2000
 iterations=10
 num_classes=2
 
 # TensorPlanner
-$command tp_mvapich_nn.sh $n $m $iterations
+##########################
+# Use Either OpenMPI or MVAPICH2
+##########################
+if [ "$use_mvapich" == "y" ]; then
+    $command tp_mvapich_nn.sh $n $m $iterations
+else
+    $command tp_openmpi_nn.sh $n $m $iterations
+fi
 
 # PyTorch
 $command torch_nn.sh $n $m $iterations $num_classes

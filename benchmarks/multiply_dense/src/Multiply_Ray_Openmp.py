@@ -5,8 +5,7 @@ import numpy as np
 import time
 from matmult import *
 
-n, iterations = int(sys.argv[1]), int(sys.argv[2])
-m = n
+n, m, iterations = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
 print(f"iterations: {iterations}, n: {n}, m: {m}")
 ray.init(address=os.environ["ip_head"])
 print("Nodes in the Ray cluster:", len(ray.nodes()))
