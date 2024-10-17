@@ -71,9 +71,7 @@ public:
       int device_id = get_gpu_id();
       T* gpu_block = (T*)get_block((uintptr_t)data);
       T* x_data = (*x).data();
-      #pragma omp target teams distribute parallel for device(device_id) is_device_ptr(gpu_block) map(to: x_data[0:length])
-      for ( int i = 0; i < length; i++ )
-        gpu_block[i] = x_data[i];
+      copy_block((char*)gpu_block, (char*)x_data, length*sizeof(T), cudaMemcpyH2D);
     }
     else {
       for (int i = 0; i < length; i++ )
@@ -103,8 +101,7 @@ public:
       // read data from GPU
       T* ret = new T[1];
       int device_id = get_gpu_id();
-      #pragma omp target device(device_id) is_device_ptr(gpu_block) map(from: ret[0:1])
-      ret[0] = gpu_block[n];
+      copy_block((char*)ret, (char*)(gpu_block+(n-1)*sizeof(T)), sizeof(T), cudaMemcpyD2H);
 
       return ret[0];
     }
@@ -118,8 +115,7 @@ public:
       // read data from GPU
       T* ret = new T[1];
       int device_id = get_gpu_id();
-      #pragma omp target device(device_id) is_device_ptr(gpu_block) map(from: ret[0:1])
-      ret[0] = gpu_block[n];
+      copy_block((char*)ret, (char*)(gpu_block+(n-1)*sizeof(T)), sizeof(T), cudaMemcpyD2H);
 
       return ret[0];
     }
@@ -151,10 +147,14 @@ Vec<T>* array_buffer_dense ( size_t dsize, const T zero ) {
   Vec<T>* a = new Vec<T>(dsize);
   T* av = a->buffer();
   int device_id = get_gpu_id();
-  #pragma omp target teams if (is_GPU()) device(device_id) is_device_ptr(av)
-  #pragma omp parallel for
-  for ( int i = 0; i < dsize; i++ )
-    av[i] = zero;
+  if(is_GPU()) {
+    initMatrix(av, zero, dsize);
+  }
+  else {
+#pragma omp parallel for
+    for ( int i = 0; i < dsize; i++ )
+      av[i] = zero;
+  }
   return a;
 }
 
@@ -386,10 +386,14 @@ Vec<T>* array_buffer ( int dsize, int ssize, T zero,
   auto buffer = new Vec<T>(dsize*ssize);
   T* bv = buffer->buffer();
   int device_id = get_gpu_id();
-  #pragma omp target teams if (is_GPU()) device(device_id) is_device_ptr(bv)
-  #pragma omp parallel for
-  for (int i = 0; i < dsize*ssize; i++ )
-    bv[i] = zero;
+  if(is_GPU()) {
+    initMatrix(bv, zero, dsize*ssize);
+  }
+  else {
+#pragma omp parallel for
+    for (int i = 0; i < dsize*ssize; i++ )
+      bv[i] = zero;
+  }
   if (init != nullptr) {
     #pragma omp parallel for
     for ( int i = 0; i < get<0>(*init)->size()-1; i++ ) {
@@ -410,10 +414,14 @@ Vec<T>* array_buffer_sparse ( int ssize, T zero, tuple<Vec<int>*,Vec<T>*>* init 
   auto buffer = new Vec<T>(ssize);
   T* bv = buffer->buffer();
   int device_id = get_gpu_id();
-  #pragma omp target teams if(is_GPU()) device(device_id) is_device_ptr(bv)
-  #pragma omp parallel for
-  for (int i = 0; i < ssize; i++ )
-    bv[i] = zero;
+  if(is_GPU()) {
+    initMatrix(bv, zero, ssize);
+  }
+  else {
+#pragma omp parallel for
+    for (int i = 0; i < ssize; i++ )
+      bv[i] = zero;
+  }
   if (init != nullptr) {
     #pragma omp parallel for
     for ( int j = 0; j < get<0>(*init)->size()-1; j++ )
@@ -450,9 +458,8 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
   }
   if(is_GPU()) {
     int device_id = get_gpu_id();
-    int host_id = omp_get_initial_device();
     // copy values from host to device
-    omp_target_memcpy(dense_buffer, dv, sizeof(int)*(dn+1), 0, 0, device_id, host_id);
+    copy_block((char*)dense_buffer, (char*)dv, (dn+1)*sizeof(int), cudaMemcpyH2D);
     delete[] dv;
   }
   delete buffer;
@@ -490,10 +497,7 @@ Vec<T>* merge_tensors ( const Vec<T>* x, const Vec<T>* y, T(*op)(tuple<T,T>*), c
   auto t = new tuple<T,T>(zero,zero);
   if(is_GPU()) {
     int device_id = get_gpu_id();
-    #pragma omp target teams distribute parallel for device(device_id) is_device_ptr(av,xv,yv)
-    for ( int i = 0; i < len; i++ ) {
-      av[i] = xv[i]+yv[i];
-    }
+    mergeMatrix(xv, yv, av, len);
   }
   else {
     #pragma omp parallel for
@@ -534,7 +538,7 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
       if ((*get<1>(*x))[xn] == (*get<1>(*y))[yn]) {
         get<0>(*t) = (*get<2>(*x))[xn];
         get<1>(*t) = (*get<2>(*y))[yn];
-        T v = op(t);
+        T v = op(get<0>(*t),get<1>(*t));
         if (v != zero) {
           sparse->push_back((*get<1>(*x))[xn]);
           values->push_back(v);
@@ -543,7 +547,7 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
       } else if ((*get<1>(*x))[xn] < (*get<1>(*y))[yn]) {
         get<0>(*t) = (*get<2>(*x))[xn];
         get<1>(*t) = zero;
-        T v = op(t);
+        T v = op(get<0>(*t),get<1>(*t));
         if (v != zero) {
           sparse->push_back((*get<1>(*x))[xn]);
           values->push_back(v);
@@ -552,7 +556,7 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
       } else {
         get<0>(*t) = zero;
         get<1>(*t) = (*get<2>(*y))[yn];
-        T v = op(t);
+        T v = op(get<0>(*t),get<1>(*t));
         if (v != zero) {
           sparse->push_back((*get<1>(*y))[yn]);
           values->push_back(v);
@@ -563,7 +567,7 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
     while (xn < (*get<0>(*x))[i+1]) {
       get<0>(*t) = (*get<2>(*x))[xn];
       get<1>(*t) = zero;
-      T v = op(t);
+      T v = op(get<0>(*t),get<1>(*t));
       if (v != zero) {
         sparse->push_back((*get<1>(*x))[xn]);
         values->push_back(v);
@@ -573,7 +577,7 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
     while (yn < (*get<0>(*y))[i+1]) {
       get<0>(*t) = zero;
       get<1>(*t) = (*get<2>(*y))[yn];
-      T v = op(t);
+      T v = op(get<0>(*t),get<1>(*t));
       if (v != zero) {
         sparse->push_back((*get<1>(*y))[yn]);
         values->push_back(v);
@@ -585,9 +589,8 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
   }
   if(is_GPU()) {
     int device_id = get_gpu_id();
-    int host_id = omp_get_initial_device();
     // copy values from host to device
-    omp_target_memcpy(buffer, dv, sizeof(int)*(len+1), 0, 0, device_id, host_id);
+    copy_block((char*)buffer, (char*)dv, (len+1)*sizeof(int), cudaMemcpyH2D);
     delete[] dv;
   }
   delete t;
@@ -610,7 +613,7 @@ tuple<Vec<int>*,Vec<T>*>*
     if ((*get<0>(*x))[xn] == (*get<0>(*y))[yn]) {
       get<0>(*t) = (*get<1>(*x))[xn];
       get<1>(*t) = (*get<1>(*y))[yn];
-      T v = op(t);
+      T v = op(get<0>(*t),get<1>(*t));
       if (v != zero) {
         sparse->push_back((*get<0>(*x))[xn]);
         values->push_back(v);
@@ -619,7 +622,7 @@ tuple<Vec<int>*,Vec<T>*>*
     } else if ((*get<0>(*x))[xn] < (*get<0>(*y))[yn]) {
       get<0>(*t) = (*get<1>(*x))[xn];
       get<1>(*t) = zero;
-      T v = op(t);
+      T v = op(get<0>(*t),get<1>(*t));
       if (v != zero) {
         sparse->push_back((*get<0>(*x))[xn]);
         values->push_back(v);
@@ -628,7 +631,7 @@ tuple<Vec<int>*,Vec<T>*>*
     } else {
       get<0>(*t) = zero;
       get<1>(*t) = (*get<1>(*y))[yn];
-      T v = op(t);
+      T v = op(get<0>(*t),get<1>(*t));
       if (v != zero) {
         sparse->push_back((*get<0>(*y))[yn]);
         values->push_back(v);
@@ -639,7 +642,7 @@ tuple<Vec<int>*,Vec<T>*>*
   while (xn < get<0>(*x)->size()) {
     get<0>(*t) = (*get<1>(*x))[xn];
     get<1>(*t) = zero;
-    T v = op(t);
+    T v = op(get<0>(*t),get<1>(*t));
     if (v != zero) {
       sparse->push_back((*get<0>(*x))[xn]);
       values->push_back(v);
@@ -649,7 +652,7 @@ tuple<Vec<int>*,Vec<T>*>*
   while (yn < get<0>(*y)->size()) {
     get<0>(*t) = zero;
     get<1>(*t) = (*get<1>(*y))[yn];
-    T v = op(t);
+    T v = op(get<0>(*t),get<1>(*t));
     if (v != zero) {
       sparse->push_back((*get<0>(*y))[yn]);
       values->push_back(v);

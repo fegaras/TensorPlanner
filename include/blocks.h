@@ -14,7 +14,23 @@
  * limitations under the License.
  */
 
+/**
+ * CUDA memory copy types
+ */
+enum memCpyKind
+{
+    cudaMemcpyH2H       =   0,      /**< Host   -> Host */
+    cudaMemcpyH2D       =   1,      /**< Host   -> Device */
+    cudaMemcpyD2H       =   2,      /**< Device -> Host */
+    cudaMemcpyD2D       =   3,      /**< Device -> Device */
+    cudaMemcpyDef       =   4       /**< Direction of the transfer is inferred from the pointer values. Requires unified virtual addressing */
+};
+
 bool is_GPU();
+
+int getDeviceCount();
+
+void setDevice(int device_id);
 
 int get_gpu_id();
 
@@ -25,3 +41,12 @@ int new_block(size_t t, size_t len);
 void* get_block(int loc);
 
 void delete_block(int loc);
+
+void* allocate_memory(size_t t);
+
+void copy_block(char *data, const char *buffer, size_t len, int memcpy_kind);
+
+void initMatrix(double* A, double a, int N);
+
+void mergeMatrix(double* A, double* B, double* C, int N);
+

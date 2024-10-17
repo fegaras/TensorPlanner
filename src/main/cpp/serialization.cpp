@@ -28,10 +28,7 @@ void copy_data(char *data, const char *buffer, size_t len, int n)
   if (is_GPU())
   {
     int device_id = get_gpu_id();
-#pragma omp target teams device(device_id) is_device_ptr(buffer,data)
-#pragma omp parallel for
-    for (int i = 0; i < n; i++)
-      data[i] = buffer[i];
+    copy_block(data, buffer, len, cudaMemcpyD2D);
   }
   else
   {
@@ -44,8 +41,7 @@ void put_data(char *buffer, const char *data, size_t len, int n)
   if (is_GPU())
   {
     int device_id = get_gpu_id();
-    int host_id = omp_get_initial_device();
-    omp_target_memcpy(buffer, data, len, 0, 0, device_id, host_id);
+    copy_block(buffer, data, len, cudaMemcpyH2D);
   }
   else
   {
@@ -143,8 +139,7 @@ void get_data(char *data, const char *buffer, size_t len, int n)
   if (is_GPU())
   {
     int device_id = get_gpu_id();
-    int host_id = omp_get_initial_device();
-    omp_target_memcpy(data, buffer, len, 0, 0, host_id, device_id);
+    copy_block(data, buffer, len, cudaMemcpyD2H);
   }
   else
   {
@@ -201,7 +196,7 @@ int deserialize(void *&data, const char *buffer, vector<int> *encoded_type, int 
       Vec<int> *x = new Vec<int>(len);
       int *block_data = x->buffer();
       copy_data((char*)block_data, buffer + (*pos), sizeof(int) * len, len);
-      *pos = *pos + sizeof(int) * len;
+      *pos = *pos + (sizeof(int) * len);
       data = x;
       return loc + 2;
     }
@@ -213,7 +208,7 @@ int deserialize(void *&data, const char *buffer, vector<int> *encoded_type, int 
       Vec<long> *x = new Vec<long>(len);
       long *block_data = x->buffer();
       copy_data((char*)block_data, buffer + (*pos), sizeof(long) * len, len);
-      *pos = *pos + sizeof(long) * len;
+      *pos = *pos + (sizeof(long) * len);
       data = x;
       return loc + 2;
     }
@@ -225,7 +220,7 @@ int deserialize(void *&data, const char *buffer, vector<int> *encoded_type, int 
       Vec<double> *x = new Vec<double>(len);
       double *block_data = x->buffer();
       copy_data((char*)block_data, buffer + (*pos), sizeof(double) * len, len);
-      *pos = *pos + sizeof(double) * len;
+      *pos = *pos + (sizeof(double) * len);
       data = x;
       return loc + 2;
     }

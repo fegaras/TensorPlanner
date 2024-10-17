@@ -41,6 +41,7 @@ MPI_Request receive_request = MPI_REQUEST_NULL;
 list<int> failed_executors;
 list<int> active_executors;
 extern bool skip_work;
+
 // max wait time in msecs when sending a message before we assume the receiver is dead
 int max_wait_time = 1000;
 
@@ -231,7 +232,7 @@ int check_communication () {
 // for gpu communication, check if there is a request to send data (array blocks); if there is, get the data and cache it
 int check_communication_gpu () {
   int device_id = get_gpu_id();
-  static char* gpu_buffer = (char*)omp_target_alloc(max_buffer_size, device_id);
+  static char* gpu_buffer = (char*)allocate_memory(max_buffer_size);
   if (receive_request == MPI_REQUEST_NULL) {
     // prepare for the first receive (non-blocking)
     MPI_Irecv(gpu_buffer,max_buffer_size,MPI_BYTE,MPI_ANY_SOURCE,MPI_ANY_TAG,
@@ -243,15 +244,11 @@ int check_communication_gpu () {
     // deserialize and process the incoming data
     int opr_id, tag, len;
     void* data;
-    #pragma omp target device(device_id) is_device_ptr(gpu_buffer) map(from:opr_id,tag,len)
-    {
-      opr_id = *(const int*)gpu_buffer;
-      tag = *(const int*)(gpu_buffer+sizeof(int));
-      len = *(const int*)(gpu_buffer+2*sizeof(int));
-    }
+    copy_block((char*)&opr_id, gpu_buffer, sizeof(int), cudaMemcpyD2H);
+    copy_block((char*)&tag, gpu_buffer+sizeof(int), sizeof(int), cudaMemcpyD2H);
+    copy_block((char*)&len, gpu_buffer+2*sizeof(int), sizeof(int), cudaMemcpyD2H);
     if (opr_id < 0) {
-      #pragma omp target device(device_id) is_device_ptr(gpu_buffer) map(from:data)
-      data = (void*)*(const long*)(gpu_buffer+3*sizeof(int));
+      copy_block((char*)data, gpu_buffer+3*sizeof(int), sizeof(int), cudaMemcpyD2H);
     }
     else deserialize(data,gpu_buffer+3*sizeof(int),len,operations[opr_id]->encoded_type);
     // prepare for the next receive (non-blocking)
@@ -331,18 +328,14 @@ void send_data ( int rank, void* data, int opr_id, int tag ) {
 void send_data_gpu ( int rank, void* data, int opr_id, int tag ) {
   int device_id = get_gpu_id();
   // needs to be static and locked
-  static char* gpu_buffer = (char*)omp_target_alloc(max_buffer_size, device_id);
+  static char* gpu_buffer = (char*)allocate_memory(max_buffer_size);
   lock_guard<mutex> lock(send_data_mutex);
   // serialize data into a byte array
   Opr* opr = operations[opr_id];
-  #pragma omp target device(device_id) is_device_ptr(gpu_buffer) map(to:opr_id,tag)
-  {
-    *(int*)gpu_buffer = opr_id;
-    *(int*)(gpu_buffer+sizeof(int)) = tag;
-  }
+  copy_block(gpu_buffer, (const char *)&opr_id, sizeof(int), cudaMemcpyH2D);
+  copy_block(gpu_buffer+sizeof(int), (const char *)&tag, sizeof(int), cudaMemcpyH2D);
   int len = serialize(data,gpu_buffer+3*sizeof(int),opr->encoded_type);
-  #pragma omp target device(device_id) is_device_ptr(gpu_buffer) map(to:len)
-  *(int*)(gpu_buffer+2*sizeof(int)) = len;
+  copy_block(gpu_buffer+2*sizeof(int), (const char *)&len, sizeof(int), cudaMemcpyH2D);
   info("    sending %d bytes to %d (opr %d)",
        len+3*sizeof(int),rank,opr_id);
   if (!enable_recovery)
@@ -455,10 +448,10 @@ void mpi_startup ( int argc, char* argv[], int block_dim_size ) {
   gethostname(machine_name,255);
   int local_rank = get_local_rank();
   int ts;
-  int num_devices = omp_get_num_devices();
+  int num_devices = getDeviceCount();
   if(local_rank < num_devices)
-    omp_set_default_device(local_rank);
-  int dev_id = omp_get_default_device();
+    setDevice(local_rank);
+  int dev_id = get_gpu_id();
   #pragma omp parallel
   { ts = omp_get_num_threads(); }
   printf("Using executor %d: %s/%d (threads: %d)\nNumber of GPUs: %d, device: %d\n",

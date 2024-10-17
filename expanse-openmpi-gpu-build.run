@@ -1,0 +1,27 @@
+#!/bin/bash
+#SBATCH -A uot166
+#SBATCH --job-name="tp_gpu"
+#SBATCH --output="tp_gpu.out"
+#SBATCH --partition=gpu-shared
+#SBATCH --nodes=1
+#SBATCH --gpus=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=20G
+#SBATCH --export=ALL
+#SBATCH --time=10 #time limit in minutes
+
+module purge
+module load slurm gpu/0.15.4 gcc-nvptx/11.3.1 cuda/11.0.2
+export MPI_HOME=$HOME/openmpi-5.0.3
+
+export PATH="$MPI_HOME/bin:$PATH"
+export LD_LIBRARY_PATH="$MPI_HOME/lib:$LD_LIBRARY_PATH"
+
+SW=/expanse/lustre/projects/uot166/fegaras
+
+$SW/sbt/bin/sbt package
+
+g++ -O3 -fopenacc -foffload=nvptx-none -fcf-protection=none -fno-stack-protector -no-pie -DNDEBUG -fpermissive -I$MPI_HOME/include -Iinclude -L$MPI_HOME/lib -Wl,-rpath -Wl,$MPI_HOME/lib -lmpi -c src/main/cpp/*.cpp
+ar rcs lib/libdiablo.a *.o
+rm *.o

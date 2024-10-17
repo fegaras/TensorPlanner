@@ -21,10 +21,18 @@
 Vec<bool>* array_buffer_bool ( int dsize, int ssize, tuple<Vec<int>*,Vec<bool>*>* init = nullptr ) {
   auto buffer = new Vec<bool>(dsize*ssize);
   bool* bv = buffer->buffer();
-    #pragma omp target teams if(is_GPU()) is_device_ptr(bv)
-    #pragma omp parallel for
+  if(is_GPU()) {
+    int device_id = get_gpu_id();
+    setDevice(device_id);
+#pragma acc parallel loop deviceptr(bv)
     for (int i = 0; i < dsize*ssize; i++ )
       bv[i] = false;
+  }
+  else {
+#pragma omp parallel for
+    for (int i = 0; i < dsize*ssize; i++ )
+      bv[i] = false;
+  }
   if (init != nullptr) {
     #pragma omp parallel for
     for ( int i = 0; i < get<0>(*init)->size()-1; i++ ) {

@@ -36,6 +36,7 @@ package object diablo extends diablo.ArrayFunctions {
   var asynchronous = false
   var cxx_generation = false
   val add_index_bounds = false
+  var use_GPU = false             // If GPU is available
 
   val rddClass = "org.apache.spark.rdd.RDD"
   val datasetClass = "edu.uta.diablo.DiabloDataFrame"
@@ -219,6 +220,7 @@ package object diablo extends diablo.ArrayFunctions {
        case "mapPreserve" => mapPreserve = bv
        case "use_map_join" => use_map_join = bv
        case "asynchronous" => asynchronous = bv
+       case "use_GPU" => use_GPU = bv
        case "cxx_generation" => cxx_generation = bv
        case "data_frames"
          => data_frames = bv

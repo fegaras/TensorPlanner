@@ -12,7 +12,7 @@
 #SBATCH --time=10 #time limit in minutes
 
 module purge
-module load slurm gpu/0.15.4 gcc-nvptx/11.3.1
+module load slurm gpu/0.15.4 gcc-nvptx/11.3.1 cuda/11.0.2
 export MPI_HOME=$HOME/openmpi-5.0.3
 
 export PATH="$MPI_HOME/bin:$PATH"
@@ -44,4 +44,4 @@ SOCKETS=2
 GPUS=4
 
 # for each expanse node: 4 gpus, 1 executor per gpus
-mpirun -N GPUS a.out 20000 1
+mpirun -N $GPUS --bind-to socket --mca btl_openib_allow_ib true -mca btl ^uct a.out 20000 1

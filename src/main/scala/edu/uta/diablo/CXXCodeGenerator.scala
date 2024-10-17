@@ -390,8 +390,15 @@ object CXXCodeGenerator {
                 case _ => List()
               }.mkString(",")
              val loop_text = tab(tabs-1)+"for ( int "+i+" = "+makeC(n1_b,tabs,false)+"; "+i+
-                 " <= "+makeC(n2_b,tabs,false)+"; "+i+" += "+makeC(n3_b,tabs,false)+" )\n"+
-                 tab(tabs)+makeC(nb,tabs+1,true)+"; }"
+                 " <= "+makeC(n2_b,tabs,false)+"; "+i+" += "+makeC(n3_b,tabs,false)+" )\n"
+             var pragma_str = ""
+             if(use_GPU) {
+                pragma_str = tab(tabs)+"int dev = get_gpu_id();\n" +
+                "#pragma acc parallel loop gang vector_length(1024) deviceptr("+data+")\n"
+              }
+              else {
+                pragma_str = "#pragma omp parallel for\n"
+              }
              "{ "+all_m.flatMap{ 
                   case (v,u) => 
                   u match {
@@ -400,17 +407,37 @@ object CXXCodeGenerator {
                   }
                   case _ => List()
                 }.mkString("")+"\n"+
-              tab(tabs-1)+"if(is_GPU()) {\n" +
-              tab(tabs)+"int dev = get_gpu_id();\n" +
-              "#pragma omp target teams distribute parallel for device(dev) is_device_ptr("+data+")\n" +
-              loop_text +
-              "\n"+tab(tabs)+"else {\n" +
-              "#pragma omp parallel for\n" +
-              loop_text +
-              "\n}\n"
+                pragma_str+
+                loop_text+tab(tabs)+makeC(nb,tabs+1,true)+";"+
+                "\n}\n"
 
         case Call("for",List(VarDecl(i,tp,Range(n1,n2,n3)),b))
-          => "for ( int "+i+" = "+makeC(n1,tabs,false)+"; "+i+
+          => var pragma_str = ""
+              if(use_GPU) {
+                def get_pragma_str ( nb : Expr): String
+                  = nb match {
+                    case Assign(d,_)
+                      => def get_vars ( expr: Expr ): List[String]
+                          = expr match {
+                              case Var(v)
+                                => List(v)
+                              case Index(Var(v),List(n))
+                                => get_vars(n)
+                              case MethodCall(x,_,List(y))
+                                => get_vars(x)++get_vars(y)
+                              case _ => accumulate[List[String]](expr,get_vars,_++_,Nil)
+                            }
+                        val indices = get_vars(d)
+                        if(indices.contains(i))
+                          "#pragma acc loop vector\n"+tab(tabs-1)
+                        else ""
+                    case Block(List(x,Seq(List(Block(Nil)))))
+                      => get_pragma_str(x)
+                    case _ => ""
+                }}
+                pragma_str = get_pragma_str(b)
+              }
+              pragma_str+"for ( int "+i+" = "+makeC(n1,tabs,false)+"; "+i+
                  " <= "+makeC(n2,tabs,false)+"; "+i+" += "+makeC(n3,tabs,false)+" )\n"+
                  tab(tabs)+makeC(b,tabs+1,true)
         case Call("for",List(VarDecl(v,tp,x),b))

@@ -6,11 +6,16 @@ if [ -z $block_size ]; then
    block_size=1000
 fi
 
+if [ -z $use_GPU ]; then
+   use_GPU=false
+fi
+
 echo "import edu.uta.diablo._
 import Math._
 object Test {
   def main ( args: Array[String] ) {
     parami(block_dim_size,$block_size)
+    param(use_GPU,$use_GPU)
     param(asynchronous,true)
     //param(trace,false)
     param(cxx_generation,true)
@@ -26,7 +31,7 @@ mkdir -p classes
 scalac -d classes -cp ${JARS} cxxgen.sc >cxxgen.log
 
 if [ "$debug" == "y" ]; then
-    exec mpic++ -g cxxgen.cpp -fopenmp -foffload=nvptx-none -fcf-protection=none -fno-stack-protector -no-pie -I${DIABLO_HOME}/include -L${DIABLO_HOME}/lib -ldiablo
+    exec g++ -g cxxgen.cpp -fopenacc -foffload=nvptx-none -fcf-protection=none -fno-stack-protector -no-pie -I${DIABLO_HOME}/include -L${DIABLO_HOME}/lib -ldiablo -I$MPI_HOME/include -Iinclude -L$MPI_HOME/lib -Wl,-rpath -Wl,$MPI_HOME/lib -lmpi -L/usr/local/cuda/lib64 -lcudart -I/usr/local/cuda/include
 else
-    exec mpic++ -O3 -DNDEBUG cxxgen.cpp -fopenmp -foffload=nvptx-none -fcf-protection=none -fno-stack-protector -no-pie -I${DIABLO_HOME}/include -L${DIABLO_HOME}/lib -ldiablo
+    exec g++ -O3 -DNDEBUG cxxgen.cpp -fopenacc -foffload=nvptx-none -fcf-protection=none -fno-stack-protector -no-pie -I${DIABLO_HOME}/include -L${DIABLO_HOME}/lib -ldiablo -I$MPI_HOME/include -Iinclude -L$MPI_HOME/lib -Wl,-rpath -Wl,$MPI_HOME/lib -lmpi
 fi

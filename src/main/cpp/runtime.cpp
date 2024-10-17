@@ -56,7 +56,6 @@ int block_count = 0;
 int block_created = 0;
 int max_blocks = 0;
 
-
 void delete_block ( void* &data, vector<int>* encoded_type );
 
 // used for comparing task priorities in the run-time queue
@@ -128,7 +127,8 @@ string sprint ( Opr* opr ) {
     .append(sprint(*opr->consumers));
 }
 
-void print_block_data_array(ostringstream &out, const double* data, int n) {
+template< typename T >
+void print_block_data_array(ostringstream &out, const T* data, int n) {
   out << "(";
   auto it = data;
   int i = 0;
@@ -140,17 +140,17 @@ void print_block_data_array(ostringstream &out, const double* data, int n) {
   out << ")";
 }
 
-void print_block_data(ostringstream &out, const void* data, size_t len, int n) {
+template< typename T >
+void print_block_data(ostringstream &out, const T* data, size_t len, int n) {
   if(is_GPU()) {
     int device_id = get_gpu_id();
-    int host_id = omp_get_initial_device();
-    double* cpu_buffer = new double[n];
-    omp_target_memcpy(cpu_buffer, (const double*)data, len, 0, 0, host_id, device_id);
-    print_block_data_array(out, (const double*)cpu_buffer, n);
+    T* cpu_buffer = new T[n];
+    copy_block((char*)cpu_buffer, (char*)data, len, cudaMemcpyD2H);
+    print_block_data_array(out, cpu_buffer, n);
     delete[] cpu_buffer;
   }
   else {
-    print_block_data_array(out, (const double*)data, n);
+    print_block_data_array(out, data, n);
   }
 }
 
@@ -194,17 +194,20 @@ int print_block ( ostringstream &out, const void* data,
     switch ((*encoded_type)[loc+1]) {
       case 0: {
         auto x = (Vec<int>*)data;
-        out << "Vec<int>(" << x->size() << ")";
+        int n = x->size();
+        out << "Vec<int>(" << n << ")";
         return loc+2;
       }
       case 1: {
         auto x = (Vec<long>*)data;
-        out << "Vec<long>(" << x->size() << ")";
+        int n = x->size();
+        out << "Vec<long>(" << n << ")";
         return loc+2;
       }
       case 3: {
         auto x = (Vec<double>*)data;
-        out << "Vec<double>(" << x->size() << ")";
+        int n = x->size();
+        out << "Vec<double>(" << n << ")";
         return loc+2;
       }
       default:

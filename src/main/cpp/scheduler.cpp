@@ -88,8 +88,8 @@ int communication_cost ( Opr* opr, int node ) {
     Opr* copr = operations[c];
     if (copr->node != node) {
       if(is_GPU()) {
-        int cluster_num1 = copr->node / omp_get_num_devices();
-        int cluster_num2 = node / omp_get_num_devices();
+        int cluster_num1 = copr->node / getDeviceCount();
+        int cluster_num2 = node / getDeviceCount();
         if(cluster_num1 != cluster_num2) {
           // sending to another node takes 3 times longer
           n += 3.0 * size(copr);
