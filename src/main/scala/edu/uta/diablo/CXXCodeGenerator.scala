@@ -399,6 +399,7 @@ object CXXCodeGenerator {
               else {
                 pragma_str = "#pragma omp parallel for\n"
               }
+
              "{ "+all_m.flatMap{ 
                   case (v,u) => 
                   u match {
@@ -414,7 +415,7 @@ object CXXCodeGenerator {
         case Call("for",List(VarDecl(i,tp,Range(n1,n2,n3)),b))
           => var pragma_str = ""
               if(use_GPU) {
-                def get_pragma_str ( nb : Expr): String
+                def get_pragma_str ( nb : Expr): List[String]
                   = nb match {
                     case Assign(d,_)
                       => def get_vars ( expr: Expr ): List[String]
@@ -425,17 +426,20 @@ object CXXCodeGenerator {
                                 => get_vars(n)
                               case MethodCall(x,_,List(y))
                                 => get_vars(x)++get_vars(y)
-                              case _ => accumulate[List[String]](expr,get_vars,_++_,Nil)
+                              case _ => List()
                             }
-                        val indices = get_vars(d)
-                        if(indices.contains(i))
-                          "#pragma acc loop vector\n"+tab(tabs-1)
-                        else ""
-                    case Block(List(x,Seq(List(Block(Nil)))))
-                      => get_pragma_str(x)
-                    case _ => ""
-                }}
-                pragma_str = get_pragma_str(b)
+                        get_vars(d)
+                    case Block(s:+Seq(List(Block(Nil))))
+                      => s.flatMap(get_pragma_str(_))
+                    case Block(s)
+                      => s.flatMap(get_pragma_str(_))
+                    case IfE(p,x,y)
+                      => get_pragma_str(x) ++ get_pragma_str(y)
+                    case _ => List()
+                  }
+                val var_list = get_pragma_str(b)
+                if(var_list.contains(i))
+                  pragma_str = "#pragma acc loop vector\n"+tab(tabs-1)
               }
               pragma_str+"for ( int "+i+" = "+makeC(n1,tabs,false)+"; "+i+
                  " <= "+makeC(n2,tabs,false)+"; "+i+" += "+makeC(n3,tabs,false)+" )\n"+
