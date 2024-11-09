@@ -101,11 +101,11 @@ int get_coord_hash(vector<int>& coord) {
 
 int get_worker_node(vector<int>& coord, int n, int m, int row_cnt, int col_cnt, int offset) {
   if(coord.size() == 1 || n == 1)
-    return (coord[0]+offset)%num_of_executors;
+    return abs(coord[0]+offset)%num_of_executors;
   if(m == 1)
-    return (coord[1]+offset)%num_of_executors;
+    return abs(coord[1]+offset)%num_of_executors;
   if(coord.size() <= 3)
-    return ((coord[0]%row_cnt)*col_cnt + coord[1]%col_cnt + offset)%num_of_executors;
+    return abs((coord[0]%row_cnt)*col_cnt + coord[1]%col_cnt + offset)%num_of_executors;
   return get_coord_hash(coord) % num_of_executors;
 }
 

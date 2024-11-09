@@ -39,6 +39,7 @@ const bool enable_partial_reduce = true;
 bool inMemory = false;
 bool enable_collect = false;
 bool enable_recovery = false;
+bool test_recovery = false;
 bool skip_work = false;
 bool stop_receiver = false;
 bool stop_sender = false;
@@ -193,9 +194,13 @@ int print_block ( ostringstream &out, const void* data,
 string print_block ( Opr* opr ) {
   if (!trace)
     return string("");
-  ostringstream out;
-  print_block(out,opr->cached,opr->encoded_type,0);
-  return out.str();
+  try {
+    ostringstream out;
+    print_block(out,opr->cached,opr->encoded_type,0);
+    return out.str();
+  } catch (...) {
+    return "<wrong cache type>";
+  }
 }
 
 int store_opr ( Opr* opr, const vector<int>* children,
@@ -468,8 +473,12 @@ vector<int>* set_closest_local_descendants ( int opr_id ) {
 }
 
 void initialize_opr ( Opr* x ) {
+  //assert(x->node >= 0);
   x->status = notReady;
   x->cached = nullptr;
+  // a Load opr is cached in the coordinator too
+  if (isCoordinator() && x->type == loadOPR)
+    cache_data(x,loadBlocks[x->opr.load_opr->block]);
   // initial count is the number of local consumers
   x->count = 0;
   x->message_count = 0;
@@ -498,7 +507,22 @@ void schedule_plan ( void* plan );
 void schedule ( void* plan ) {
   auto time = MPI_Wtime();
   auto p = (tuple<void*,void*,vector<tuple<void*,uintptr_t>*>*>*)plan;
-  schedule_plan(plan);
+  int nodes[operations.size()];
+  if (isCoordinator()) {
+    schedule_plan(plan);
+    for ( int i = 0; i < operations.size(); i++ )
+      nodes[i] = operations[i]->node;
+    // broadcast the schedule (just the opr->node)
+    for ( int rank = 0; rank < num_of_executors; rank++ )
+      if (rank != getCoordinator())
+        send_data(rank,nodes,operations.size()*sizeof(int));
+  } else {
+    // receive the schedule
+    receive_data(nodes);
+    for ( int i = 0; i < operations.size(); i++ )
+      operations[i]->node = nodes[i];
+  }
+  mpi_barrier();
   for ( Opr* x: operations )
     x->dependents = nullptr;
   for ( Opr* x: operations )
@@ -545,9 +569,9 @@ void* inMemEvalPair ( int lg, int tabs ) {
       void* gx = inMemEvalPair(x,tabs);
       void* gy = inMemEvalPair(y,tabs);
       auto gty = (tuple<void*,void*>*)gy;
-      void* yy = (operations[y]->type == pairOPR) ? gy : get<1>(*gty);
+      void* yy = get<1>(*gty);
       auto gtx = (tuple<void*,void*>*)gx;
-      void* xx = (operations[x]->type == pairOPR) ? gx : get<1>(*gtx);
+      void* xx = get<1>(*gtx);
       return new tuple<void*,void*>(get<0>(*gtx),new tuple<void*,void*>(xx,yy));
     }
     default: return inMemEval(lg,tabs+1);
@@ -621,10 +645,11 @@ void* computePair ( int lg_id ) {
       void* gx = computePair(x);
       void* gy = computePair(y);
       auto gtx = (tuple<void*,void*>*)gx;
-      void* xx = (operations[x]->type == pairOPR) ? gx : get<1>(*gtx);
+      void* xx = get<1>(*gtx);
       auto gty = (tuple<void*,void*>*)gy;
-      void* yy = (operations[y]->type == pairOPR) ? gy : get<1>(*gty);
-      void* data = new tuple<void*,void*>(get<0>(*gtx),new tuple<void*,void*>(xx,yy));
+      void* yy = get<1>(*gty);
+      void* data = new tuple<void*,void*>(get<0>(*gtx),
+                              new tuple<void*,void*>(xx,yy));
       cache_data(lg,data);
       lg->status = completed;
       return data;
@@ -675,7 +700,7 @@ try {
           acc = op(new tuple<void*,void*>(acc,get<1>(*v)));
           if (i > 1)
             delete_block(res,opr->encoded_type);
-          delete tres;
+          //delete tres;
         }
         i++;
       }
@@ -765,22 +790,23 @@ void enqueue_ready_operations ( int opr_id ) {
   Opr* opr = operations[opr_id];
   if (opr->node == executor_rank) {
     // send the opr cached result to the non-local consumers
-    vector<int> nodes_to_send_data;
+    auto nodes_to_send_data = new vector<int>();
     for ( int c: *opr->consumers ) {
       Opr* copr = operations[c];
       if (copr->node != executor_rank
           && (!enable_partial_reduce
               || copr->type != reduceOPR)
-          && !member(copr->node,&nodes_to_send_data))
-        nodes_to_send_data.push_back(copr->node);
+          && !member(copr->node,nodes_to_send_data))
+        nodes_to_send_data->push_back(copr->node);
     }
     { lock_guard<mutex> lock(send_mutex);
-      for ( int c: nodes_to_send_data ) {
+      for ( int c: *nodes_to_send_data ) {
         // lock the task until all messages have been sent
         opr->message_count++;
         send_queue.push_back(new tuple<int,int,int>(c,opr_id,0));
       }
     }
+    delete nodes_to_send_data;
   }
   for ( int c: *opr->consumers ) {
     Opr* copr = operations[c];
@@ -820,17 +846,26 @@ bool exit_poll () {
   for ( int x: *exit_points )
     b = b && (operations[x]->node != executor_rank
               || hasCachedValue(operations[x]));
+  if (false && !b) {
+    vector<int> missing;
+    for ( int x: *exit_points )
+      if (operations[x]->node == executor_rank
+          && !hasCachedValue(operations[x]))
+        missing.push_back(x);
+    info("ready: %d, send: %d, missing: %s",
+         ready_queue.size(),send_queue.size(),
+         sprint(missing).c_str());
+  }
   return wait_all(b);
 }
 
 int abort_count = 0;
-const int steps_before_abort = 2;
+const int steps_before_abort = 4;
 
 // kill the executor to test recovery
 void kill_executor ( int executor ) {
   abort_count++;
-  if (enable_recovery && executor_rank == executor
-      && abort_count == steps_before_abort) {
+  if (executor_rank == executor && abort_count == steps_before_abort) {
     info("Committing suicide to test recovery");
     if (!accumulator_exit())  // abort exit_poll
       send_long(getCoordinator(),0L,5);
@@ -880,12 +915,14 @@ void work () {
   double t = MPI_Wtime();
   double st = t;
   while (!exit) {
-    if (MPI_Wtime() - st > 2) {
+    // check for exit every 0.1 secs
+    if (t-st > 0.1) {
       exit = exit_poll();
-      st = MPI_Wtime();
+      st = t;
       if (exit) break;
     }
-    kill_executor(1);  // kill executor 1 to test recovery
+    if (enable_recovery && test_recovery)
+      kill_executor(1);  // kill executor 1 to test recovery
     if (!ready_queue.empty() && !skip_work) {
       int opr_id;
       { lock_guard<mutex> lock(ready_mutex);
@@ -902,7 +939,6 @@ void work () {
         abort();
       }
       enqueue_ready_operations(opr_id);
-      t = MPI_Wtime();
     } else if (MPI_Wtime()-t > 30) {
       int n = 0;
       for ( int x: *exit_points )
@@ -911,8 +947,8 @@ void work () {
           n++;
       info("... starving (remaining exit points: %d, ready queue: %d, send queue: %d)",
            n,ready_queue.size(),send_queue.size());
-      t = MPI_Wtime();
     }
+    t = MPI_Wtime();
   }
   info("Executor %d has finished execution",executor_rank);
 }
@@ -1033,17 +1069,18 @@ void* collect ( void* plan ) {
   }
 }
 
-int nn ( int c, int failed_executor, int new_executor ) {
+int replace_executor ( int c, int failed_executor, int new_executor ) {
   return (operations[c]->node == failed_executor)
           ? new_executor
           : operations[c]->node;
 }
 
+// Return all operations that have cached value but their parents do not
 vector<int>* completed_front ( int failed_executor, int new_executor ) {
   for ( Opr* x: operations )
     x->visited = false;
   queue<int> opr_queue;
-  vector<int>* buffer = new vector<int>();
+  vector<int>* front = new vector<int>();
   for ( int c: *exit_points)
     opr_queue.push(c);
   while (!opr_queue.empty()) {
@@ -1053,28 +1090,33 @@ vector<int>* completed_front ( int failed_executor, int new_executor ) {
     if (!opr->visited) {
       opr->visited = true;
       switch (opr->type) {
-      case reduceOPR:   // used for partial reduction
+      case reduceOPR:
+        // clear partial reduction
         opr->cached = nullptr;
         for ( int x: *opr->opr.reduce_opr->s )
-          if (nn(x,failed_executor,new_executor) == executor_rank)
+          if (replace_executor(x,failed_executor,new_executor) == executor_rank)
             opr->reduced_count++;
         vector<int> v;
-        if (nn(c,failed_executor,new_executor) == executor_rank)
-          for ( int x: *opr->opr.reduce_opr->s )
-            if (nn(x,failed_executor,new_executor) != executor_rank
-                && !member(nn(x,failed_executor,new_executor),&v))
-              v.push_back(x);
+        if (replace_executor(c,failed_executor,new_executor) == executor_rank)
+          for ( int x: *opr->opr.reduce_opr->s ) {
+            int z = replace_executor(x,failed_executor,new_executor);
+            if (z != executor_rank && !member(z,&v))
+              v.push_back(z);
+          }
         opr->reduced_count += v.size();
       }
       if (opr->node == executor_rank && hasCachedValue(opr))
-        buffer->push_back(c);
-      else if (executor_rank == 0 && opr->type == loadOPR)
-        buffer->push_back(c);
-      else for ( int c: *opr->children)
+        front->push_back(c);
+      else if (opr->type == loadOPR && isCoordinator())
+        front->push_back(c);
+      else if (opr->type == loadOPR && opr->node == failed_executor) {
+        info("*** fatal error: cannot recover because the input block of %d:Load() is not available",c);
+        abort();
+      } else for ( int c: *opr->children)
              opr_queue.push(c);
     }
   }
-  return buffer;
+  return front;
 }
 
 // recovery from failure
@@ -1099,7 +1141,7 @@ void recover ( int failed_executor, int new_executor ) {
         neb = neb || operations[c]->node == new_executor;
       }
       if (feb && (opr->status != completed || !neb)
-          || (opr->type == loadOPR && executor_rank == 0))
+          || (opr->type == loadOPR && isCoordinator()))
         send_data(new_executor,opr->cached,opr_id,0);
     }
   }
@@ -1112,8 +1154,8 @@ void recover ( int failed_executor, int new_executor ) {
   skip_work = false;
 }
 
-vector<string> env_names { "inMemory", "trace", "collect", "recovery" };
-vector<bool*> env_vars  { &inMemory, &trace, &enable_collect, &enable_recovery };
+vector<string> env_names { "inMemory", "trace", "collect", "recovery", "test_recovery", "delete" };
+vector<bool*> env_vars  { &inMemory, &trace, &enable_collect, &enable_recovery, &test_recovery, &delete_arrays };
 
 void startup ( int argc, char* argv[], int block_dim_size ) {
   static char name[100];

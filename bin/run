@@ -20,7 +20,8 @@ if [ "$mvapich" == "y" ]; then
     fi
 else
     if [ "$debug" == "y" ]; then
-        exec mpirun -N $executors --bind-to socket --use-hwthread-cpus xterm -geometry 160x50 -hold -e gdb -ex run --args $*
+        #exec mpirun -N $executors --bind-to socket --use-hwthread-cpus xterm -geometry 160x50 -hold -e gdb -ex run --args $*
+        exec mpirun -N $executors --bind-to socket --use-hwthread-cpus gdb -ex run --args $*
     else
         exec mpirun -N $executors --bind-to socket --use-hwthread-cpus $*
     fi

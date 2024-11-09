@@ -17,9 +17,11 @@ package edu.uta.diablo
 
 import AST._
 import Typechecker._
+
 import scala.collection.mutable.ArrayBuffer
 import java.io.Serializable
 import java.util.Calendar
+import scala.annotation.tailrec
 
 
 // Converts a diablo AST to an asynchronous plan
@@ -141,7 +143,8 @@ object PlanGenerator {
     }
   }
 
-  def isRDD ( e: Expr ): Boolean
+  @tailrec
+  def isRDD(e: Expr ): Boolean
     = e match {
         case Call("diablo_join",_) => true
         case Call("diablo_cogroup",_) => true
@@ -199,7 +202,7 @@ object PlanGenerator {
       }
     }
     et(tp)
-    Seq(v.map(IntConst(_)).toList)
+    Seq(v.map(IntConst).toList)
   }
 
   def function ( e: Expr ): Expr = {
@@ -209,12 +212,13 @@ object PlanGenerator {
              else { functions += e; functions.length-1 })
   }
 
-  def embedApplyOpr ( e: Expr, f: Lambda, tv: String, args: List[Pattern], idx: Option[Expr] ): Option[Expr]
+  def embedApplyOpr ( e: Expr, f: Lambda, plan: Expr,
+                      args: List[Pattern], idx: Option[Expr] ): Option[Expr]
     = e match {
         case Seq(List(el@Tuple(List(key,ta))))
           => val tp = typecheck(el)
              val t = Call("applyOpr",
-                          List(Var(tv),
+                          List(plan,
                                function(if (args.isEmpty)
                                           f
                                         else Lambda(TuplePat(args),f)),
@@ -227,26 +231,29 @@ object PlanGenerator {
                                           else t)))))
         case flatMap(g@Lambda(p,b),x)
           => val Lambda(q,d) = f
-             for ( bc <- embedApplyOpr(b,Lambda(q,b),tv,args:+p,idx) )
+             for ( bc <- embedApplyOpr(b,Lambda(q,b),plan,args:+p,idx) )
                 yield flatMap(Lambda(p,bc),x)
         case IfE(p,x,y)
-          => for ( xc <- embedApplyOpr(x,f,tv,args,idx) )
+          => for ( xc <- embedApplyOpr(x,f,plan,args,idx) )
                 yield IfE(p,xc,y)
         case Let(p,x,b)
-          => for ( bc <- embedApplyOpr(b,f,tv,args,idx) )
+          => for ( bc <- embedApplyOpr(b,f,plan,args,idx) )
                 yield Let(p,x,bc)
         case _ => None
       }
 
-  def getPlanIndex ( e: Expr ): Option[Expr]
-    = e match {
-        case Seq(List(Tuple(List(_,Tuple(List(key,_))))))
-          => Some(key)
-        case IfE(p,x,y)
-          => getPlanIndex(x)
-        case Let(p,x,b)
-          => getPlanIndex(b)
-        case _ => None
+  def pairup ( p: Pattern, tp: Type, ktp: Option[Type] ): (Expr,Expr)
+    = (p,tp) match {
+        case (TuplePat(List(pi,VarPat(tv))),_)
+          => (toExpr(pi),Var(tv))
+        case (TuplePat(List(px,py)),TupleType(List(tx,ty)))
+          => val (xi,xt) = pairup(px,tx,ktp)
+             val (yi,yt) = pairup(py,ty,ktp)//None
+             val ptp = if (ktp.isEmpty) tp else TupleType(List(ktp.get,tp))
+             (Tuple(List(xi,yi)),
+              Call("pairOpr",
+                   List(xt,yt,Tuple(List(xi,yi)),encodeType(ptp))))
+        case _ => throw new Error("Unexpected flatMap pattern: "+p)
       }
 
   def cpu_cost ( e: Expr ): Int
@@ -255,20 +262,11 @@ object PlanGenerator {
           => 1
         case flatMap(x,_)
           => 1+cpu_cost(x)
-        case _ => AST.accumulate[Int](e,cpu_cost,Math.max(_,_),0)
-      }
-
-  def getIndices ( p: Pattern ): Pattern
-    = p match {
-        case TuplePat(List(i,VarPat(_)))
-          => i
-        case TuplePat(List(p1,p2))
-          => TuplePat(List(getIndices(p1),getIndices(p2)))
-        case _ => p
+        case _ => AST.accumulate[Int](e,cpu_cost, Math.max,0)
       }
 
   // generates code that constructs a pilot plan of type List[(index,OprID)]
-  def makePlan ( e: Expr, top: Boolean ): Expr = {
+  def makePlan ( e: Expr, top: Boolean, in_join: Boolean ): Expr = {
     def getJoinType ( join: String ): Option[String]
       = join match {
           case "diablo_join" => Some("join")
@@ -276,12 +274,6 @@ object PlanGenerator {
           case "join" => Some("join")
           case "cogroup" => Some("cogroup")
           case _ => None
-        }
-    def isJoinOrRBK ( x: Expr ): Boolean
-      = x match {
-          case Call(join,_) => getJoinType(join).nonEmpty
-          case MethodCall(_,"reduceByKey",_) => true
-          case _ => false
         }
     e match {
         case Nth(Var(v),3)
@@ -303,27 +295,14 @@ object PlanGenerator {
         case Nth(Var(v),3)
           // bound to a tensor plan
           => e
+        case Call("increment_array",List(_,_,x))
+          => makePlan(x,top,in_join)
         case Call(join,x::y::_)
           if getJoinType(join).nonEmpty
-          => val xp = makePlan(x,false)
-             val yp = makePlan(y,false)
+          => val xp = makePlan(x,false,true)
+             val yp = makePlan(y,false,true)
              val Some(inMemJoin) = getJoinType(join)
-             val k = newvar; val ix = newvar; val tx = newvar
-             val iy = newvar; val ty = newvar
-             val itp = TuplePat(List(TuplePat(List(VarPat(ix),VarPat(tx))),
-                                     TuplePat(List(VarPat(iy),VarPat(ty)))))
-             val tp = elemType(typecheck(e))
-             val pair = Call("pairOpr",
-                             if (inMemJoin == "join")
-                               List(Var(tx),Var(ty),Var(k),encodeType(tp))
-                             else List(Call("seqOpr",List(Var(tx))),
-                                       Call("seqOpr",List(Var(ty))),
-                                       Var(k),encodeType(tp)))
-             Comprehension(Tuple(List(Var(k),
-                                      Tuple(List(Tuple(List(Var(ix),Var(iy))),
-                                                 pair)))),
-                           List(Generator(TuplePat(List(VarPat(k),itp)),
-                                          Call(inMemJoin,List(xp,yp)))))
+             Call(inMemJoin,List(xp,yp))
         case flatMap(Lambda(p,b),MethodCall(_,"parallelize",x::_))
           => val k = newvar
              val v = newvar
@@ -337,61 +316,31 @@ object PlanGenerator {
                                   Generator(TuplePat(List(VarPat(k),VarPat(v))),
                                             b))),
                         "toList",null)
-        case flatMap(f@Lambda(p@TuplePat(List(kk,pp)),b),x@Call(join,_))
-          if embedApplyOpr(b,f,"",Nil,None).nonEmpty && getJoinType(join).nonEmpty
-          => val xp = makePlan(x,false)
-             val jk = newvar; val iv = newvar; val tv = newvar
-             val ip = getIndices(pp)
-             val Some(key) = embedApplyOpr(b,f,tv,Nil,
-                                   if (top) None
-                                   else getPlanIndex(b).orElse(Some(toExpr(getIndices(pp)))))
-             flatMap(Lambda(TuplePat(List(VarPat(jk),TuplePat(List(ip,VarPat(tv))))),
-                            key),
-                     xp)
-        case flatMap(f@Lambda(p@TuplePat(List(kk,pp)),b),x@Call(join,_))
-          if false && embedApplyOpr(b,f,"",Nil,None).nonEmpty && getJoinType(join).nonEmpty
-          => val xp = makePlan(x,false)
-             val jk = newvar; val iv = newvar; val tv = newvar
-             val ip = getIndices(pp)
-             val Some(key) = embedApplyOpr(b,f,tv,Nil,
-                                   if (top) None else Some(toExpr(ip)))
-             flatMap(Lambda(TuplePat(List(VarPat(jk),TuplePat(List(ip,VarPat(tv))))),
-                            key),
-                     xp)
-        case flatMap(f@Lambda(p@TuplePat(List(kk,pp)),b),x@Call(join,_))
-          if false && embedApplyOpr(b,f,"",Nil,None).nonEmpty && getJoinType(join).nonEmpty
-          => val xp = makePlan(x,false)
-             val jk = newvar; val iv = newvar; val tv = newvar
-             val ip = getIndices(pp)
-             val Some(key) = embedApplyOpr(b,f,tv,Nil,
-                                   if (top) None
-                                   else getPlanIndex(b).orElse(Some(toExpr(getIndices(pp)))))
-             flatMap(Lambda(TuplePat(List(VarPat(jk),TuplePat(List(ip,VarPat(tv))))),
-                            key),
-                     xp)
-        case flatMap(f@Lambda(p@TuplePat(List(kk,pp)),b),x@Call(join,_))
-          if false && embedApplyOpr(b,f,"",Nil,None).nonEmpty && getJoinType(join).nonEmpty
-          => val xp = makePlan(x,false)
-             val jk = newvar; val iv = newvar; val tv = newvar
-             val ip = getIndices(pp)
-             val Some(key) = embedApplyOpr(b,f,tv,Nil,
-                                   if (top) None else Some(toExpr(ip)))
-             flatMap(Lambda(TuplePat(List(VarPat(jk),TuplePat(List(ip,VarPat(tv))))),
-                            key),
-                     xp)
-        case flatMap(f@Lambda(p@TuplePat(List(ip,pp)),b),x)
-          if embedApplyOpr(b,f,"",Nil,None).nonEmpty
-          => val tv = newvar; val k = newvar
-             val xp = makePlan(x,top)
-             val Some(key) = embedApplyOpr(b,f,tv,Nil,
-                                   if (top) None else Some(toExpr(ip)))
-             flatMap(Lambda(TuplePat(List(ip,VarPat(tv))),
-                            key),
-                     xp)
+        case flatMap(f@Lambda(p@TuplePat(List(kk,pp)),b),
+                     x@Call(join,_))
+          if !in_join && getJoinType(join).nonEmpty
+             && embedApplyOpr(b,f,Var(""),Nil,None).nonEmpty
+          => val xp = makePlan(x,false,in_join)
+             val TupleType(List(ktp,tp)) = elemType(typecheck(x))
+             val (i,plan) = pairup(pp,tp,Some(ktp))
+             val Some(key) = embedApplyOpr(b,f,plan,Nil,
+                                     if (top) None else Some(i))
+             flatMap(Lambda(p,key),xp)
+        case flatMap(f@Lambda(p@TuplePat(List(ip,pp)),
+                              b@Seq(List(Tuple(List(_,v))))),
+                     x@Call(join,_))
+          if in_join && v == toExpr(pp)
+          => flatMap(f,makePlan(x,top,in_join))
+        case flatMap(f@Lambda(p@TuplePat(List(ip,VarPat(gl))),b),x)
+          if embedApplyOpr(b,f,Var(""),Nil,None).nonEmpty
+          => val xp = makePlan(x,top,in_join)
+             val ix = if (top) None else Some(toExpr(ip))
+             val Some(key) = embedApplyOpr(b,f,Var(gl),Nil,ix)
+             flatMap(Lambda(p,key),xp)
         case flatMap(f,x)
           => val k = newvar
              val gl = newvar
-             val xp = makePlan(x,top)
+             val xp = makePlan(x,top,in_join)
              val tp = elemType(typecheck(e))
              flatMap(Lambda(TuplePat(List(VarPat(k),VarPat(gl))),
                             Seq(List(Tuple(List(Var(k),
@@ -406,7 +355,7 @@ object PlanGenerator {
         case MethodCall(x,"reduceByKey",List(op,_))
           => val k = newvar
              val s = newvar
-             val xp = makePlan(x,false)
+             val xp = makePlan(x,false,false)
              val tp = elemType(typecheck(e))
              val rv = Call("reduceOpr",
                            List(flatMap(Lambda(VarPat("x"),Seq(List(Nth(Var("x"),2)))),
@@ -425,7 +374,7 @@ object PlanGenerator {
 
   def makePlanExpr ( e: Expr ): Expr
     = if (isRDD(e))
-        makePlan(e,true)
+        makePlan(e,true,false)
       else e match {
              case VarDecl(v,tp,x)
                => VarDecl(v,makeType(tp),makePlanExpr(x))
@@ -433,15 +382,16 @@ object PlanGenerator {
                if isRDD(x)
                => // a total aggregation must be evaluated during the planning stage (eager)
                   val tp = typecheck(e)
-                  Coerce(Call("evalOpr",List(Call("reduceOpr",
-                                                  List(flatMap(Lambda(VarPat("x"),
-                                                                      Seq(List(Nth(Var("x"),2)))),
-                                                               makePlan(x,true)),
-                                                       BoolConst(true),
-                                                       function(op),
-                                                       Tuple(Nil),
-                                                       IntConst(cpu_cost(op)),
-                                                       encodeType(tp))))),
+                  Coerce(Call("evalOpr",
+                              List(Call("reduceOpr",
+                                        List(flatMap(Lambda(VarPat("x"),
+                                                            Seq(List(Nth(Var("x"),2)))),
+                                                     makePlan(x,true,false)),
+                                             BoolConst(true),
+                                             function(op),
+                                             Tuple(Nil),
+                                             IntConst(cpu_cost(op)),
+                                             encodeType(tp))))),
                          tp)
              case _ => apply(e,makePlanExpr)
            }

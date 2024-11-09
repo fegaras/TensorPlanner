@@ -277,6 +277,7 @@ void send_data ( int rank, void* data, int opr_id, int tag ) {
     while (!mtag && count < max_wait_time) {
       count++;
       this_thread::sleep_for(chrono::milliseconds(1));
+      MPI_Test(&sr,&mtag,MPI_STATUS_IGNORE);
     }
     if (!mtag && !skip_work) {
       MPI_Cancel(&sr);
@@ -295,6 +296,14 @@ void send_long ( int rank, long value, int tag ) {
   buffer[2] = 2;
   *(long*)(buffer+3) = value;
   MPI_Send(buffer,5*sizeof(int),MPI_BYTE,rank,tag,comm);
+}
+
+void send_data ( int rank, void* data, int size ) {
+  MPI_Send(data,size,MPI_BYTE,rank,100,comm);
+}
+
+void receive_data ( void* buffer ) {
+  MPI_Recv(buffer,max_buffer_size,MPI_BYTE,MPI_ANY_SOURCE,MPI_ANY_TAG,comm,MPI_STATUS_IGNORE);
 }
 
 // accumulate values at the coordinator O(n)

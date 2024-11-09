@@ -24,6 +24,10 @@ void send_data ( int rank, void* data, int opr_id, int tag );
 
 void send_long ( int rank, long data, int tag );
 
+void send_data ( int rank, void* data, int size );
+
+void receive_data ( void* buffer );
+
 void mpi_startup ( int argc, char* argv[], int block_dim_size );
 
 void mpi_finalize ();
