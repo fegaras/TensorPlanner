@@ -206,7 +206,7 @@ object Normalizer {
       case Nil
         => List(LetBinding(VarPat("@result"),normalize(substE(head,env))))
       case Generator(p,c@Comprehension(_,s))::r
-        if notGrouped(s) && (notGrouped(qs) || is_simple_compr(c))
+        if notGrouped(s) // why? can't translate matmult   && (notGrouped(qs) || is_simple_compr(c))
         => val Comprehension(h,s) = renameVars(c)
            normalize(head,(s:+LetBinding(p,h))++r,env,opts)
       case Generator(p,Seq(List(u)))::r

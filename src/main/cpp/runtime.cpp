@@ -473,7 +473,7 @@ vector<int>* set_closest_local_descendants ( int opr_id ) {
 }
 
 void initialize_opr ( Opr* x ) {
-  //assert(x->node >= 0);
+  assert(x->node >= 0);
   x->status = notReady;
   x->cached = nullptr;
   // a Load opr is cached in the coordinator too
@@ -559,25 +559,6 @@ void schedule ( void* plan ) {
     mpi_barrier_no_recovery();
 }
 
-void* inMemEval ( int id, int tabs );
-
-void* inMemEvalPair ( int lg, int tabs ) {
-  switch (operations[lg]->type) {
-    case pairOPR: {
-      int x = operations[lg]->opr.pair_opr->x;
-      int y = operations[lg]->opr.pair_opr->y;
-      void* gx = inMemEvalPair(x,tabs);
-      void* gy = inMemEvalPair(y,tabs);
-      auto gty = (tuple<void*,void*>*)gy;
-      void* yy = get<1>(*gty);
-      auto gtx = (tuple<void*,void*>*)gx;
-      void* xx = get<1>(*gtx);
-      return new tuple<void*,void*>(get<0>(*gtx),new tuple<void*,void*>(xx,yy));
-    }
-    default: return inMemEval(lg,tabs+1);
-  }
-}
-
 // top-down recursive evaluation
 void* inMemEval ( int id, int tabs ) {
   Opr* e = operations[id];
@@ -594,9 +575,17 @@ void* inMemEval ( int id, int tabs ) {
       res = (*f(inMemEval(e->opr.apply_opr->x,tabs+1)))[0];
       break;
     }
-    case pairOPR:
-      res = inMemEvalPair(id,tabs);
+    case pairOPR: {
+      int x = e->opr.pair_opr->x;
+      int y = e->opr.pair_opr->y;
+      void* cx = inMemEval(x,tabs+1);
+      void* cy =  inMemEval(y,tabs+1);
+      void* jx = get<1>(*(tuple<void*,void*>*)cx);
+      void* jy = get<1>(*(tuple<void*,void*>*)cy);
+      void* data = new tuple<void*,void*>(e->coord,
+                          new tuple<void*,void*>(jx,jy));
       break;
+    }
     case reduceOPR: {
       vector<int>* rs = e->opr.reduce_opr->s;
       vector<tuple<void*,void*>*>* sv = new vector<tuple<void*,void*>*>();
@@ -634,31 +623,7 @@ void* evalTopDown ( void* plan ) {
   return new tuple<void*,void*,void*>(get<0>(*p),get<1>(*p),res);
 }
 
-void* computePair ( int lg_id ) {
-  Opr* lg = operations[lg_id];
-  if (hasCachedValue(lg))
-    return lg->cached;
-  switch (lg->type) {
-    case pairOPR: {
-      int x = lg->opr.pair_opr->x;
-      int y = lg->opr.pair_opr->y;
-      void* gx = computePair(x);
-      void* gy = computePair(y);
-      auto gtx = (tuple<void*,void*>*)gx;
-      void* xx = get<1>(*gtx);
-      auto gty = (tuple<void*,void*>*)gy;
-      void* yy = get<1>(*gty);
-      void* data = new tuple<void*,void*>(get<0>(*gtx),
-                              new tuple<void*,void*>(xx,yy));
-      cache_data(lg,data);
-      lg->status = completed;
-      return data;
-    }
-    default:
-      return lg->cached;
-  }
-}
-
+// compute the operation of one task
 void* compute ( int opr_id ) {
   Opr* opr = operations[opr_id];
   info("*** computing %d:%s%s",opr_id,
@@ -667,21 +632,31 @@ void* compute ( int opr_id ) {
 try {
   switch (opr->type) {
     case loadOPR:
-      opr->status = computed;
       res = loadBlocks[opr->opr.load_opr->block];
       assert(res != nullptr);
       cache_data(opr,res);
+      opr->status = computed;
       break;
     case applyOPR: {
       auto f = (vector<void*>*(*)(void*))functions[opr->opr.apply_opr->fnc];
-      opr->status = computed;
       res = (*(f(operations[opr->opr.apply_opr->x]->cached)))[0];
       cache_data(opr,res);
+      opr->status = computed;
       break;
     }
-    case pairOPR:
-      res = computePair(opr_id);
+    case pairOPR: {
+      int x = opr->opr.pair_opr->x;
+      int y = opr->opr.pair_opr->y;
+      void* cx = operations[x]->cached;
+      void* cy =  operations[y]->cached;
+      void* jx = get<1>(*(tuple<void*,void*>*)cx);
+      void* jy = get<1>(*(tuple<void*,void*>*)cy);
+      res = new tuple<void*,void*>(opr->coord,
+                          new tuple<void*,void*>(jx,jy));
+      cache_data(opr,res);
+      opr->status = completed;
       break;
+    }
     case reduceOPR: {
       // not used if partial reduce is enabled
       vector<int>* rs = opr->opr.reduce_opr->s;
@@ -704,9 +679,9 @@ try {
         }
         i++;
       }
-      opr->status = completed;
       res = new tuple<void*,void*>(key,acc);
       cache_data(opr,res);
+      opr->status = completed;
       break;
     }
   }

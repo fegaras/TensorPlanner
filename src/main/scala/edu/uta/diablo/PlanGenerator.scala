@@ -229,7 +229,7 @@ object PlanGenerator {
              Some(Seq(List(Tuple(List(key,if (idx.nonEmpty)
                                             Tuple(List(idx.head,t))
                                           else t)))))
-        case flatMap(g@Lambda(p,b),x)
+        case flatMap(Lambda(p,b),x)
           => val Lambda(q,d) = f
              for ( bc <- embedApplyOpr(b,Lambda(q,b),plan,args:+p,idx) )
                 yield flatMap(Lambda(p,bc),x)
@@ -242,18 +242,33 @@ object PlanGenerator {
         case _ => None
       }
 
-  def pairup ( p: Pattern, tp: Type, ktp: Option[Type] ): (Expr,Expr)
-    = (p,tp) match {
-        case (TuplePat(List(pi,VarPat(tv))),_)
-          => (toExpr(pi),Var(tv))
-        case (TuplePat(List(px,py)),TupleType(List(tx,ty)))
-          => val (xi,xt) = pairup(px,tx,ktp)
-             val (yi,yt) = pairup(py,ty,ktp)//None
-             val ptp = if (ktp.isEmpty) tp else TupleType(List(ktp.get,tp))
-             (Tuple(List(xi,yi)),
-              Call("pairOpr",
-                   List(xt,yt,Tuple(List(xi,yi)),encodeType(ptp))))
-        case _ => throw new Error("Unexpected flatMap pattern: "+p)
+  def getKey ( e: Expr ): Option[Expr]
+    = e match {
+        case Seq(List(Tuple(List(key,_))))
+          => Some(key)
+        case flatMap(_,MethodCall(_,"reduceByKey",_))
+          => None
+        case flatMap(Lambda(_,b),_)
+          => getKey(b)
+        case IfE(_,x,_)
+          => getKey(x)
+        case Let(_,_,b)
+          => getKey(b)
+        case _ => None
+      }
+
+  def pairup ( p: Pattern, e: Expr ): Expr
+    = (p,e) match {
+        case (TuplePat(List(_,VarPat(tv))),_)
+          => Var(tv)
+        case (TuplePat(List(px,py)),flatMap(_,je@Call(join,x::y::_)))
+          => val xt = pairup(px,x)
+             val yt = pairup(py,y)
+             val tp = elemType(typecheck(je))
+             val Some(coords) = getKey(x).orElse(getKey(y))
+             Call("pairOpr",
+                  List(xt,yt,coords,encodeType(tp)))
+        case _ => throw new Error("Unexpected pairup pattern: "+p)
       }
 
   def cpu_cost ( e: Expr ): Int
@@ -321,10 +336,9 @@ object PlanGenerator {
           if !in_join && getJoinType(join).nonEmpty
              && embedApplyOpr(b,f,Var(""),Nil,None).nonEmpty
           => val xp = makePlan(x,false,in_join)
-             val TupleType(List(ktp,tp)) = elemType(typecheck(x))
-             val (i,plan) = pairup(pp,tp,Some(ktp))
+             val plan = pairup(pp,e)
              val Some(key) = embedApplyOpr(b,f,plan,Nil,
-                                     if (top) None else Some(i))
+                                     if (top) None else getKey(e))
              flatMap(Lambda(p,key),xp)
         case flatMap(f@Lambda(p@TuplePat(List(ip,pp)),
                               b@Seq(List(Tuple(List(_,v))))),

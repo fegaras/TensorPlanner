@@ -137,16 +137,28 @@ object Lifting {
   def tuple_comps ( e: Expr ): List[Expr]
     = e match { case Tuple(es) => es; case _ => List(e) }
 
+  def varDims ( p: Pattern, dims: List[Expr] ): Map[String,Expr]
+    = (p,dims) match {
+        case (VarPat(v),List(e))
+          => Map(v -> e)
+        case (TuplePat(ps),es)
+          => ps.zip(es).map{ case (VarPat(v),e) => v -> e }.toMap
+      }
+
   // Handles the case when e is in a generator domain and is a tensor comprehension.
   // Add tensor information using the dimensions of array indices
   def set_compr_storage ( e: Expr, env: Environment ): Option[Expr] = {
     // bind each array index to a dimension
     def index_dims ( qs: List[Qualifier], env: Environment ): Option[Map[String,Expr]]
       = qs.foldLeft[Option[Map[String,Expr]]](Some(Map[String,Expr]())) {
-           case (Some(r),Generator(TuplePat(List(i,v)),Lift(bpat(_,_,_,_),u)))
+           case (Some(r),Generator(TuplePat(List(p,v)),Lift(bpat(_,_,_,_),u)))
              => typecheck(u,env) match {
-                   case StorageType(bpat(full,cm,dn,sn),_,List(ds,dd))
-                     => Some(r ++ patvars(i).zip(tuple_comps(ds)++tuple_comps(dd)).toMap)
+                   case StorageType(bpat(full,cm,dnn,snn),_,List(dd,ds))
+                     => val dn = dnn.toInt
+                        val sn = snn.toInt
+                        val dims = (if (dn == 1) List(dd) else (1 to dn).map(Nth(dd,_))) ++
+                                   (if (sn == 1) List(ds) else (1 to sn).map(Nth(ds,_)))
+                        Some(r ++ varDims(p,dims.toList))
                    case _ => None
                 }
            case (Some(r),GroupByQual(VarPat(v),Var(w)))
