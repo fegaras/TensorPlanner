@@ -629,19 +629,15 @@ void* compute ( int opr_id ) {
   info("*** computing %d:%s%s",opr_id,
        oprNames[opr->type],sprint(*opr->children).c_str());
   void* res = nullptr;
-try {
+  try {
   switch (opr->type) {
     case loadOPR:
       res = loadBlocks[opr->opr.load_opr->block];
       assert(res != nullptr);
-      cache_data(opr,res);
-      opr->status = computed;
       break;
     case applyOPR: {
       auto f = (vector<void*>*(*)(void*))functions[opr->opr.apply_opr->fnc];
       res = (*(f(operations[opr->opr.apply_opr->x]->cached)))[0];
-      cache_data(opr,res);
-      opr->status = computed;
       break;
     }
     case pairOPR: {
@@ -653,8 +649,6 @@ try {
       void* jy = get<1>(*(tuple<void*,void*>*)cy);
       res = new tuple<void*,void*>(opr->coord,
                           new tuple<void*,void*>(jx,jy));
-      cache_data(opr,res);
-      opr->status = completed;
       break;
     }
     case reduceOPR: {
@@ -675,22 +669,21 @@ try {
           acc = op(new tuple<void*,void*>(acc,get<1>(*v)));
           if (i > 1)
             delete_block(res,opr->encoded_type);
-          //delete tres;
         }
         i++;
       }
       res = new tuple<void*,void*>(key,acc);
-      cache_data(opr,res);
-      opr->status = completed;
       break;
     }
   }
+  cache_data(opr,res);
+  opr->status = completed;
   info("*-> result of opr %d:%s  %s",opr_id,
        oprNames[opr->type],print_block(opr).c_str());
-} catch ( const exception &ex ) {
-  info("*** fatal error: computing the operation %d",opr_id);
-  abort();
-}
+  } catch ( const exception &ex ) {
+    info("*** fatal error: computing the operation %d",opr_id);
+    abort();
+  }
   return res;
 }
 
@@ -940,6 +933,7 @@ vector<int>* entry_points ( const vector<int>* es ) {
   return b;
 }
 
+// evaluate the plan
 void* eval ( void* plan ) {
   auto time = MPI_Wtime();
   auto p = (tuple<void*,void*,vector<tuple<void*,uintptr_t>*>*>*)plan;
@@ -1003,6 +997,7 @@ void* evalOpr ( int opr_id ) {
   return get<1>(*res);
 }
 
+// bring the plan results to the coordinator
 void* collect ( void* plan ) {
   if (!enable_collect)
     return nullptr;

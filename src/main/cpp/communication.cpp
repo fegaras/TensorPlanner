@@ -333,13 +333,15 @@ bool wait_all ( bool b ) {
 }
 
 void mpi_barrier_no_recovery () {
-  MPI_Barrier(comm);
+  if (!inMemory)
+    MPI_Barrier(comm);
 }
 
 void mpi_barrier () {
-  if (enable_recovery)
-    accumulate(false,MPI_LOR); // O(n)
-  else MPI_Barrier(comm);      // O(logn)
+  if (!inMemory)
+    if (enable_recovery)
+      accumulate(false,MPI_LOR); // O(n)
+    else MPI_Barrier(comm);      // O(logn)
 }
 
 int getCoordinator () { return coordinator; }

@@ -12,7 +12,6 @@ object Test {
   def main ( args: Array[String] ) {
     parami(block_dim_size,$block_size)
     param(asynchronous,true)
-    //param(trace,false)
     param(cxx_generation,true)
     q(\"\"\"" >cxxgen.sc
 
