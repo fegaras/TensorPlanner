@@ -30,7 +30,7 @@ Make sure you can ssh to localhost and to any other computer used in MPI without
 Go to `TensorPlaner/tests/` and do:
 ```bash
 tp mult.diablo
-run ./a.out 4234 10
+run a.out 4234 10
 ```
 Environmental parameters (with default values): executors=2 (number of executors per node), trace=y (trace execution), collect=n (collect all results at the coordinator), recovery=n (run with recovery).
 

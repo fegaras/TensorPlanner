@@ -28,6 +28,7 @@ class Opr;
 class LoadOpr {
 public:
   int block;
+  vector<int>* replica_nodes;
   LoadOpr ( int block ) { this->block = block; }
   size_t hash () { return (block << 2) ^ 1; }
   bool operator== ( const LoadOpr& o ) const {

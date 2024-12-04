@@ -35,28 +35,45 @@ bool trace_delete = false;
 // enables deletion of garbage blocks
 bool delete_arrays = true;
 const bool enable_partial_reduce = true;
+// cache replication of the Load tasks
+const int replication = 2;
 // evaluate the plan without MPI using 1 executor
 bool inMemory = false;
+// collect the resulting blocks of the workflow at the coordinator
 bool enable_collect = false;
+// enable fault-tolerance and recovery
 bool enable_recovery = false;
+// test recovery by killing the executor #1
 bool test_recovery = false;
-bool skip_work = false;
+// number of steps before we abort executor #1 to test recovery
+const int steps_before_abort = 10;
+// suspend work during recovery
+bool suspend_work = false;
+// abort the MPI data receiver process
 bool stop_receiver = false;
+// abort the MPI data sender process
 bool stop_sender = false;
 
+// list of all tasks
 vector<Opr*> operations;
+
+// list of all Apply functions
 vector<void*(*)(void*)> functions;
 
-map<size_t,int> task_table;
+// list of cached Load blocks
 vector<void*> loadBlocks;
+
+// the exit points of the task workflow
 vector<int>* exit_points;
+
+// from MPI
 extern int executor_rank;
 extern int num_of_executors;
 
+// statistics
 int block_count = 0;
 int block_created = 0;
 int max_blocks = 0;
-
 
 void delete_block ( void* &data, vector<int>* encoded_type );
 
@@ -80,31 +97,11 @@ public:
 priority_queue<int,vector<int>,task_cmp> ready_queue;
 mutex ready_mutex;
 
-// tasks waiting to send data (dest_id,src_id,tag)
+// tasks waiting to send data; have entries: (dest_id,src_id,tag)
 deque<tuple<int,int,int>*> send_queue;
 mutex send_mutex;
 
-mutex info_mutex;
-// print tracing info
-void info ( const char* fmt, ... ) {
-  using namespace std::chrono;
-  if (trace) {
-    lock_guard<mutex> lock(info_mutex);    
-    auto millis = duration_cast<milliseconds>(system_clock::now()
-                                  .time_since_epoch()).count() % 1000;
-    time_t now = time(0);
-    tm* t = localtime(&now);
-    va_list args;
-    va_start(args,fmt);
-    printf("[%02d:%02d:%02d:%03d%3d]   ",
-           t->tm_hour,t->tm_min,t->tm_sec,(int)millis,executor_rank);
-    vprintf(fmt,args);
-    printf("\n");
-    va_end(args);
-  }
-}
-
-// print a vector
+// print an int vector to a string
 string sprint ( vector<int> v ) {
   ostringstream out;
   out << "(";
@@ -121,7 +118,7 @@ string sprint ( vector<int> v ) {
   return out.str();
 }
 
-// print the task name, producers, and consumers
+// print the task name, producers, and consumers to a string
 string sprint ( Opr* opr ) {
   return string(oprNames[opr->type])
     .append(sprint(*opr->children))
@@ -129,14 +126,44 @@ string sprint ( Opr* opr ) {
     .append(sprint(*opr->consumers));
 }
 
-// print the task data
+string print_ready_queue () {
+  vector<int> vrq;
+  priority_queue<int,vector<int>,task_cmp> rq(ready_queue);
+  while (!rq.empty()) {
+    vrq.push_back(rq.top());
+    rq.pop();
+  }
+  return sprint(vrq);
+}
+
+// print tracing info
+void info ( const char* fmt, ... ) {
+  using namespace std::chrono;
+  static mutex info_mutex;
+  if (trace) {
+    lock_guard<mutex> lock(info_mutex);    
+    auto millis = duration_cast<milliseconds>(system_clock::now()
+                                  .time_since_epoch()).count() % 1000;
+    time_t now = time(0);
+    tm* t = localtime(&now);
+    va_list args;
+    va_start(args,fmt);
+    printf("[%02d:%02d:%02d:%03d%3d]   ",
+           t->tm_hour,t->tm_min,t->tm_sec,(int)millis,executor_rank);
+    vprintf(fmt,args);
+    printf("\n");
+    va_end(args);
+  }
+}
+
+// print the task block data to a string
 int print_block ( ostringstream &out, const void* data,
                   vector<int>* encoded_type, int loc ) {
   switch ((*encoded_type)[loc]) {
-  case 0: case 1: // index
+  case 0: case 1:   // an int index
     out << (uintptr_t)data;
     return loc+1;
-  case 10: { // tuple
+  case 10: {   // a tuple
     switch ((*encoded_type)[loc+1]) {
       case 0:
         out << "()";
@@ -165,7 +192,7 @@ int print_block ( ostringstream &out, const void* data,
         info("Unknown tuple: %d",(*encoded_type)[loc+1]);
     }
   }
-  case 11: { // data block
+  case 11: { // a data block
     switch ((*encoded_type)[loc+1]) {
       case 0: {
         auto x = (Vec<int>*)data;
@@ -191,6 +218,7 @@ int print_block ( ostringstream &out, const void* data,
   }
 }
 
+// print the task block data to a string
 string print_block ( Opr* opr ) {
   if (!trace)
     return string("");
@@ -203,8 +231,15 @@ string print_block ( Opr* opr ) {
   }
 }
 
+// true if n is a member of vector v
+inline bool member ( int n, vector<int>* v ) {
+  return find(v->begin(),v->end(),n) != v->end();
+}
+
+// process and store a task
 int store_opr ( Opr* opr, const vector<int>* children,
                 void* coord, int cost, vector<int>* encoded_type ) {
+  static map<size_t,int> task_table;
   opr->consumers = new vector<int>();
   opr->coord = coord;
   opr->cpu_cost = cost;
@@ -231,9 +266,16 @@ int loadOpr ( void* block, void* coord, vector<int>* encoded_type ) {
   o->type = loadOPR;
   o->opr.load_opr = new LoadOpr(loadBlocks.size());
   int loc = store_opr(o,empty_vector,coord,0,encoded_type);
-  // the loaded data is used in one executor only; the others delete the block
+  // the loaded data is used by a num of executors = replication
+  //   (the other executors delete the block)
   o->node = loadBlocks.size() % num_of_executors;
-  if (o->node == executor_rank)
+  o->opr.load_opr->replica_nodes = new vector<int>();
+  for ( int i = 1; i < replication; i++ ) {
+    int n = (o->node + i) % num_of_executors;
+    o->opr.load_opr->replica_nodes->push_back(n);
+  }
+  if (o->node == executor_rank
+      || member(executor_rank,o->opr.load_opr->replica_nodes))
     loadBlocks.push_back(block);
   else {
     delete_block(block,encoded_type);
@@ -249,7 +291,8 @@ int pairOpr ( int x, int y, void* coord, vector<int>* encoded_type ) {
   return store_opr(o,new vector<int>({ x, y }),coord,0,encoded_type);
 }
 
-int applyOpr ( int x, int fnc, void* args, void* coord, int cost, vector<int>* encoded_type ) {
+int applyOpr ( int x, int fnc, void* args, void* coord, int cost,
+               vector<int>* encoded_type ) {
   Opr* o = new Opr();
   o->type = applyOPR;
   o->opr.apply_opr = new ApplyOpr(x,fnc,args);
@@ -269,7 +312,8 @@ int reduceOpr ( const vector<uintptr_t>* s, bool valuep, int op,
   return store_opr(o,ss,coord,cost,encoded_type);
 }
 
-// apply f to every task in the workflow starting with s using breadth-first search 
+// apply f to every task in the workflow starting with s
+//    using breadth-first search 
 void BFS ( const vector<int>* s, void(*f)(int) ) {
   for ( Opr* x: operations )
     x->visited = false;
@@ -300,26 +344,22 @@ void BFS ( const vector<int>* s, void(*f)(int) ) {
   }
 }
 
-bool hasCachedValue ( Opr* x ) {
-  return (x->status == computed || x->status == completed
-          || x->status == locked || x->status == zombie);
+inline bool hasCachedValue ( Opr* x ) {
+  return x->cached != nullptr;
 }
 
 void cache_data ( Opr* opr, void* data ) {
   opr->cached = data;
 }
 
-bool member ( int n, vector<int>* v ) {
-  return find(v->begin(),v->end(),n) != v->end();
-}
-
+// delete the block data
 int delete_array_ ( void* &data, vector<int>* encoded_type, int loc ) {
   if (!delete_arrays)
     return 0;
   switch ((*encoded_type)[loc]) {
-  case 0: case 1: // index
+  case 0: case 1: // an int index
     return loc+1;
-  case 10: { // tuple
+  case 10: { // a tuple
     switch ((*encoded_type)[loc+1]) {
       case 0: case 1:
         return loc+2;
@@ -338,7 +378,7 @@ int delete_array_ ( void* &data, vector<int>* encoded_type, int loc ) {
         info("Unknown tuple: %d",(*encoded_type)[loc+1]);
     }
   }
-  case 11:  // data block
+  case 11:  // a data block
     switch ((*encoded_type)[loc+1]) {
     case 0: {
       auto x = (Vec<int>*)data;
@@ -366,6 +406,7 @@ int delete_array_ ( void* &data, vector<int>* encoded_type, int loc ) {
   }
 }
 
+// delete the block data
 void delete_block ( void* &data, vector<int>* encoded_type ) {
   try {
     delete_array_(data,encoded_type,0);
@@ -391,9 +432,9 @@ void delete_array ( int opr_id ) {
 }
 
 // does this task create a new block?
-bool block_constructor ( Opr* opr ) {
+inline bool block_constructor ( Opr* opr ) {
   // true for a reduce or apply task that create a block
-  // and when receiving a remote block
+  //   and when receiving a remote block
   return opr->cpu_cost > 0 || opr->node != executor_rank;
 }
 
@@ -404,7 +445,7 @@ bool sends_msgs_only ( Opr* opr ) {
   return sends_msgs;
 }
 
-// delete the task cache and the caches of its dependencies
+// delete the task cache and the caches of its dependents
 void may_delete ( int opr_id ) {
   Opr* opr = operations[opr_id];
   if (block_constructor(opr)) {
@@ -419,7 +460,7 @@ void may_delete ( int opr_id ) {
   }
 }
 
-// delete the caches of the task dependencies
+// delete the caches of the task dependents
 void may_delete_deps ( int opr_id ) {
   Opr* opr = operations[opr_id];
   if (opr->cpu_cost > 0) {
@@ -430,6 +471,7 @@ void may_delete_deps ( int opr_id ) {
   }
 }
 
+// all tasks that create blocks used by opr
 vector<int>* get_dependents ( Opr* opr ) {
   if (opr->dependents != nullptr)
     return opr->dependents;
@@ -465,19 +507,21 @@ vector<int>* set_closest_local_descendants ( int opr_id ) {
       if (opr->node == node) {
         buffer->push_back(c);
         opr->oc++;
-      } else for ( int x: *opr->children )
-               opr_queue.push(x);
+      } else
+        for ( int x: *opr->children )
+          opr_queue.push(x);
   }
   operations[opr_id]->os = buffer;
   return buffer;
 }
 
+// initialize a task
 void initialize_opr ( Opr* x ) {
   assert(x->node >= 0);
   x->status = notReady;
   x->cached = nullptr;
-  // a Load opr is cached in the coordinator too
-  if (isCoordinator() && x->type == loadOPR)
+  if (x->type == loadOPR
+      && loadBlocks[x->opr.load_opr->block] != nullptr)
     cache_data(x,loadBlocks[x->opr.load_opr->block]);
   // initial count is the number of local consumers
   x->count = 0;
@@ -504,6 +548,7 @@ void initialize_opr ( Opr* x ) {
 
 void schedule_plan ( void* plan );
 
+// schedule the tasks of a plan to run on processes
 void schedule ( void* plan ) {
   auto time = MPI_Wtime();
   auto p = (tuple<void*,void*,vector<tuple<void*,uintptr_t>*>*>*)plan;
@@ -522,7 +567,7 @@ void schedule ( void* plan ) {
     for ( int i = 0; i < operations.size(); i++ )
       operations[i]->node = nodes[i];
   }
-  mpi_barrier();
+  mpi_barrier_no_recovery();
   for ( Opr* x: operations )
     x->dependents = nullptr;
   for ( Opr* x: operations )
@@ -559,7 +604,7 @@ void schedule ( void* plan ) {
     mpi_barrier_no_recovery();
 }
 
-// top-down recursive evaluation
+// top-down recursive evaluation in one executor (for testing only)
 void* inMemEval ( int id, int tabs ) {
   Opr* e = operations[id];
   if (hasCachedValue(e))
@@ -610,7 +655,7 @@ void* inMemEval ( int id, int tabs ) {
   return res;
 }
 
- // in-memory evaluation using top-down recursive evaluation on a plan tree
+// in-memory evaluation using top-down recursive evaluation on a plan tree
 void* evalTopDown ( void* plan ) {
   auto p = (tuple<void*,void*,vector<tuple<void*,uintptr_t>*>*>*)plan;
   for ( Opr* x: operations )
@@ -701,6 +746,7 @@ void delete_first_reduce_input ( int rid ) {
   }
 }
 
+// enqueue the consumers of a partial reduce operation
 void enqueue_reduce_opr ( int opr_id, int rid ) {
   Opr* opr = operations[opr_id];      // child of reduce_opr
   Opr* reduce_opr = operations[rid];  // Reduce operation
@@ -753,7 +799,7 @@ void enqueue_reduce_opr ( int opr_id, int rid ) {
   }
 }
 
-// After opr is computed, check its consumers to see if anyone is ready to enqueue
+// after opr is computed, check its consumers to see if anyone is ready to enqueue
 void enqueue_ready_operations ( int opr_id ) {
   Opr* opr = operations[opr_id];
   if (opr->node == executor_rank) {
@@ -810,11 +856,12 @@ void enqueue_ready_operations ( int opr_id ) {
 
 // exit when the queues of all executors are empty and exit points have been computed
 bool exit_poll () {
+  const bool trace = false;
   bool b = ready_queue.empty() && send_queue.empty();
   for ( int x: *exit_points )
     b = b && (operations[x]->node != executor_rank
               || hasCachedValue(operations[x]));
-  if (false && !b) {
+  if (trace && !b) {
     vector<int> missing;
     for ( int x: *exit_points )
       if (operations[x]->node == executor_rank
@@ -827,25 +874,24 @@ bool exit_poll () {
   return wait_all(b);
 }
 
-int abort_count = 0;
-const int steps_before_abort = 4;
-
 // kill the executor to test recovery
 void kill_executor ( int executor ) {
+  static int abort_count = 0;
   abort_count++;
   if (executor_rank == executor && abort_count == steps_before_abort) {
     info("Committing suicide to test recovery");
     if (!accumulator_exit())  // abort exit_poll
       send_long(getCoordinator(),0L,5);
-    skip_work = true;
+    suspend_work = true;
     stop_sender = true;
     stop_receiver = true;
-    // wait forever
+    // wait forever (will not MPI_Finalize)
     while (true)
       this_thread::sleep_for(chrono::milliseconds(1000));
   }
 }
 
+// is operation opr_id in the send queue?
 bool in_send_queue ( int opr_id ) {
   lock_guard<mutex> lock(send_mutex);
   for ( tuple<int,int,int>* x: send_queue )
@@ -854,6 +900,7 @@ bool in_send_queue ( int opr_id ) {
   return false;
 }
 
+// the sender thread that sends queued messages
 void run_sender () {
   while (!stop_sender) {
     if (!send_queue.empty()) {
@@ -868,7 +915,8 @@ void run_sender () {
       send_data(get<0>(*x),opr->cached,opr_id,0);
       opr->message_count--;
       if (opr->message_count == 0 && sends_msgs_only(opr)) {
-        // when all sends from opr have been completed and opr is a sink (sends data to remote only)
+        // when all sends from opr have been completed and opr is a sink
+        //  (sends data to remote only)
         if (opr->cpu_cost > 0)
           may_delete(opr_id);
         else for ( int c: *opr->dependents )
@@ -878,20 +926,22 @@ void run_sender () {
   }
 }
 
+// evaluate the tasks of the workflow using the ready_queue
 void work () {
   bool exit = false;
   double t = MPI_Wtime();
   double st = t;
   while (!exit) {
+    exit = false;
     // check for exit every 0.1 secs
-    if (t-st > 0.1) {
+    if (!suspend_work && t-st > 0.1) {
       exit = exit_poll();
       st = t;
       if (exit) break;
     }
     if (enable_recovery && test_recovery)
       kill_executor(1);  // kill executor 1 to test recovery
-    if (!ready_queue.empty() && !skip_work) {
+    if (!ready_queue.empty() && !suspend_work) {
       int opr_id;
       { lock_guard<mutex> lock(ready_mutex);
         opr_id = ready_queue.top();
@@ -907,6 +957,9 @@ void work () {
         abort();
       }
       enqueue_ready_operations(opr_id);
+    } else if (suspend_work) {
+      suspend_work = false;
+      mpi_barrier();
     } else if (MPI_Wtime()-t > 30) {
       int n = 0;
       for ( int x: *exit_points )
@@ -921,8 +974,10 @@ void work () {
   info("Executor %d has finished execution",executor_rank);
 }
 
+// the entry points of the task workflow (Load oprs)
 vector<int>* entry_points ( const vector<int>* es ) {
-  static vector<int>* b = new vector<int>();
+  static vector<int>* b;
+  b = new vector<int>();
   BFS(es,
       [] ( int c ) {
         Opr* copr = operations[c];
@@ -930,7 +985,7 @@ vector<int>* entry_points ( const vector<int>* es ) {
           if (!member(c,b))
             b->push_back(c);
       });
-  return b;
+  return new vector<int>(*b);
 }
 
 // evaluate the plan
@@ -986,6 +1041,7 @@ void* eval ( void* plan ) {
   return new tuple<void*,void*,void*>(get<0>(*p),get<1>(*p),res);
 }
 
+// evaluate an accumulation operation (a sub-workflow with one exit point)
 void* evalOpr ( int opr_id ) {
   auto plan = new tuple<int,nullptr_t,vector<tuple<int,int>*>*>(1,nullptr,
                           new vector<tuple<int,int>*>({new tuple<int,int>(0,opr_id)}));
@@ -1039,13 +1095,13 @@ void* collect ( void* plan ) {
   }
 }
 
-int replace_executor ( int c, int failed_executor, int new_executor ) {
+inline int replace_executor ( int c, int failed_executor, int new_executor ) {
   return (operations[c]->node == failed_executor)
           ? new_executor
           : operations[c]->node;
 }
 
-// Return all operations that have cached value but their parents do not
+// return all operations that have a cached value but their parents have not
 vector<int>* completed_front ( int failed_executor, int new_executor ) {
   for ( Opr* x: operations )
     x->visited = false;
@@ -1060,9 +1116,10 @@ vector<int>* completed_front ( int failed_executor, int new_executor ) {
     if (!opr->visited) {
       opr->visited = true;
       switch (opr->type) {
-      case reduceOPR:
+      case reduceOPR: {
         // clear partial reduction
         opr->cached = nullptr;
+        opr->reduced_count = 0;
         for ( int x: *opr->opr.reduce_opr->s )
           if (replace_executor(x,failed_executor,new_executor) == executor_rank)
             opr->reduced_count++;
@@ -1075,15 +1132,21 @@ vector<int>* completed_front ( int failed_executor, int new_executor ) {
           }
         opr->reduced_count += v.size();
       }
-      if (opr->node == executor_rank && hasCachedValue(opr))
+      }
+      if (opr->node == executor_rank && opr->cached != nullptr) {
+        opr->status = computed;
         front->push_back(c);
-      else if (opr->type == loadOPR && isCoordinator())
+      } else if (opr->type == loadOPR
+                 && loadBlocks[opr->opr.load_opr->block] != nullptr) {
+        cache_data(opr,loadBlocks[opr->opr.load_opr->block]);
+        opr->node = executor_rank;
+        opr->status = computed;
         front->push_back(c);
-      else if (opr->type == loadOPR && opr->node == failed_executor) {
-        info("*** fatal error: cannot recover because the input block of %d:Load() is not available",c);
-        abort();
-      } else for ( int c: *opr->children)
-             opr_queue.push(c);
+      } else {
+        opr->status = notReady;
+        for ( int c: *opr->children)
+          opr_queue.push(c);
+      }
     }
   }
   return front;
@@ -1091,42 +1154,62 @@ vector<int>* completed_front ( int failed_executor, int new_executor ) {
 
 // recovery from failure
 void recover ( int failed_executor, int new_executor ) {
-  skip_work = true;
-  reset_accumulator();
+  suspend_work = true;
   info("Recovering from the failed executor by replacing %d with %d",
        failed_executor,new_executor);
   vector<int>* front = completed_front(failed_executor,new_executor);
-  info("Completed front at recovery: %s",sprint(*front).c_str());
-  for ( int opr_id: *front )
-    for ( int c: *operations[opr_id]->consumers )
-      if (operations[c]->type == reduceOPR)
-        enqueue_reduce_opr(opr_id,c);
-  if (executor_rank != new_executor) {
+  info("Completed front at recovery on %d: %s",
+       executor_rank,sprint(*front).c_str());
+  if (enable_partial_reduce)
+    for ( int opr_id: *front )
+      for ( int c: *operations[opr_id]->consumers )
+        if (operations[c]->type == reduceOPR)
+          enqueue_reduce_opr(opr_id,c);
+  vector<int> ev;
+  if (executor_rank == new_executor) {
+    for ( int opr_id: *front ) {
+      operations[opr_id]->status = completed;
+      ev.push_back(opr_id);
+    }
+  } else {
+    vector<int> sv;
     for ( int opr_id: *front ) {
       Opr* opr = operations[opr_id];
       bool feb = false;
-      bool neb = false;
-      for ( int c: *opr->consumers ) {
+      for ( int c: *opr->consumers )
         feb = feb || operations[c]->node == failed_executor;
-        neb = neb || operations[c]->node == new_executor;
+      if (feb) {
+        opr->message_count++;
+        sv.push_back(opr_id);
+        send_queue.push_back(new tuple<int,int,int>(new_executor,opr_id,0));
       }
-      if (feb && (opr->status != completed || !neb)
-          || (opr->type == loadOPR && isCoordinator()))
-        send_data(new_executor,opr->cached,opr_id,0);
     }
+    info("Send queue on %d: %s",executor_rank,sprint(sv).c_str());
   }
-  for ( int opr_id = 0; opr_id < operations.size(); opr_id++ ) {
-    Opr* opr = operations[opr_id];
-    if (opr->node == failed_executor)
+  for ( Opr* opr: operations )
+    if (opr->node == failed_executor) {
+      if (opr->cached != nullptr)
+        opr->status = computed;
       opr->node = new_executor;
-  }
+    }
   info("Recovered from the failed executor %d",failed_executor);
-  skip_work = false;
+  if (executor_rank == new_executor) {
+    info("Enqueue on %d: %s",executor_rank,sprint(ev).c_str());
+    for ( int opr_id: ev )
+      enqueue_ready_operations(opr_id);
+    info("Task queue on %d: %s",executor_rank,print_ready_queue().c_str());
+  }
 }
 
-vector<string> env_names { "inMemory", "trace", "collect", "recovery", "test_recovery", "delete" };
-vector<bool*> env_vars  { &inMemory, &trace, &enable_collect, &enable_recovery, &test_recovery, &delete_arrays };
+const vector<string> env_names {
+  "inMemory", "trace", "collect", "recovery", "test_recovery", "delete"
+};
 
+const vector<bool*> env_vars {
+  &inMemory, &trace, &enable_collect, &enable_recovery, &test_recovery, &delete_arrays
+};
+
+// read environmental parameters and start MPI
 void startup ( int argc, char* argv[], int block_dim_size ) {
   static char name[100];
   for ( int i = 0; i < env_names.size(); i++ ) {
