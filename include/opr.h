@@ -97,14 +97,15 @@ public:
   vector<int>* encoded_type = nullptr;
   vector<int>* children;
   vector<int>* consumers;
+  vector<int>* local_dependents;
+  vector<int>* closest_descendants;
+  /* either local_dependent or closest_descendants */
   vector<int>* dependents;
   int count;
   int reduced_count;
   int message_count;
   int first_reduced_input = -1;
   int cpu_cost;
-  vector<int>* os;
-  int oc;
   enum OprType type;
   union {
     LoadOpr* load_opr;

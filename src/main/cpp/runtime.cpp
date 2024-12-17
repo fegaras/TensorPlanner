@@ -471,77 +471,105 @@ void may_delete_deps ( int opr_id ) {
   }
 }
 
-// all tasks that create blocks used by opr
-vector<int>* get_dependents ( Opr* opr ) {
-  if (opr->dependents != nullptr)
-    return opr->dependents;
-  if (opr->node != executor_rank)
-    return empty_vector;
+// all local tasks that create blocks used by opr
+vector<int>* get_local_dependents ( int opr_id ) {
+  Opr* opr = operations[opr_id];
+  if (opr->local_dependents != nullptr)
+    return opr->local_dependents;
+  if (opr->node != executor_rank) {
+    //opr->local_dependents = new vector({opr_id});
+    opr->local_dependents = empty_vector;
+    return opr->local_dependents;
+  }
   vector<int>* ds = new vector<int>();
   for ( int c: *opr->children ) {
     Opr* copr = operations[c];
     if (block_constructor(copr))
       ds->push_back(c);
-    else {  // c has 0 cost and is local
-      copr->dependents = get_dependents(copr);
-      append(ds,copr->dependents);
+    else {  // c has 0 cost
+      copr->local_dependents = get_local_dependents(c);
+      append(ds,copr->local_dependents);
     }
   }
   if (ds->size() == 0) {
     delete ds;
-    return empty_vector;
-  } else return ds;
+    opr->local_dependents = empty_vector;
+  } else opr->local_dependents = ds;
+  return opr->local_dependents;
 }
 
-// used for garbage collection with recovery
-vector<int>* set_closest_local_descendants ( int opr_id ) {
-  queue<int> opr_queue;
-  opr_queue.push(opr_id);
-  vector<int>* buffer = new vector<int>();
-  int node = operations[opr_id]->node;
-  while (!opr_queue.empty()) {
-    int c = opr_queue.front();
-    opr_queue.pop();
-    Opr* opr = operations[c];
-    if (!member(c,buffer))
-      if (opr->node == node) {
-        buffer->push_back(c);
-        opr->oc++;
-      } else
-        for ( int x: *opr->children )
-          opr_queue.push(x);
+bool has_remote_consumers ( Opr* opr ) {
+  for ( int c: *opr->consumers )
+    if (operations[c]->node != opr->node)
+      return true;
+  return false;
+}
+
+vector<int>* get_deps_of_deps ( int opr_id ) {
+  Opr* opr = operations[opr_id];
+  vector<int>* v = new vector<int>();
+  for ( int d: *get_local_dependents(opr_id) )
+    if (operations[d]->node != opr->node)
+      v->push_back(d);
+    else append(v,get_local_dependents(d));
+  return v;
+}
+
+vector<int>* get_deps_of_deps_non_local ( int opr_id ) {
+  if (operations[opr_id]->node == executor_rank)
+    return get_deps_of_deps(opr_id);
+  vector<int>* ds = new vector<int>();
+  for ( int c: *operations[opr_id]->children )
+    append(ds,get_deps_of_deps_non_local(c));
+  return ds;
+}
+
+// all local tasks that create blocks that are used directly
+//   or indirectly by opr (used for GC with recovery)
+vector<int>* get_closest_descendants ( int opr_id ) {
+  Opr* opr = operations[opr_id];
+  if (opr->closest_descendants == nullptr) {
+    opr->closest_descendants = (opr->node == executor_rank)
+                               ? (has_remote_consumers(opr))
+                                 ? get_local_dependents(opr_id)
+                                 : get_deps_of_deps_non_local(opr_id)
+                               : empty_vector;
   }
-  operations[opr_id]->os = buffer;
-  return buffer;
+  return opr->closest_descendants;
 }
 
 // initialize a task
-void initialize_opr ( Opr* x ) {
-  assert(x->node >= 0);
-  x->status = notReady;
-  x->cached = nullptr;
-  if (x->type == loadOPR
-      && loadBlocks[x->opr.load_opr->block] != nullptr)
-    cache_data(x,loadBlocks[x->opr.load_opr->block]);
+void initialize_opr ( int opr_id ) {
+  Opr* opr = operations[opr_id];
+  assert(opr->node >= 0);
+  opr->status = notReady;
+  opr->cached = nullptr;
+  if (opr->type == loadOPR
+      && loadBlocks[opr->opr.load_opr->block] != nullptr)
+    cache_data(opr,loadBlocks[opr->opr.load_opr->block]);
   // initial count is the number of local consumers
-  x->count = 0;
-  x->message_count = 0;
-  x->dependents = get_dependents(x);
-  if (x->type == reduceOPR) {
+  opr->count = 0;
+  opr->message_count = 0;
+  opr->local_dependents = get_local_dependents(opr_id);
+  if (enable_recovery) {
+    opr->closest_descendants = get_closest_descendants(opr_id);
+    opr->dependents = opr->closest_descendants;
+  } else opr->dependents = opr->local_dependents;
+  if (opr->type == reduceOPR) {
     // used for partial reduction
-    x->reduced_count = 0;
-    for ( int c: *x->opr.reduce_opr->s )
+    opr->reduced_count = 0;
+    for ( int c: *opr->opr.reduce_opr->s )
       if (operations[c]->node == executor_rank)
-        x->reduced_count++;
-    if (x->node == executor_rank) {
+        opr->reduced_count++;
+    if (opr->node == executor_rank) {
       vector<int> s;
-      for ( int c: *x->opr.reduce_opr->s ) {
+      for ( int c: *opr->opr.reduce_opr->s ) {
         int cnode = operations[c]->node;
         if (cnode != executor_rank
             && find(s.begin(),s.end(),cnode) == s.end())
           s.push_back(cnode);
       }
-      x->reduced_count += s.size();
+      opr->reduced_count += s.size();
     }
   }
 }
@@ -568,10 +596,12 @@ void schedule ( void* plan ) {
       operations[i]->node = nodes[i];
   }
   mpi_barrier_no_recovery();
-  for ( Opr* x: operations )
-    x->dependents = nullptr;
-  for ( Opr* x: operations )
-    initialize_opr(x);
+  for ( Opr* x: operations ) {
+    x->local_dependents = nullptr;
+    x->closest_descendants = nullptr;
+  }
+  for ( int i = 0; i < operations.size(); i++ )
+    initialize_opr(i);
   for ( Opr* x: operations )
     if (x->node == executor_rank)
       if (x->cpu_cost > 0 || sends_msgs_only(x))
@@ -792,8 +822,8 @@ void enqueue_reduce_opr ( int opr_id, int rid ) {
       // completed local reduce => send it to the reduce owner
       info("    sending partial reduce result of opr %d to %d",
            rid,reduce_opr->node);
-      send_data(reduce_opr->node,reduce_opr->cached,rid,1);
-      delete_array(rid);
+      if (send_data(reduce_opr->node,reduce_opr->cached,rid,1))
+        delete_array(rid);
     }
     delete_first_reduce_input(rid);
   }
@@ -933,14 +963,16 @@ void work () {
   double st = t;
   while (!exit) {
     exit = false;
-    // check for exit every 0.1 secs
-    if (!suspend_work && t-st > 0.1) {
+    // check for exit every 1 secs
+    if (!suspend_work && t-st > 1.0) {
       exit = exit_poll();
       st = t;
       if (exit) break;
     }
     if (enable_recovery && test_recovery)
       kill_executor(1);  // kill executor 1 to test recovery
+    if (enable_recovery && MPI_Wtime()-t > 1.0)
+      ping(); // send a ping to the next executor every 1 secs
     if (!ready_queue.empty() && !suspend_work) {
       int opr_id;
       { lock_guard<mutex> lock(ready_mutex);
@@ -960,7 +992,7 @@ void work () {
     } else if (suspend_work) {
       suspend_work = false;
       mpi_barrier();
-    } else if (MPI_Wtime()-t > 30) {
+    } else if (MPI_Wtime()-t > 30.0) {
       int n = 0;
       for ( int x: *exit_points )
         if (operations[x]->node == executor_rank
@@ -1116,7 +1148,7 @@ vector<int>* completed_front ( int failed_executor, int new_executor ) {
     if (!opr->visited) {
       opr->visited = true;
       switch (opr->type) {
-      case reduceOPR: {
+      case reduceOPR:
         // clear partial reduction
         opr->cached = nullptr;
         opr->reduced_count = 0;
@@ -1132,8 +1164,8 @@ vector<int>* completed_front ( int failed_executor, int new_executor ) {
           }
         opr->reduced_count += v.size();
       }
-      }
-      if (opr->node == executor_rank && opr->cached != nullptr) {
+      if (opr->node == executor_rank && hasCachedValue(opr)
+          && block_constructor(opr)) {
         opr->status = computed;
         front->push_back(c);
       } else if (opr->type == loadOPR
@@ -1144,6 +1176,7 @@ vector<int>* completed_front ( int failed_executor, int new_executor ) {
         front->push_back(c);
       } else {
         opr->status = notReady;
+        opr->cached = nullptr;
         for ( int c: *opr->children)
           opr_queue.push(c);
       }
@@ -1158,8 +1191,7 @@ void recover ( int failed_executor, int new_executor ) {
   info("Recovering from the failed executor by replacing %d with %d",
        failed_executor,new_executor);
   vector<int>* front = completed_front(failed_executor,new_executor);
-  info("Completed front at recovery on %d: %s",
-       executor_rank,sprint(*front).c_str());
+  info("Completed front at recovery: %s",sprint(*front).c_str());
   if (enable_partial_reduce)
     for ( int opr_id: *front )
       for ( int c: *operations[opr_id]->consumers )
@@ -1170,21 +1202,24 @@ void recover ( int failed_executor, int new_executor ) {
     for ( int opr_id: *front ) {
       operations[opr_id]->status = completed;
       ev.push_back(opr_id);
-    }
+    } 
   } else {
     vector<int> sv;
     for ( int opr_id: *front ) {
       Opr* opr = operations[opr_id];
       bool feb = false;
-      for ( int c: *opr->consumers )
+      bool neb = false;
+      for ( int c: *opr->consumers ) {
         feb = feb || operations[c]->node == failed_executor;
-      if (feb) {
+        neb = neb || operations[c]->node == new_executor;
+      }
+      if (feb && (opr->status != completed || !neb)) {
         opr->message_count++;
         sv.push_back(opr_id);
         send_queue.push_back(new tuple<int,int,int>(new_executor,opr_id,0));
       }
     }
-    info("Send queue on %d: %s",executor_rank,sprint(sv).c_str());
+    info("Send message queue: %s",sprint(sv).c_str());
   }
   for ( Opr* opr: operations )
     if (opr->node == failed_executor) {
@@ -1192,13 +1227,33 @@ void recover ( int failed_executor, int new_executor ) {
         opr->status = computed;
       opr->node = new_executor;
     }
-  info("Recovered from the failed executor %d",failed_executor);
+  // recalculate dependencies (deps) and dependent counters (dc) at the replacing executor
   if (executor_rank == new_executor) {
-    info("Enqueue on %d: %s",executor_rank,sprint(ev).c_str());
+    for ( Opr* opr: operations ) {
+      opr->local_dependents = opr->closest_descendants = nullptr;
+      opr->count = 0;
+    }
+    for ( int i = 0; i < operations.size(); i++ ) {
+      Opr* opr = operations[i];
+      opr->local_dependents = get_local_dependents(i);
+      opr->closest_descendants = get_closest_descendants(i);
+      opr->dependents = opr->closest_descendants;
+    }
+    for ( Opr* x: operations )
+      if (x->node == executor_rank
+          && (x->cpu_cost > 0 || sends_msgs_only(x)))
+        for ( int c: *x->dependents )
+          operations[c]->count++;
+    for ( int opr_id: *front )
+      for ( int d: *operations[opr_id]->dependents )
+        may_delete(d);
+  }
+  if (executor_rank == new_executor) {
+    info("Enqueue tasks on replacing executor: %s",sprint(ev).c_str());
     for ( int opr_id: ev )
       enqueue_ready_operations(opr_id);
-    info("Task queue on %d: %s",executor_rank,print_ready_queue().c_str());
   }
+  info("Recovered from the failed executor %d",failed_executor);
 }
 
 const vector<string> env_names {

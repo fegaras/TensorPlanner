@@ -92,7 +92,7 @@ void mpi_error ( int failed_executor,  int error_code ) {
   err_buffer[0] = 0;
   if (error_code >= 0)
     MPI_Error_string(error_code,err_buffer,&len);
-  info("MPI error sending to %d: %s",failed_executor,err_buffer);
+  info("MPI error sending data to %d: %s",failed_executor,err_buffer);
   if (enable_recovery && failed_executor >= 0) {
     if (!member(failed_executor,failed_executors)) {
       // send a message to the coordinator that there is a failed executor
@@ -166,6 +166,8 @@ void handle_received_message ( int tag, int opr_id, void* data, int len ) {
     accumulator.exit = true;
     accumulator.count = 0;
     accumulator.total = (long)data > 0L;
+  } else if (tag == 8) {
+    // received a ping => do nothing
   } else if (tag == 1 && operations[opr_id]->type == reduceOPR) {
     Opr* opr = operations[opr_id];
     static tuple<void*,void*>* op_arg = new tuple<void*,void*>(nullptr,nullptr);
@@ -229,7 +231,8 @@ int check_communication () {
     void* data;
     if (opr_id < 0)
       data = (void*)*(const long*)(buffer+3*sizeof(int));
-    else deserialize(data,buffer+3*sizeof(int),len,operations[opr_id]->encoded_type);
+    else if (tag != 8)
+      deserialize(data,buffer+3*sizeof(int),len,operations[opr_id]->encoded_type);
     // prepare for the next receive (non-blocking)
     MPI_Irecv(buffer,max_buffer_size,MPI_BYTE,MPI_ANY_SOURCE,
               MPI_ANY_TAG,comm,&receive_request);
@@ -262,8 +265,36 @@ int mpi_abort () {
   return MPI_Abort(comm,0);
 }
 
+// asynchronous data send: if it takes long, assume rank is dead => start recovery
+bool send_with_recovery ( int rank, char* buffer, int len ) {
+  MPI_Request sr = MPI_REQUEST_NULL;
+  int ierr = MPI_Isend(buffer,len+3*sizeof(int),MPI_BYTE,rank,0,comm,&sr);
+  if (ierr != MPI_SUCCESS)
+    mpi_error(rank,ierr);
+  int mtag;
+  ierr = MPI_Test(&sr,&mtag,MPI_STATUS_IGNORE);
+  if (ierr != MPI_SUCCESS)
+    mpi_error(rank,ierr);
+  int count = 0;
+  while (!mtag && count < max_wait_time) {
+    count++;
+    this_thread::sleep_for(chrono::milliseconds(1));
+    MPI_Test(&sr,&mtag,MPI_STATUS_IGNORE);
+  }
+  if (!mtag && !suspend_work) {
+    MPI_Cancel(&sr);
+    MPI_Request_free(&sr);
+    // executor rank is not responding => start recovery
+    mpi_error(rank,-1);
+    return false;
+  } else {
+    MPI_Request_free(&sr);
+    return true;
+  }
+}
+
 // send the opr cached data to a remote rank
-void send_data ( int rank, void* data, int opr_id, int tag ) {
+bool send_data ( int rank, void* data, int opr_id, int tag ) {
   // needs to be static and locked
   static char* buffer = new char[max_buffer_size];
   static mutex send_data_mutex;
@@ -276,40 +307,20 @@ void send_data ( int rank, void* data, int opr_id, int tag ) {
   *(int*)(buffer+2*sizeof(int)) = len;
   info("    sending %d bytes to %d (opr %d)",
        len+3*sizeof(int),rank,opr_id);
-  if (!enable_recovery)
+  if (!enable_recovery) {
     MPI_Send(buffer,len+3*sizeof(int),MPI_BYTE,rank,tag,comm);
-  else {
-    MPI_Request sr = MPI_REQUEST_NULL;
-    int ierr = MPI_Isend(buffer,len+3*sizeof(int),MPI_BYTE,rank,tag,comm,&sr);
-    if (ierr != MPI_SUCCESS)
-      mpi_error(rank,ierr);
-    int mtag;
-    ierr = MPI_Test(&sr,&mtag,MPI_STATUS_IGNORE);
-    if (ierr != MPI_SUCCESS)
-      mpi_error(rank,ierr);
-    int count = 0;
-    while (!mtag && count < max_wait_time) {
-      count++;
-      this_thread::sleep_for(chrono::milliseconds(1));
-      MPI_Test(&sr,&mtag,MPI_STATUS_IGNORE);
-    }
-    if (!mtag && !suspend_work) {
-      MPI_Cancel(&sr);
-      MPI_Request_free(&sr);
-      // executor rank is not responding => start recovery
-      mpi_error(rank,-1);
-    } else MPI_Request_free(&sr);
-  }
+    return true;
+  } else return send_with_recovery(rank,buffer,len);
 }
 
 // send one long int to a remote rank
-void send_long ( int rank, long value, int tag ) {
+bool send_long ( int rank, long value, int tag ) {
   static int* buffer = new int[5];
   buffer[0] = -1;
   buffer[1] = tag;
   buffer[2] = 2;
   *(long*)(buffer+3) = value;
-  MPI_Send(buffer,5*sizeof(int),MPI_BYTE,rank,tag,comm);
+  return send_with_recovery(rank,(char*)buffer,5);
 }
 
 void send_data ( int rank, void* data, int size ) {
@@ -319,6 +330,15 @@ void send_data ( int rank, void* data, int size ) {
 void receive_data ( void* buffer ) {
   MPI_Recv(buffer,max_buffer_size,MPI_BYTE,MPI_ANY_SOURCE,
            MPI_ANY_TAG,comm,MPI_STATUS_IGNORE);
+}
+
+// send a ping to the next rank
+void ping () {
+  auto s = active_executors;
+  auto it = s.begin();
+  for ( ; it != s.end() && *it == executor_rank; it++ ) ;
+  int next_rank = (it != s.end()) ? *(it++) : *(s.begin());
+  send_long(next_rank,0L,8);
 }
 
 // accumulate values at the coordinator O(n)
