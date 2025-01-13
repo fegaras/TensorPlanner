@@ -1,0 +1,53 @@
+var n = args(0).toInt;
+var m = args(1).toInt;
+var reps = args(2).toInt;
+var nl = 3;
+var lrate = 0.5;
+
+var X_d = tensor*(n,m)[ ((i,j),(i*17.0/23.0)) | i <- 0..(n-1), j <- 0..(m-1) ];
+var Y_d = tensor*(m)[ (i,5.0*(i*17.0/23.0)) | i <- 0..(m-1) ];
+var w_arr = tensor*(nl,m,m) [ ((i,j,k),(i*17.0/23.0)) | i <- 0..(nl-1), j <- 0..(m-1), k <- 0..(m-1)];
+var Z_arr = tensor*(nl,n,m) [ ((i,j,k),(i*17.0/23.0)) | i <- 0..(nl-1), j <- 0..(n-1), k <- 0..(m-1)];
+var A_arr = tensor*(nl,n,m) [ ((i,j,k),(i*17.0/23.0)) | i <- 0..(nl-1), j <- 0..(n-1), k <- 0..(m-1)];
+
+var iter = 0;
+var l = 0;
+var layer = 0;
+while (iter < reps) {
+    iter = iter + 1;
+    var A_curr1 = X_d;
+    l = 0;
+    while(l < nl) {
+        A_arr = tensor*(nl,n,m)[ ((kk,i,j),if(kk==l) v else v1) | ((i,j),v) <- A_curr1, ((kk,ii,jj),v1) <- A_arr, i==ii, j==jj];
+        var w1 = tensor*(m,m)[ ((i,j),w) | ((kk,i,j),w) <- w_arr, kk==l ];
+        var Z_curr1 = tensor*(n,m) (A_curr1 @ w1);
+        if (l < nl-1)
+          A_curr1 = tensor*(n,m)[ ((i,j),if(z>0.0) z else 0.0) | ((i,j),z) <- Z_curr1 ];
+        else A_curr1 = tensor*(n,m)[ ((i,j),1/(1+2.718*(-z))) | ((i,j),z) <- Z_curr1 ];
+        Z_arr = tensor*(nl,n,m)[ ((kk,i,j),if(kk==l) v else v1) | ((i,j),v) <- Z_curr1, ((kk,ii,jj),v1) <- Z_arr,i==ii,j==jj ];
+        l = l + 1;
+    }
+    var dA_prev = tensor*(n,m)[ ((i,jj),(2.0/n)*(y_hat-y)) | (i,y) <- Y_d, ((ii,jj),y_hat) <- A_curr1,
+                                    i == ii, jj == 0 ];
+    layer = 0;
+    while (layer < nl-1) {
+        var dA_curr = dA_prev;
+
+        var Z_curr2 = tensor*(n,m)[ ((i,j),w) | ((kk,i,j),w) <- Z_arr, kk==nl-1-layer ];
+        var A_curr2 = tensor*(n,m)[ ((i,j),w) | ((kk,i,j),w) <- A_arr, kk==nl-1-layer ];
+        var w2 = tensor*(m,m)[ ((i,j),w) | ((kk,i,j),w) <- w_arr, kk==nl-1-layer ];
+        var dZ_curr = tensor*(n,m)[ ((i,j),(i*17.0/23.0)) | i <- 0..(n-1), j <- 0..(m-1) ];
+        if (layer == 0)
+           dZ_curr = tensor*(n,m)[ ((i,j), dA*sig*(1-sig)) | ((i,j),dA) <- dA_curr, ((ii,jj),z) <- Z_curr2,
+                                i == ii, j == jj, let sig = 1/(1+2.718*(-z)) ];
+        else dZ_curr = tensor*(n,m)[ ((i,j),if(z <= 0.0) 0.0 else a) | ((i,j),a) <- dA_curr, ((ii,jj),z) <- Z_curr2,
+                                i == ii, j == jj ];
+        var dW_curr = tensor*(m,m) (A_curr2.t @ dZ_curr);
+        dA_prev = tensor*(n,m) (dZ_curr @ w2.t);
+        var w_update = tensor*(m,m) (w2-lrate*dW_curr);
+        w_arr = tensor*(nl,m,m)[ ((kk,i,j),if(kk==nl-1-layer) v else v1) | ((i,j),v) <- w_update, ((kk,ii,jj),v1) <- w_arr,i==ii,j==jj ];
+        layer = layer+1;
+    }
+}
+
+w_arr;

@@ -117,7 +117,7 @@ vector<T>* elem ( T x ) {
 }
 
 template< typename T >
-vector<T>* append1 ( vector<T>* x, const T y ) {
+vector<T>* append1 ( vector<T>* x, T y ) {
   x->push_back(y);
   return x;
 }

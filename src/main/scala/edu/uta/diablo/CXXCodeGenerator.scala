@@ -360,6 +360,10 @@ object CXXCodeGenerator {
           => val TupleType(List(_,tp)) = elemType(Nth(x,3))
              val fp = genCfun(op,TupleType(List(tp,tp)),tp)
              "reduceByKey(" + makeC(x,tabs,false)+","+fp+")"
+        case MethodCall(x,"unary_-",_)
+          => "-("+makeC(x,tabs,false)+")"
+        case MethodCall(x,"unary_+",_)
+          => makeC(x,tabs,false)
         case MethodCall(_,m,_)
           => throw new Error("Don't know how to compile method "+m)
         case Call("merge_tensors",List(x,y,f:Lambda,zero))
@@ -410,7 +414,7 @@ object CXXCodeGenerator {
           => "if ("+makeC(p,tabs,false)+")\n"+tab(tabs)+makeC(x,tabs+1,stmt)
         case IfE(p,x,y)
           if stmt
-          => "if ("+makeC(p,tabs,false)+")\n"+tab(tabs+1)+makeC(x,tabs+1,stmt)+"\n"+
+          => "if ("+makeC(p,tabs,false)+")\n"+tab(tabs+1)+makeC(x,tabs+1,stmt)+";\n"+
                  tab(tabs)+"else "+makeC(y,tabs+1,stmt)
         case IfE(p,x,y)
           => "(("+makeC(p,tabs,false)+") ? "+makeC(x,tabs,stmt)+" : "+makeC(y,tabs,stmt)+")"
