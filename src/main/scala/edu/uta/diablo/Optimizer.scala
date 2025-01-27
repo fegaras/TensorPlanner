@@ -304,8 +304,7 @@ object Optimizer {
                              jg@Generator(VarPat(j),Range(n1,n2,n3)),
                              c@Predicate(MethodCall(ie,"==",List(je))) ))
                 => val (ip,jp) = if (freevars(je).contains(j)) (ie,je) else (je,ie)
-                   val bs = List(LetBinding(VarPat(j),inverse(jp,j,ip).get),
-                                 Predicate(Call("inRange",List(Var(j),n1,n2,n3))))
+                   val bs = List(LetBinding(VarPat(j),inverse(jp,j,ip).get))
                    val nqs = qs.diff(List(c)).flatMap( x => if (x==jg) bs else List(x))
                    optimize(Comprehension(h,nqs))
              case _ => apply(e,optimize)

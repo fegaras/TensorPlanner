@@ -18,6 +18,7 @@ package edu.uta.diablo
 import AST._
 import Typechecker._
 import java.io._
+import Math.max
 
 object CXXCodeGenerator {
   var writer: PrintWriter = _
@@ -28,6 +29,7 @@ object CXXCodeGenerator {
 
   val oprIDtype = "edu.uta.diablo.PlanGenerator.OprID"
 
+  def max ( x: Int, y: Int ) = Math.max(x,y)
   def new_var (): String = {
     val v = "_v_"+var_count
     var_count += 1
@@ -325,8 +327,81 @@ object CXXCodeGenerator {
     get_arrays(e,excl(e))
   }
 
-  def makeC ( e: Expr, tabs: Int, stmt: Boolean ): String
-    = e match {
+  def get_array_indices ( e : Expr): List[String] = {
+    def get_vars ( expr: Expr ): List[String]
+      = expr match {
+          case Var(v)
+            => List(v)
+          case Index(Var(v),List(n))
+            => get_vars(n)
+          case MethodCall(x,_,List(y))
+            => get_vars(x)++get_vars(y)
+          case _ => List()
+        }
+    e match {
+      case Assign(d,_)
+        => get_vars(d)
+      case Call("for",List(_,b))
+        => get_array_indices(b)
+      case Block(s:+Seq(List(Block(Nil))))
+        => s.flatMap(get_array_indices(_))
+      case Block(s)
+        => s.flatMap(get_array_indices(_))
+      case IfE(p,x,y)
+        => get_array_indices(x) ++ get_array_indices(y)
+      case _ => List()
+    }
+  }
+
+  def makeC ( e: Expr, tabs: Int, stmt: Boolean ): String = {
+    def has_reduction( expr : Expr): Boolean
+      = expr match {
+        case Call("for",List(_,blk))
+          => has_reduction(blk)
+        case Assign(d,Seq(List(MethodCall(x,m,List(y)))))
+          => x == d && m == "+" // Checking for +/ only
+        case Block(s:+Seq(List(Block(Nil))))
+          => s.map(has_reduction(_)).reduce( (x:Boolean, y:Boolean) => x || y)
+        case Block(s)
+          => s.map(has_reduction(_)).reduce( (x:Boolean, y:Boolean) => x || y)
+        case IfE(p,x,y)
+          => has_reduction(x) || has_reduction(y)
+        case _ => false
+      }
+
+    def reorder_loops ( expr: Expr ): Expr
+    = expr match {
+        case Call("for",List(VarDecl(j,tpv,Range(n1,n2,n3)),block))
+          => val indices_list = get_array_indices(block)
+          block match {
+            case Call("for",List(VarDecl(k,tpv_1,Range(n1_1,n2_1,n3_1)),blk))
+              if(indices_list.contains(k) && !indices_list.contains(j))
+              => Call("for",List(VarDecl(k,tpv_1,Range(n1_1,n2_1,n3_1)),Call("for",List(VarDecl(j,tpv,Range(n1,n2,n3)),blk))))
+            case _ => Call("for",List(VarDecl(j,tpv,Range(n1,n2,n3)),reorder_loops(block)))
+          }
+        case Block(s:+Seq(List(Block(Nil))))
+          => Block(s.map(reorder_loops(_)):+Seq(List(Block(Nil))))
+        case Block(s)
+          => Block(s.map(reorder_loops(_)))
+        case IfE(p,x,y)
+          => IfE(p,reorder_loops(x),reorder_loops(y))
+        case _ => expr
+      }
+
+    def count_nested_loops ( expr: Expr ): Int
+    = expr match {
+        case Call("for",List(_,b))
+          => count_nested_loops(b)+1
+        case Block(s:+Seq(List(Block(Nil))))
+          => s.map(count_nested_loops(_)).reduce(_ max _)
+        case Block(s)
+          => s.map(count_nested_loops(_)).reduce(_ max _)
+        case IfE(p,x,y)
+          => max(count_nested_loops(x), count_nested_loops(y))
+        case _ => 0
+      }
+
+    e match {
         case Var(v) => v
         case IntConst(n) => n.toString
         case DoubleConst(n) => n.toString
@@ -373,7 +448,7 @@ object CXXCodeGenerator {
                          makeC(zero,tabs,false)))
         case Call("for",List(VarDecl(i,tp,MethodCall(Range(n1,n2,n3),"par",null)),b))
           => val m = get_arrays(b)
-             val nb = m.foldLeft[Expr](b){ case (r,(v,u)) => subst(u,Var(v),r) }
+             var nb = m.foldLeft[Expr](b){ case (r,(v,u)) => subst(u,Var(v),r) }
              val n1_m = get_arrays(n1)
              val n1_b = n1_m.foldLeft[Expr](n1){ case (r,(v,u)) => subst(u,Var(v),r) }
              val n2_m = get_arrays(n2)
@@ -391,57 +466,60 @@ object CXXCodeGenerator {
               }.mkString(",")
              val loop_text = tab(tabs-1)+"for ( int "+i+" = "+makeC(n1_b,tabs,false)+"; "+i+
                  " <= "+makeC(n2_b,tabs,false)+"; "+i+" += "+makeC(n3_b,tabs,false)+" )\n"
-             var pragma_str = ""
-             if(use_GPU) {
-                pragma_str = tab(tabs)+"int dev = get_gpu_id();\n" +
-                "#pragma acc parallel loop gang vector_length(1024) deviceptr("+data+")\n"
-              }
-              else {
-                pragma_str = "#pragma omp parallel for\n"
-              }
+             var device_str = "#pragma acc parallel deviceptr("+data+")\n#pragma acc loop"
+             val loop_count = count_nested_loops(nb)
+
+             if(loop_count > 1)
+              device_str += " tile(32,32)"
+             else
+              device_str += " tile(1024)"
+
+             if(use_GPU && has_reduction(nb)) {
+              val v = new_var()
+              device_str = "float "+v+" = 0.0;\n"+device_str
+              device_str += " reduction(+:"+v+")"
+
+              def add_reduction ( expr: Expr ): Expr
+                = expr match {
+                  case Call("for",List(p,block))
+                    => block match {
+                        case Block(s)
+                          => def create_reduction_block(blk: Expr): Expr
+                              = blk match {
+                                case Assign(d,Seq(List(MethodCall(_,m_1,y))))
+                                  => Block(List(Assign(Var(v),makeZero(BasicType("Double"))),Call("for",List(p,Assign(Var(v),Seq(List(MethodCall(Var(v),m_1,y)))))),Assign(d,Var(v))))
+                                case _ => add_reduction(blk)
+                              }
+                            Block(s.map(create_reduction_block(_)))
+                        case _ => Call("for",List(p,add_reduction(block)))
+                      }
+                  case Block(s:+Seq(List(Block(Nil))))
+                    => Block(s.map(add_reduction(_)):+Seq(List(Block(Nil))))
+                  case Block(s)
+                    => Block(s.map(add_reduction(_)))
+                  case IfE(p,x,y)
+                    => IfE(p,add_reduction(x),add_reduction(y))
+                  case _ => expr
+                }
+
+              nb = add_reduction(reorder_loops(nb))
+             }
+             device_str += "\n"
+             val pragma_str = if(use_GPU) device_str else "#pragma omp parallel for\n"
 
              "{ "+all_m.flatMap{ 
                   case (v,u) => 
                   u match {
-                    case Nth(_,i) if(i < 3) => List("auto "+v+" = "+makeC(u,tabs,false)+"; ")
+                    case Nth(_,i) if(i < 3) => List("const auto "+v+" = "+makeC(u,tabs,false)+"; ")
                     case _ => List("auto "+v+" = "+makeC(u,tabs,false)+"->buffer(); ")
                   }
                   case _ => List()
                 }.mkString("")+"\n"+
                 pragma_str+
-                loop_text+tab(tabs)+makeC(nb,tabs+1,true)+";"+
-                "\n}\n"
+                loop_text+tab(tabs)+makeC(nb,tabs+1,true)+";\n"+tab(tabs-1)+"}\n"
 
         case Call("for",List(VarDecl(i,tp,Range(n1,n2,n3)),b))
-          => var pragma_str = ""
-              if(use_GPU) {
-                def get_pragma_str ( nb : Expr): List[String]
-                  = nb match {
-                    case Assign(d,_)
-                      => def get_vars ( expr: Expr ): List[String]
-                          = expr match {
-                              case Var(v)
-                                => List(v)
-                              case Index(Var(v),List(n))
-                                => get_vars(n)
-                              case MethodCall(x,_,List(y))
-                                => get_vars(x)++get_vars(y)
-                              case _ => List()
-                            }
-                        get_vars(d)
-                    case Block(s:+Seq(List(Block(Nil))))
-                      => s.flatMap(get_pragma_str(_))
-                    case Block(s)
-                      => s.flatMap(get_pragma_str(_))
-                    case IfE(p,x,y)
-                      => get_pragma_str(x) ++ get_pragma_str(y)
-                    case _ => List()
-                  }
-                val var_list = get_pragma_str(b)
-                if(var_list.contains(i))
-                  pragma_str = "#pragma acc loop vector\n"+tab(tabs-1)
-              }
-              pragma_str+"for ( int "+i+" = "+makeC(n1,tabs,false)+"; "+i+
+          => "for ( int "+i+" = "+makeC(n1,tabs,false)+"; "+i+
                  " <= "+makeC(n2,tabs,false)+"; "+i+" += "+makeC(n3,tabs,false)+" )\n"+
                  tab(tabs)+makeC(b,tabs+1,true)
         case Call("for",List(VarDecl(v,tp,x),b))
@@ -531,6 +609,7 @@ object CXXCodeGenerator {
              genCfun(le,tp,otp)
         case _ => e.toString
       }
+  }
 
   def makeC ( e: Expr ): String
     = e match {
