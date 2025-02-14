@@ -205,9 +205,9 @@ int print_block ( ostringstream &out, const void* data,
         return loc+2;
       }
       case 3: {
-        auto x = (Vec<double>*)data;
+        auto x = (Vec<float>*)data;
         int n = x->size();
-        out << "Vec<double>(" << n << ")";
+        out << "Vec<float>(" << n << ")";
         return loc+2;
       }
       default:
@@ -377,7 +377,7 @@ int delete_array_ ( void* &data, vector<int>* encoded_type, int loc ) {
       return loc+2;
     }
     case 3: {
-      auto x = (Vec<double>*)data;
+      auto x = (Vec<float>*)data;
       delete x;
       data = nullptr;
       return loc+2;

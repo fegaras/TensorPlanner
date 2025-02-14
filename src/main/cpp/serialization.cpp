@@ -110,13 +110,13 @@ int serialize(const void *data, char *buffer, vector<int> *encoded_type, int loc
     }
     case 3:
     {
-      auto x = (Vec<double> *)data;
+      auto x = (Vec<float> *)data;
       int n = x->size();
       put_data(buffer + (*pos), (const char *)&n, sizeof(int), 1);
       *pos = *pos + sizeof(int);
-      double *block_data = x->buffer();
-      copy_data(buffer + (*pos), (const char *)block_data, sizeof(double) * n, n);
-      *pos = *pos + (sizeof(double) * n);
+      float *block_data = x->buffer();
+      copy_data(buffer + (*pos), (const char *)block_data, sizeof(float) * n, n);
+      *pos = *pos + (sizeof(float) * n);
       return loc + 2;
     }
     default:
@@ -217,10 +217,10 @@ int deserialize(void *&data, const char *buffer, vector<int> *encoded_type, int 
       int len;
       get_data((char*)&len, buffer + (*pos), sizeof(int), 1);
       *pos = *pos + sizeof(int);
-      Vec<double> *x = new Vec<double>(len);
-      double *block_data = x->buffer();
-      copy_data((char*)block_data, buffer + (*pos), sizeof(double) * len, len);
-      *pos = *pos + (sizeof(double) * len);
+      Vec<float> *x = new Vec<float>(len);
+      float *block_data = x->buffer();
+      copy_data((char*)block_data, buffer + (*pos), sizeof(float) * len, len);
+      *pos = *pos + (sizeof(float) * len);
       data = x;
       return loc + 2;
     }

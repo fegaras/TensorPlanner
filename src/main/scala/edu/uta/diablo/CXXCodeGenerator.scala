@@ -277,6 +277,8 @@ object CXXCodeGenerator {
          case BasicType("Int")
            if in_coords
            => "uintptr_t"
+         case BasicType("Double")
+           => "float"
          case BasicType(nm)
            => nm.toLowerCase
          case TupleType(Nil)
@@ -404,7 +406,7 @@ object CXXCodeGenerator {
     e match {
         case Var(v) => v
         case IntConst(n) => n.toString
-        case DoubleConst(n) => n.toString
+        case DoubleConst(n) => n.toString+"f"
         case BoolConst(n) => n.toString
         case Nth(x,n)
           => "get<"+(n-1)+">(*"+makeC(x,tabs,false)+")"

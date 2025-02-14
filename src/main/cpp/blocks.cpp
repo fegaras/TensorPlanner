@@ -122,7 +122,7 @@ void copy_block(char *data, const char *buffer, size_t len, int memcpy_kind) {
   }
 }
 
-void initMatrix(double* A, double a, int N) {
+void initMatrix(float* A, float a, int N) {
   int device_id = get_gpu_id();
   setDevice(device_id);
 #pragma acc parallel loop gang deviceptr(A)
@@ -131,7 +131,7 @@ void initMatrix(double* A, double a, int N) {
   }
 }
 
-void mergeMatrix(double* A, double* B, double* C, int N) {
+void mergeMatrix(float* A, float* B, float* C, int N) {
   int device_id = get_gpu_id();
   setDevice(device_id);
 #pragma acc parallel loop gang deviceptr(A,B,C)
