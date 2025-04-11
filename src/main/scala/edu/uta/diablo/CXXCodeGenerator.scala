@@ -478,18 +478,24 @@ object CXXCodeGenerator {
 
              if(use_GPU && has_reduction(nb)) {
               val v = new_var()
-              device_str = "float "+v+" = 0.0;\n"+device_str
+              device_str = tab(tabs)+"float "+v+" = 0.0f;\n"+device_str
               device_str += " reduction(+:"+v+")"
 
               def add_reduction ( expr: Expr ): Expr
                 = expr match {
-                  case Call("for",List(p,block))
+                  case Call("for",List(p@VarDecl(j,_,_),block))
                     => block match {
                         case Block(s)
                           => def create_reduction_block(blk: Expr): Expr
                               = blk match {
                                 case Assign(d,Seq(List(MethodCall(_,m_1,y))))
-                                  => Block(List(Assign(Var(v),makeZero(BasicType("Double"))),Call("for",List(p,Assign(Var(v),Seq(List(MethodCall(Var(v),m_1,y)))))),Assign(d,Var(v))))
+                                  => {
+                                    val indices_list = get_array_indices(blk)
+                                    if(indices_list.contains(j))
+                                      expr
+                                    else
+                                      Block(List(Assign(Var(v),makeZero(BasicType("Double"))),Call("for",List(p,Assign(Var(v),Seq(List(MethodCall(Var(v),m_1,y)))))),Assign(d,Var(v))))
+                                  }
                                 case _ => add_reduction(blk)
                               }
                             Block(s.map(create_reduction_block(_)))
@@ -503,11 +509,13 @@ object CXXCodeGenerator {
                     => IfE(p,add_reduction(x),add_reduction(y))
                   case _ => expr
                 }
-
-              nb = add_reduction(reorder_loops(nb))
+              if(loop_count > 1) {
+                nb = add_reduction(reorder_loops(nb))
+              }
              }
              device_str += "\n"
-             val pragma_str = if(use_GPU) device_str else "#pragma omp parallel for\n"
+             val pragma_str = if(use_GPU) tab(tabs)+"int device_id = get_gpu_id();\n"+tab(tabs)+"setDevice(device_id);\n"+device_str
+              else "#pragma omp parallel for\n"
 
              "{ "+all_m.flatMap{ 
                   case (v,u) => 
