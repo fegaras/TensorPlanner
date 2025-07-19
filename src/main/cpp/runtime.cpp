@@ -39,6 +39,7 @@ const bool enable_partial_reduce = true;
 bool inMemory = false;
 bool enable_collect = false;
 bool enable_recovery = false;
+bool print_output = false;
 bool skip_work = false;
 bool stop_receiver = false;
 bool stop_sender = false;
@@ -133,15 +134,19 @@ void print_block_data_array(ostringstream &out, const T* data, int n) {
   auto it = data;
   int i = 0;
   out << *(it++);
-  for ( ; i < min(n,10); it++, i++ )
+  // max size of block data to print
+  int print_data_size = 10;
+  for ( ; i < min(n, print_data_size); it++, i++ )
     out << "," << *it;
-  if (i >= 10)
+  if (i < n)
     out << ",...";
   out << ")";
 }
 
 template< typename T >
 void print_block_data(ostringstream &out, const T* data, size_t len, int n) {
+  if (!print_output)
+    return;
   if(is_GPU()) {
     int device_id = get_gpu_id();
     T* cpu_buffer = new T[n];
@@ -196,18 +201,21 @@ int print_block ( ostringstream &out, const void* data,
         auto x = (Vec<int>*)data;
         int n = x->size();
         out << "Vec<int>(" << n << ")";
+        print_block_data(out,x->buffer(),sizeof(int)*n,n);
         return loc+2;
       }
       case 1: {
         auto x = (Vec<long>*)data;
         int n = x->size();
         out << "Vec<long>(" << n << ")";
+        print_block_data(out,x->buffer(),sizeof(long)*n,n);
         return loc+2;
       }
       case 3: {
         auto x = (Vec<float>*)data;
         int n = x->size();
         out << "Vec<float>(" << n << ")";
+        print_block_data(out,x->buffer(),sizeof(float)*n,n);
         return loc+2;
       }
       default:
@@ -1052,6 +1060,14 @@ void* collect ( void* plan ) {
     kill_receiver();
     rrp.join();
     mpi_barrier();
+    print_output = true;
+    for ( auto x: *es ) {
+      int opr_id = get<1>(*x);
+      Opr* block = operations[opr_id];
+      info("*-> result data of opr %d:%s  %s",opr_id,
+       oprNames[block->type],print_block(block).c_str());
+    }
+    print_output = false;
     return new tuple<void*,void*,void*>(get<0>(*p),get<1>(*p),blocks);
   } else {
     for ( auto x: *es ) {
