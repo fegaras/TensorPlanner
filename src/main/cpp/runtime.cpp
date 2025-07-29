@@ -39,6 +39,7 @@ const bool enable_partial_reduce = true;
 bool inMemory = false;
 bool enable_collect = false;
 bool enable_recovery = false;
+bool use_GPU = false;
 bool print_output = false;
 bool skip_work = false;
 bool stop_receiver = false;
@@ -1159,8 +1160,8 @@ void recover ( int failed_executor, int new_executor ) {
   skip_work = false;
 }
 
-vector<string> env_names { "inMemory", "trace", "collect", "recovery" };
-vector<bool*> env_vars  { &inMemory, &trace, &enable_collect, &enable_recovery };
+vector<string> env_names { "inMemory", "trace", "collect", "recovery", "use_GPU" };
+vector<bool*> env_vars  { &inMemory, &trace, &enable_collect, &enable_recovery, &use_GPU };
 
 void startup ( int argc, char* argv[], int block_dim_size ) {
   static char name[100];

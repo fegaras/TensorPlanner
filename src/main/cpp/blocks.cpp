@@ -47,6 +47,7 @@ void setDevice(int device_id) {
 }
 
 bool is_GPU() {
+  if(!use_GPU) return false;
   return get_gpu_id() < getDeviceCount();
 }
 

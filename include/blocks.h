@@ -26,6 +26,8 @@ enum memCpyKind
     cudaMemcpyDef       =   4       /**< Direction of the transfer is inferred from the pointer values. Requires unified virtual addressing */
 };
 
+extern bool use_GPU;
+
 bool is_GPU();
 
 int getDeviceCount();
@@ -46,7 +48,7 @@ void* allocate_memory(size_t t);
 
 void copy_block(char *data, const char *buffer, size_t len, int memcpy_kind);
 
-void initMatrix(double* A, double a, int N);
+void initMatrix(float* A, float a, int N);
 
-void mergeMatrix(double* A, double* B, double* C, int N);
+void mergeMatrix(float* A, float* B, float* C, int N);
 
