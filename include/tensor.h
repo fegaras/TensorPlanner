@@ -101,7 +101,7 @@ public:
       // read data from GPU
       T* ret = new T[1];
       int device_id = get_gpu_id();
-      copy_block((char*)ret, (char*)(gpu_block+(n-1)*sizeof(T)), sizeof(T), cudaMemcpyD2H);
+      copy_block((char*)ret, (char*)(gpu_block+n*sizeof(T)), sizeof(T), cudaMemcpyD2H);
 
       return ret[0];
     }
@@ -115,7 +115,7 @@ public:
       // read data from GPU
       T* ret = new T[1];
       int device_id = get_gpu_id();
-      copy_block((char*)ret, (char*)(gpu_block+(n-1)*sizeof(T)), sizeof(T), cudaMemcpyD2H);
+      copy_block((char*)ret, (char*)(gpu_block+n*sizeof(T)), sizeof(T), cudaMemcpyD2H);
 
       return ret[0];
     }
@@ -438,17 +438,24 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
   auto dense = new Vec<int>(dn+1);
   int* dense_buffer = dense->buffer();
   int* dv;
-  if(is_GPU())
+  T* cpu_buffer = new T[dn*sn];
+  if(is_GPU()) {
     dv = new int[(dn+1)];
-  else
+    int device_id = get_gpu_id();
+    // copy values from device to host
+    copy_block((char*)cpu_buffer, (char*)bv, buffer->size()*sizeof(T), cudaMemcpyD2H);
+  }
+  else {
     dv = dense->buffer();
+    cpu_buffer = bv;
+  }
 
   auto sparse = new vector<int>();
   auto values = new vector<T>();
   dv[0] = 0;
   for ( int i = 0; i < dn; i++ ) {
     for ( int j = 0; j < sn; j++ ) {
-      T v = bv[i*sn+j];
+      T v = cpu_buffer[i*sn+j];
       if (v != zero) {
         sparse->push_back(j);
         values->push_back(v);
@@ -456,6 +463,7 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
     }
     dv[i+1] = sparse->size();
   }
+
   if(is_GPU()) {
     int device_id = get_gpu_id();
     // copy values from host to device
@@ -470,11 +478,20 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
 template< typename T >
 tuple<Vec<int>*,Vec<T>*>* array2tensor ( int sn, T zero, Vec<T>* buffer ) {
   T* bv = buffer->buffer();
+  T* cpu_buffer = new T[sn];
+  if(is_GPU()) {
+    int device_id = get_gpu_id();
+    // copy values from device to host
+    copy_block((char*)cpu_buffer, (char*)bv, buffer->size()*sizeof(T), cudaMemcpyD2H);
+  }
+  else {
+    cpu_buffer = bv;
+  }
   auto sparse = new vector<int>();
   auto values = new vector<T>();
   int j = 0;
   while ( j < sn ) {
-    T v = bv[j];
+    T v = cpu_buffer[j];
     if ( v != zero ) {
       sparse->push_back(j);
       values->push_back(v);
@@ -514,18 +531,109 @@ Vec<T>* merge_tensors ( const Vec<T>* x, const Vec<T>* y, T(*op)(tuple<T,T>*), c
 // merge two tensors using the monoid op/zero
 template< typename T >
 tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
-     merge_tensors ( tuple<Vec<int>*,Vec<int>*,Vec<T>*>* x,
+     merge_tensors_gpu ( tuple<Vec<int>*,Vec<int>*,Vec<T>*>* x,
                      tuple<Vec<int>*,Vec<int>*,Vec<T>*>* y,
                      T(*op)(tuple<T,T>*), T zero ) {
   int i = 0;
   int len = min(get<0>(*x)->size(),get<0>(*y)->size())-1;
   auto dense = new Vec<int>(len+1);
   int* buffer = dense->buffer();
-  int* dv;
-  if(is_GPU())
-    dv = new int[(len+1)];
-  else
-    dv = dense->buffer();
+  int* x_0 = new int[get<0>(*x)->size()];
+  int* x_1 = new int[get<1>(*x)->size()];
+  T* x_2 = new T[get<2>(*x)->size()];
+  int* y_0 = new int[get<0>(*y)->size()];
+  int* y_1 = new int[get<1>(*y)->size()];
+  T* y_2 = new T[get<2>(*y)->size()];
+  int* dv = new int[(len+1)];
+  int device_id = get_gpu_id();
+  // copy values from device to host
+  copy_block((char*)x_0, (char*)get<0>(*x)->buffer(), get<0>(*x)->size()*sizeof(int), cudaMemcpyD2H);
+  copy_block((char*)x_1, (char*)get<1>(*x)->buffer(), get<1>(*x)->size()*sizeof(int), cudaMemcpyD2H);
+  copy_block((char*)x_2, (char*)get<2>(*x)->buffer(), get<2>(*x)->size()*sizeof(T), cudaMemcpyD2H);
+  copy_block((char*)y_0, (char*)get<0>(*y)->buffer(), get<0>(*y)->size()*sizeof(int), cudaMemcpyD2H);
+  copy_block((char*)y_1, (char*)get<1>(*y)->buffer(), get<1>(*y)->size()*sizeof(int), cudaMemcpyD2H);
+  copy_block((char*)y_2, (char*)get<2>(*y)->buffer(), get<2>(*y)->size()*sizeof(T), cudaMemcpyD2H);
+  auto sparse = new vector<int>();
+  auto values = new vector<T>();
+  dv[0] = 0;
+  // don't create a tuple during loop
+  auto t = new tuple<T,T>(zero,zero);
+  while (i < len) {
+    int xn = x_0[i];
+    int yn = y_0[i];
+    while (xn < x_0[i+1] && yn < y_0[i+1]) {
+      if (x_1[xn] == y_1[yn]) {
+        get<0>(*t) = x_2[xn];
+        get<1>(*t) = y_2[yn];
+        T v = get<0>(*t)+get<1>(*t);
+        if (v != zero) {
+          sparse->push_back(x_1[xn]);
+          values->push_back(v);
+        }
+        xn++; yn++;
+      } else if (x_1[xn] < y_1[yn]) {
+        get<0>(*t) = x_2[xn];
+        get<1>(*t) = zero;
+        T v = get<0>(*t)+get<1>(*t);
+        if (v != zero) {
+          sparse->push_back(x_1[xn]);
+          values->push_back(v);
+        }
+        xn++;
+      } else {
+        get<0>(*t) = zero;
+        get<1>(*t) = y_2[yn];
+        T v = get<0>(*t)+get<1>(*t);
+        if (v != zero) {
+          sparse->push_back(y_1[yn]);
+          values->push_back(v);
+        }
+        yn++;
+      }
+    }
+    while (xn < x_0[i+1]) {
+      get<0>(*t) = x_2[xn];
+      get<1>(*t) = zero;
+      T v = get<0>(*t)+get<1>(*t);
+      if (v != zero) {
+        sparse->push_back(x_1[xn]);
+        values->push_back(v);
+      }
+      xn++;
+    }
+    while (yn < y_0[i+1]) {
+      get<0>(*t) = zero;
+      get<1>(*t) = y_2[yn];
+      T v = get<0>(*t)+get<1>(*t);
+      if (v != zero) {
+        sparse->push_back(y_1[yn]);
+        values->push_back(v);
+      }
+      yn++;
+    }
+    i++;
+    dv[i] = sparse->size();
+  }
+  // copy values from host to device
+  copy_block((char*)buffer, (char*)dv, (len+1)*sizeof(int), cudaMemcpyH2D);
+  delete[] dv;
+  delete t;
+  return new tuple<Vec<int>*,Vec<int>*,Vec<T>*>(dense,new Vec<int>(sparse),new Vec<T>(values));
+}
+
+// merge two tensors using the monoid op/zero
+template< typename T >
+tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
+     merge_tensors ( tuple<Vec<int>*,Vec<int>*,Vec<T>*>* x,
+                     tuple<Vec<int>*,Vec<int>*,Vec<T>*>* y,
+                     T(*op)(tuple<T,T>*), T zero ) {
+  if(is_GPU()) {
+    return merge_tensors_gpu<T>(x, y, op, zero);
+  }
+  int i = 0;
+  int len = min(get<0>(*x)->size(),get<0>(*y)->size())-1;
+  auto dense = new Vec<int>(len+1);
+  int* dv = dense->buffer();
   auto sparse = new vector<int>();
   auto values = new vector<T>();
   dv[0] = 0;
@@ -538,7 +646,7 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
       if ((*get<1>(*x))[xn] == (*get<1>(*y))[yn]) {
         get<0>(*t) = (*get<2>(*x))[xn];
         get<1>(*t) = (*get<2>(*y))[yn];
-        T v = op(get<0>(*t),get<1>(*t));
+        T v = op(t);
         if (v != zero) {
           sparse->push_back((*get<1>(*x))[xn]);
           values->push_back(v);
@@ -547,7 +655,7 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
       } else if ((*get<1>(*x))[xn] < (*get<1>(*y))[yn]) {
         get<0>(*t) = (*get<2>(*x))[xn];
         get<1>(*t) = zero;
-        T v = op(get<0>(*t),get<1>(*t));
+        T v = op(t);
         if (v != zero) {
           sparse->push_back((*get<1>(*x))[xn]);
           values->push_back(v);
@@ -556,7 +664,7 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
       } else {
         get<0>(*t) = zero;
         get<1>(*t) = (*get<2>(*y))[yn];
-        T v = op(get<0>(*t),get<1>(*t));
+        T v = op(t);
         if (v != zero) {
           sparse->push_back((*get<1>(*y))[yn]);
           values->push_back(v);
@@ -567,7 +675,7 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
     while (xn < (*get<0>(*x))[i+1]) {
       get<0>(*t) = (*get<2>(*x))[xn];
       get<1>(*t) = zero;
-      T v = op(get<0>(*t),get<1>(*t));
+      T v = op(t);
       if (v != zero) {
         sparse->push_back((*get<1>(*x))[xn]);
         values->push_back(v);
@@ -577,7 +685,7 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
     while (yn < (*get<0>(*y))[i+1]) {
       get<0>(*t) = zero;
       get<1>(*t) = (*get<2>(*y))[yn];
-      T v = op(get<0>(*t),get<1>(*t));
+      T v = op(t);
       if (v != zero) {
         sparse->push_back((*get<1>(*y))[yn]);
         values->push_back(v);
@@ -586,12 +694,6 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
     }
     i++;
     dv[i] = sparse->size();
-  }
-  if(is_GPU()) {
-    int device_id = get_gpu_id();
-    // copy values from host to device
-    copy_block((char*)buffer, (char*)dv, (len+1)*sizeof(int), cudaMemcpyH2D);
-    delete[] dv;
   }
   delete t;
   return new tuple<Vec<int>*,Vec<int>*,Vec<T>*>(dense,new Vec<int>(sparse),new Vec<T>(values));

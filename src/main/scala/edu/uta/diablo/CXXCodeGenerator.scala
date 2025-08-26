@@ -382,7 +382,7 @@ object CXXCodeGenerator {
             case _ => Call("for",List(VarDecl(j,tpv,Range(n1,n2,n3)),reorder_loops(block)))
           }
         case Block(s:+Seq(List(Block(Nil))))
-          => Block(s.map(reorder_loops(_)):+Seq(List(Block(Nil))))
+          => Block(s.map(reorder_loops(_)))
         case Block(s)
           => Block(s.map(reorder_loops(_)))
         case IfE(p,x,y)
@@ -394,12 +394,6 @@ object CXXCodeGenerator {
     = expr match {
         case Call("for",List(_,b))
           => count_nested_loops(b)+1
-        case Block(s:+Seq(List(Block(Nil))))
-          => s.map(count_nested_loops(_)).reduce(_ max _)
-        case Block(s)
-          => s.map(count_nested_loops(_)).reduce(_ max _)
-        case IfE(p,x,y)
-          => max(count_nested_loops(x), count_nested_loops(y))
         case _ => 0
       }
 
@@ -459,11 +453,13 @@ object CXXCodeGenerator {
              val n3_b = n3_m.foldLeft[Expr](n3){ case (r,(v,u)) => subst(u,Var(v),r) }
              val all_m = m ++ n1_m ++ n2_m ++ n3_m
              val data = all_m.flatMap{
-                case (v,u) => 
-                  u match {
-                    case Nth(_,i) if(i < 3) => List()
-                    case _ => List(v)
+                case (v,u) => {
+                  val u_tp = exprType(u)
+                  u_tp match {
+                    case ArrayType(_,_) => List(v)
+                    case _ => List()
                   }
+                }
                 case _ => List()
               }.mkString(",")
              val loop_text = tab(tabs-1)+"for ( int "+i+" = "+makeC(n1_b,tabs,false)+"; "+i+
@@ -476,7 +472,7 @@ object CXXCodeGenerator {
              else
               device_str += " tile(1024)"
 
-             if(use_GPU && has_reduction(nb)) {
+             if(use_GPU && loop_count > 1 && has_reduction(nb)) {
               val v = new_var()
               device_str = tab(tabs)+"float "+v+" = 0.0f;\n"+device_str
               device_str += " reduction(+:"+v+")"
@@ -505,23 +501,21 @@ object CXXCodeGenerator {
                     => Block(s.map(add_reduction(_)):+Seq(List(Block(Nil))))
                   case Block(s)
                     => Block(s.map(add_reduction(_)))
-                  case IfE(p,x,y)
-                    => IfE(p,add_reduction(x),add_reduction(y))
                   case _ => expr
                 }
-              if(loop_count > 1) {
-                nb = add_reduction(reorder_loops(nb))
-              }
+              nb = add_reduction(reorder_loops(nb))
              }
              device_str += "\n"
              val pragma_str = if(use_GPU) tab(tabs)+"int device_id = get_gpu_id();\n"+tab(tabs)+"setDevice(device_id);\n"+device_str
               else "#pragma omp parallel for\n"
 
              "{ "+all_m.flatMap{ 
-                  case (v,u) => 
-                  u match {
-                    case Nth(_,i) if(i < 3) => List("const auto "+v+" = "+makeC(u,tabs,false)+"; ")
-                    case _ => List("auto "+v+" = "+makeC(u,tabs,false)+"->buffer(); ")
+                  case (v,u) => {
+                    val u_tp = exprType(u)
+                    u_tp match {
+                      case ArrayType(_,_) => List("auto "+v+" = "+makeC(u,tabs,false)+"->buffer(); ")
+                      case _ => List("const auto "+v+" = "+makeC(u,tabs,false)+"; ")
+                    }
                   }
                   case _ => List()
                 }.mkString("")+"\n"+
