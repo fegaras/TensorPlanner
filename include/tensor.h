@@ -534,91 +534,100 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
      merge_tensors_gpu ( tuple<Vec<int>*,Vec<int>*,Vec<T>*>* x,
                      tuple<Vec<int>*,Vec<int>*,Vec<T>*>* y,
                      T(*op)(tuple<T,T>*), T zero ) {
-  int i = 0;
   int len = min(get<0>(*x)->size(),get<0>(*y)->size())-1;
   auto dense = new Vec<int>(len+1);
-  int* buffer = dense->buffer();
-  int* x_0 = new int[get<0>(*x)->size()];
-  int* x_1 = new int[get<1>(*x)->size()];
-  T* x_2 = new T[get<2>(*x)->size()];
-  int* y_0 = new int[get<0>(*y)->size()];
-  int* y_1 = new int[get<1>(*y)->size()];
-  T* y_2 = new T[get<2>(*y)->size()];
-  int* dv = new int[(len+1)];
+  int* dv = dense->buffer();
+  int* x_0 = (get<0>(*x))->buffer();
+  int* x_1 = (get<1>(*x))->buffer();
+  T* x_2 = (get<2>(*x))->buffer();
+  int* y_0 = (get<0>(*y))->buffer();
+  int* y_1 = (get<1>(*y))->buffer();
+  T* y_2 = (get<2>(*y))->buffer();
   int device_id = get_gpu_id();
-  // copy values from device to host
-  copy_block((char*)x_0, (char*)get<0>(*x)->buffer(), get<0>(*x)->size()*sizeof(int), cudaMemcpyD2H);
-  copy_block((char*)x_1, (char*)get<1>(*x)->buffer(), get<1>(*x)->size()*sizeof(int), cudaMemcpyD2H);
-  copy_block((char*)x_2, (char*)get<2>(*x)->buffer(), get<2>(*x)->size()*sizeof(T), cudaMemcpyD2H);
-  copy_block((char*)y_0, (char*)get<0>(*y)->buffer(), get<0>(*y)->size()*sizeof(int), cudaMemcpyD2H);
-  copy_block((char*)y_1, (char*)get<1>(*y)->buffer(), get<1>(*y)->size()*sizeof(int), cudaMemcpyD2H);
-  copy_block((char*)y_2, (char*)get<2>(*y)->buffer(), get<2>(*y)->size()*sizeof(T), cudaMemcpyD2H);
-  auto sparse = new vector<int>();
-  auto values = new vector<T>();
+
+  #pragma acc kernels deviceptr(dv)
   dv[0] = 0;
-  // don't create a tuple during loop
-  auto t = new tuple<T,T>(zero,zero);
-  while (i < len) {
+  // first pass to calculate number of non-zeros in each output row
+  #pragma acc parallel loop deviceptr(x_0, x_1, y_0, y_1, dv)
+  for (int i = 0; i < len; i++) {
+    int nnz = 0;
     int xn = x_0[i];
     int yn = y_0[i];
     while (xn < x_0[i+1] && yn < y_0[i+1]) {
       if (x_1[xn] == y_1[yn]) {
-        get<0>(*t) = x_2[xn];
-        get<1>(*t) = y_2[yn];
-        T v = get<0>(*t)+get<1>(*t);
+        xn++; yn++;
+      } else if (x_1[xn] < y_1[yn]) {
+        xn++;
+      } else {
+        yn++;
+      }
+      // assuming result of op is non-zero
+      nnz++;
+    }
+    nnz += (x_0[i+1] - xn) + (y_0[i+1] - yn);
+    dv[i+1] = nnz;
+  }
+  int* row_ptr = new int[len+1];
+  copy_block((char*)row_ptr, (char*)dv, (len+1)*sizeof(int), cudaMemcpyD2H);
+  // sequantial loop to calculate cumulative row pointers
+  for (int i = 0; i < len; i++) {
+    row_ptr[i+1] += row_ptr[i];
+  }
+  copy_block((char*)dv, (char*)row_ptr, (len+1)*sizeof(int), cudaMemcpyH2D);
+  int total_nnz = row_ptr[len];
+  auto sparse = new Vec<int>(total_nnz);
+  auto values = new Vec<T>(total_nnz);
+  int* col_idxs = sparse->buffer();
+  T* agg_values = values->buffer();
+  // second pass to merge multiple rows in parallel
+  #pragma acc parallel loop deviceptr(x_0, x_1, x_2, y_0, y_1, y_2, dv, col_idxs, agg_values)
+  for (int i = 0; i < len; i++) {
+    int xn = x_0[i];
+    int yn = y_0[i];
+    int zn = dv[i];
+    while (xn < x_0[i+1] && yn < y_0[i+1]) {
+      if (x_1[xn] == y_1[yn]) {
+        T v = x_2[xn]+y_2[yn];
         if (v != zero) {
-          sparse->push_back(x_1[xn]);
-          values->push_back(v);
+          col_idxs[zn] = x_1[xn];
+          agg_values[zn] = v;
         }
         xn++; yn++;
       } else if (x_1[xn] < y_1[yn]) {
-        get<0>(*t) = x_2[xn];
-        get<1>(*t) = zero;
-        T v = get<0>(*t)+get<1>(*t);
+        T v = x_2[xn]+zero;
         if (v != zero) {
-          sparse->push_back(x_1[xn]);
-          values->push_back(v);
+          col_idxs[zn] = x_1[xn];
+          agg_values[zn] = v;
         }
         xn++;
       } else {
-        get<0>(*t) = zero;
-        get<1>(*t) = y_2[yn];
-        T v = get<0>(*t)+get<1>(*t);
+        T v = zero+y_2[yn];
         if (v != zero) {
-          sparse->push_back(y_1[yn]);
-          values->push_back(v);
+          col_idxs[zn] = y_1[yn];
+          agg_values[zn] = v;
         }
         yn++;
       }
+      zn++;
     }
     while (xn < x_0[i+1]) {
-      get<0>(*t) = x_2[xn];
-      get<1>(*t) = zero;
-      T v = get<0>(*t)+get<1>(*t);
+      T v = x_2[xn]+zero;
       if (v != zero) {
-        sparse->push_back(x_1[xn]);
-        values->push_back(v);
+        col_idxs[zn] = x_1[xn];
+        agg_values[zn] = v;
       }
-      xn++;
+      xn++; zn++;
     }
     while (yn < y_0[i+1]) {
-      get<0>(*t) = zero;
-      get<1>(*t) = y_2[yn];
-      T v = get<0>(*t)+get<1>(*t);
+      T v = zero+y_2[yn];
       if (v != zero) {
-        sparse->push_back(y_1[yn]);
-        values->push_back(v);
+        col_idxs[zn] = y_1[yn];
+        agg_values[zn] = v;
       }
-      yn++;
+      yn++; zn++;
     }
-    i++;
-    dv[i] = sparse->size();
   }
-  // copy values from host to device
-  copy_block((char*)buffer, (char*)dv, (len+1)*sizeof(int), cudaMemcpyH2D);
-  delete[] dv;
-  delete t;
-  return new tuple<Vec<int>*,Vec<int>*,Vec<T>*>(dense,new Vec<int>(sparse),new Vec<T>(values));
+  return new tuple<Vec<int>*,Vec<int>*,Vec<T>*>(dense,sparse,values);
 }
 
 // merge two tensors using the monoid op/zero
@@ -630,26 +639,53 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
   if(is_GPU()) {
     return merge_tensors_gpu<T>(x, y, op, zero);
   }
-  int i = 0;
   int len = min(get<0>(*x)->size(),get<0>(*y)->size())-1;
   auto dense = new Vec<int>(len+1);
   int* dv = dense->buffer();
-  auto sparse = new vector<int>();
-  auto values = new vector<T>();
   dv[0] = 0;
-  // don't create a tuple during loop
-  auto t = new tuple<T,T>(zero,zero);
-  while (i < len) {
+  // first pass to calculate number of non-zeros in each output row
+  #pragma omp parallel for
+  for (int i = 0; i < len; i++) {
+    int nnz = 0;
     int xn = (*get<0>(*x))[i];
     int yn = (*get<0>(*y))[i];
+    while (xn < (*get<0>(*x))[i+1] && yn < (*get<0>(*y))[i+1]) {
+      if ((*get<1>(*x))[xn] == (*get<1>(*y))[yn]) {
+        xn++; yn++;
+      } else if ((*get<1>(*x))[xn] < (*get<1>(*y))[yn]) {
+        xn++;
+      } else {
+        yn++;
+      }
+      // assuming result of op is non-zero
+      nnz++;
+    }
+    nnz += ((*get<0>(*x))[i+1] - xn) + ((*get<0>(*y))[i+1] - yn);
+    dv[i+1] = nnz;
+  }
+  for (int i = 0; i < len; i++) {
+    dv[i+1] += dv[i];
+  }
+  auto sparse = new Vec<int>(dv[len]);
+  auto values = new Vec<T>(dv[len]);
+  int* col_idxs = sparse->buffer();
+  T* agg_values = values->buffer();
+  // second pass to merge multiple rows in parallel
+  #pragma omp parallel for
+  for (int i = 0; i < len; i++) {
+    // don't create a tuple during loop
+    auto t = new tuple<T,T>(zero,zero);
+    int xn = (*get<0>(*x))[i];
+    int yn = (*get<0>(*y))[i];
+    int zn = dv[i];
     while (xn < (*get<0>(*x))[i+1] && yn < (*get<0>(*y))[i+1]) {
       if ((*get<1>(*x))[xn] == (*get<1>(*y))[yn]) {
         get<0>(*t) = (*get<2>(*x))[xn];
         get<1>(*t) = (*get<2>(*y))[yn];
         T v = op(t);
         if (v != zero) {
-          sparse->push_back((*get<1>(*x))[xn]);
-          values->push_back(v);
+          col_idxs[zn] = (*get<1>(*x))[xn];
+          agg_values[zn] = v;
         }
         xn++; yn++;
       } else if ((*get<1>(*x))[xn] < (*get<1>(*y))[yn]) {
@@ -657,8 +693,8 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
         get<1>(*t) = zero;
         T v = op(t);
         if (v != zero) {
-          sparse->push_back((*get<1>(*x))[xn]);
-          values->push_back(v);
+          col_idxs[zn] = (*get<1>(*x))[xn];
+          agg_values[zn] = v;
         }
         xn++;
       } else {
@@ -666,37 +702,36 @@ tuple<Vec<int>*,Vec<int>*,Vec<T>*>*
         get<1>(*t) = (*get<2>(*y))[yn];
         T v = op(t);
         if (v != zero) {
-          sparse->push_back((*get<1>(*y))[yn]);
-          values->push_back(v);
+          col_idxs[zn] = (*get<1>(*y))[yn];
+          agg_values[zn] = v;
         }
         yn++;
       }
+      zn++;
     }
     while (xn < (*get<0>(*x))[i+1]) {
       get<0>(*t) = (*get<2>(*x))[xn];
       get<1>(*t) = zero;
       T v = op(t);
       if (v != zero) {
-        sparse->push_back((*get<1>(*x))[xn]);
-        values->push_back(v);
+        col_idxs[zn] = (*get<1>(*x))[xn];
+        agg_values[zn] = v;
       }
-      xn++;
+      xn++; zn++;
     }
     while (yn < (*get<0>(*y))[i+1]) {
       get<0>(*t) = zero;
       get<1>(*t) = (*get<2>(*y))[yn];
       T v = op(t);
       if (v != zero) {
-        sparse->push_back((*get<1>(*y))[yn]);
-        values->push_back(v);
+        col_idxs[zn] = (*get<1>(*y))[yn];
+        agg_values[zn] = v;
       }
-      yn++;
+      yn++; zn++;
     }
-    i++;
-    dv[i] = sparse->size();
+    delete t;
   }
-  delete t;
-  return new tuple<Vec<int>*,Vec<int>*,Vec<T>*>(dense,new Vec<int>(sparse),new Vec<T>(values));
+  return new tuple<Vec<int>*,Vec<int>*,Vec<T>*>(dense,sparse,values);
 }
 
 // merge two sparse tensors using the monoid op/zero

@@ -329,17 +329,18 @@ object CXXCodeGenerator {
     get_arrays(e,excl(e))
   }
 
+  def get_vars ( expr: Expr ): List[String]
+    = expr match {
+        case Var(v)
+          => List(v)
+        case Index(Var(v),List(n))
+          => get_vars(n)
+        case MethodCall(x,_,List(y))
+          => get_vars(x)++get_vars(y)
+        case _ => List()
+      }
+
   def get_array_indices ( e : Expr): List[String] = {
-    def get_vars ( expr: Expr ): List[String]
-      = expr match {
-          case Var(v)
-            => List(v)
-          case Index(Var(v),List(n))
-            => get_vars(n)
-          case MethodCall(x,_,List(y))
-            => get_vars(x)++get_vars(y)
-          case _ => List()
-        }
     e match {
       case Assign(d,_)
         => get_vars(d)
@@ -466,8 +467,13 @@ object CXXCodeGenerator {
                  " <= "+makeC(n2_b,tabs,false)+"; "+i+" += "+makeC(n3_b,tabs,false)+" )\n"
              var device_str = "#pragma acc parallel deviceptr("+data+")\n#pragma acc loop"
              val loop_count = count_nested_loops(nb)
+             val loop_indices = nb match {
+                case Call("for",List(VarDecl(j,tp_1,Range(m1,m2,m3)),blck))
+                  => get_vars(m1)++get_vars(m2)++get_vars(m3)
+                case _ => List()
+              }
 
-             if(loop_count > 1)
+             if(loop_count >= 1 && !loop_indices.contains(i))
               device_str += " tile(32,32)"
              else
               device_str += " tile(1024)"
