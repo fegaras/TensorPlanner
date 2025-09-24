@@ -1,8 +1,10 @@
 var N = args(0).toInt;
 var M = N;
+var max_rand = 1000000;
+var upper_bound = 1000000.0;
 
-var Az = tensor*(N,M)[ ((i,j),i*j*1.0) | i <-0..(N-1), j<-0..(M-1) ];
-var Bz = tensor*(N,M)[ ((i,j),i*j*1.0) | i <-0..(N-1), j<-0..(M-1) ];
+var Az = tensor*(N,M)[ ((i,j),0.5-(random()%max_rand)/upper_bound) | i <-0..(N-1), j<-0..(M-1) ];
+var Bz = tensor*(N,M)[ ((i,j),0.5-(random()%max_rand)/upper_bound) | i <-0..(N-1), j<-0..(M-1) ];
 
 var reps = args(1).toInt;
 

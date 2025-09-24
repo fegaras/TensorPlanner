@@ -4,12 +4,12 @@ var sparsity = 0.01;
 var max_rand = 1000000;
 var upper_bound = 1000000.0;
 
-var Az = tensor*(N,N)[ ((i,j),0.5-(random()%max_rand)/upper_bound) | i <-0..(N-1), j<-0..(N-1) ];
-var Bz = tensor*(N)(N)[ ((i,j),0.5-(random()%max_rand)/upper_bound) | i <-0..(N-1), j<-0..(N-1), (random()%max_rand)/upper_bound < sparsity  ];
+var Az = tensor*(N)(N)[ ((i,j),0.5-(random()%max_rand)/upper_bound) | i <-0..(N-1), j<-0..(N-1), (random()%max_rand)/upper_bound < sparsity ];
+var Bz = tensor*(N,N)[ ((i,j),0.5-(random()%max_rand)/upper_bound) | i <-0..(N-1), j<-0..(N-1) ];
 
 var iter = 0;
 while(iter < iterations) {
-    Az = tensor*(N,N) (Az @ Bz);
+    Bz = tensor*(N,N) (Az @ Bz);
     iter = iter + 1;
 }
-Az;
+Bz;
