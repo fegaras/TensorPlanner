@@ -127,6 +127,40 @@ object CXXCodeGenerator {
          case _ => Var("nullptr")
       }
 
+  def reorderFlatMaps ( e: Expr ): Expr
+    = e match {
+      case flatMap(Lambda(q,c),y)
+        => c match {
+          case flatMap(Lambda(r,d),z)
+            if(!get_vars(z).contains(get_vars(toExpr(q)).head))
+            => flatMap(Lambda(r,flatMap(Lambda(q,d),y)),z)
+          case Block(s)
+            => {
+              var inner_fm = Option.empty[Expr]
+              val ns = s.map {
+                case fm@flatMap(Lambda(r,d),z)
+                  => inner_fm = Some(fm)
+                      d
+                case other => other
+              }
+              inner_fm match {
+                case Some(flatMap(Lambda(r,d),z))
+                  => flatMap(Lambda(r,flatMap(Lambda(q,Block(ns)),y)),z)
+                case _ => e
+              }
+            }
+          case Let(p,nv,IfE(mc,b,nb))
+            => b match {
+              case flatMap(Lambda(r,d),z)
+               if(!get_vars(z).contains(get_vars(toExpr(q)).head))
+                => flatMap(Lambda(r,flatMap(Lambda(q,Let(p,nv,IfE(mc,d,nb))),y)),z)
+              case _ => e
+            }
+          case _ => e
+        }
+      case _ => e
+    }
+
   def unnestBlocks ( e: Expr, stmt: Boolean ): (List[Expr],Expr) = {
       def unnestBlocksList ( el: List[Expr], stmt: Boolean ): (List[Expr],List[Expr])
         = el.foldLeft[(List[Expr],List[Expr])] (Nil,Nil) {
@@ -216,10 +250,15 @@ object CXXCodeGenerator {
              (ps:+While(pe,block(xs:+xe)),none)
         case flatMap(Lambda(p,b),x)
           if stmt
-          => val v = new_var()
+          => val b1 = x match {
+               case MethodCall(_, "par", _)
+                 => reorderFlatMaps(b)
+               case _ => b
+             }
+             val v = new_var()
              val tp = elemType(x)
              env = env + ((v,tp))
-             val nb = eliminatePattern(p,Var(v),b)
+             val nb = eliminatePattern(p,Var(v),b1)
              val (xs,xe) = unnestBlocks(x,false)
              val (bs,be) = unnestBlocks(nb,stmt)
              (xs:+Call("for",List(VarDecl(v,tp,xe),
@@ -372,6 +411,32 @@ object CXXCodeGenerator {
         case _ => false
       }
 
+    def get_nested_for_loop ( expr: Expr ): Option[Expr]
+      = expr match {
+        case Call("for",_)
+          => Some(expr)
+        case Block(s:+Seq(List(Block(Nil))))
+          => s.map(get_nested_for_loop(_)).find( x => x.isDefined ).flatten
+        case Block(s)
+          => s.map(get_nested_for_loop(_)).find( x => x.isDefined ).flatten
+        case IfE(p,x,y)
+          => get_nested_for_loop(x) orElse get_nested_for_loop(y)
+        case _ => None
+      }
+
+    def remove_for_loop ( expr: Expr ): Expr
+      = expr match {
+        case Call("for",List(_,block))
+          => block
+        case Block(s:+Seq(List(Block(Nil))))
+          => Block(s.map(remove_for_loop(_)))
+        case Block(s)
+          => Block(s.map(remove_for_loop(_)))
+        case IfE(p,x,y)
+          => IfE(p,remove_for_loop(x),remove_for_loop(y))
+        case _ => expr
+      }
+
     def reorder_loops ( expr: Expr ): Expr
     = expr match {
         case Call("for",List(VarDecl(j,tpv,Range(n1,n2,n3)),block))
@@ -380,7 +445,20 @@ object CXXCodeGenerator {
             case Call("for",List(VarDecl(k,tpv_1,Range(n1_1,n2_1,n3_1)),blk))
               if(indices_list.contains(k) && !indices_list.contains(j))
               => Call("for",List(VarDecl(k,tpv_1,Range(n1_1,n2_1,n3_1)),Call("for",List(VarDecl(j,tpv,Range(n1,n2,n3)),blk))))
-            case _ => Call("for",List(VarDecl(j,tpv,Range(n1,n2,n3)),reorder_loops(block)))
+            case Block(s)
+              => val nf = s.map(get_nested_for_loop(_)).find( x => x.isDefined ).flatten
+                nf match {
+                  case Some(expr_1)
+                   => expr_1 match {
+                        case Call("for",List(VarDecl(k,tpv_1,Range(n1_1,n2_1,n3_1)),blk))
+                          if(indices_list.contains(k) && !indices_list.contains(j))
+                          => val new_blk = remove_for_loop(block)
+                          Call("for",List(VarDecl(k,tpv_1,Range(n1_1,n2_1,n3_1)),Call("for",List(VarDecl(j,tpv,Range(n1,n2,n3)),new_blk))))
+                        case _ => expr
+                      }
+                  case None => expr
+                }
+            case _ => expr
           }
         case Block(s:+Seq(List(Block(Nil))))
           => Block(s.map(reorder_loops(_)))
@@ -467,6 +545,7 @@ object CXXCodeGenerator {
                  " <= "+makeC(n2_b,tabs,false)+"; "+i+" += "+makeC(n3_b,tabs,false)+" )\n"
              var device_str = "#pragma acc parallel deviceptr("+data+")\n#pragma acc loop"
              val loop_count = count_nested_loops(nb)
+
              val loop_indices = nb match {
                 case Call("for",List(VarDecl(j,tp_1,Range(m1,m2,m3)),blck))
                   => get_vars(m1)++get_vars(m2)++get_vars(m3)
@@ -488,34 +567,52 @@ object CXXCodeGenerator {
                   case Call("for",List(p@VarDecl(j,_,_),block))
                     => block match {
                         case Block(s)
-                          => def create_reduction_block(blk: Expr): Expr
+                          => var found = false
+                            var new_var_assign: Expr = null
+                            var var_assign: Expr = null
+                            def create_reduction_block(blk: Expr): Expr
                               = blk match {
                                 case Assign(d,Seq(List(MethodCall(_,m_1,y))))
-                                  => {
-                                    val indices_list = get_array_indices(blk)
+                                  => val indices_list = get_array_indices(blk)
                                     if(indices_list.contains(j))
-                                      expr
-                                    else
-                                      Block(List(Assign(Var(v),makeZero(BasicType("Double"))),Call("for",List(p,Assign(Var(v),Seq(List(MethodCall(Var(v),m_1,y)))))),Assign(d,Var(v))))
-                                  }
-                                case _ => add_reduction(blk)
+                                      blk
+                                    else {
+                                      val new_blk = Assign(Var(v),Seq(List(MethodCall(Var(v),m_1,y))))
+                                      found = true
+                                      if(new_var_assign == null)
+                                        new_var_assign = Assign(Var(v),makeZero(BasicType("Double")))
+                                      if(var_assign == null)
+                                        var_assign = Assign(d,Var(v))
+                                      new_blk
+                                    }
+                                case Block(s)
+                                  => Block(s.map(create_reduction_block(_)))
+                                case IfE(p,x,y)
+                                  => IfE(p,create_reduction_block(x),create_reduction_block(y))
+                                case _ => blk
                               }
-                            Block(s.map(create_reduction_block(_)))
+                            val new_block = create_reduction_block(block)
+                            if(found)
+                              Block(List(new_var_assign, Call("for",List(p,new_block)), var_assign))
+                            else
+                              Call("for",List(p,block))
                         case _ => Call("for",List(p,add_reduction(block)))
                       }
                   case Block(s:+Seq(List(Block(Nil))))
-                    => Block(s.map(add_reduction(_)):+Seq(List(Block(Nil))))
+                    => Block(s.map(add_reduction(_)))
                   case Block(s)
                     => Block(s.map(add_reduction(_)))
+                  case IfE(p,x,y)
+                    => IfE(p,add_reduction(x),add_reduction(y))
                   case _ => expr
                 }
-              nb = add_reduction(reorder_loops(nb))
+              nb = add_reduction(nb)
              }
              device_str += "\n"
              val pragma_str = if(use_GPU) tab(tabs)+"int device_id = get_gpu_id();\n"+tab(tabs)+"setDevice(device_id);\n"+device_str
               else "#pragma omp parallel for\n"
 
-             "{ "+all_m.flatMap{ 
+             "{ "+all_m.flatMap{
                   case (v,u) => {
                     val u_tp = exprType(u)
                     u_tp match {
