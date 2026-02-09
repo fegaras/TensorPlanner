@@ -476,6 +476,29 @@ object CXXCodeGenerator {
         case _ => 0
       }
 
+    def has_gemm( expr : Expr): Boolean
+      = expr match {
+          case Call("for",List(_,blk))
+            => blk match {
+                case Call("for",List(_,blk_1))
+                  => blk_1 match {
+                      case Block(s)
+                        => s.map{
+                            case Assign(d,Seq(List(MethodCall(x,m,List(y)))))
+                              => y match {
+                                  case MethodCall(_,m_1,List(_))
+                                    => m_1 == "*" && x == d && m == "+" // Checking for multiply-add pattern
+                                  case _ => false
+                              }
+                            case _ => false
+                          }.reduce( (x:Boolean, y:Boolean) => x || y)
+                      case _ => false
+                    }
+                case _ => false
+              }
+          case _ => false
+        }
+
     e match {
         case Var(v) => v
         case IntConst(n) => n.toString
