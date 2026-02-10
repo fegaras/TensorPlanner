@@ -22,6 +22,7 @@ import Math.max
 
 object CXXCodeGenerator {
   var writer: PrintWriter = _
+  var mlir_writer: PrintWriter = _
 
   var var_count: Int = 0
 
@@ -342,6 +343,10 @@ object CXXCodeGenerator {
                          "==" -> "==", "<" -> "<", ">" -> ">", "<=" -> "<=", ">=" -> ">=",
                          "!=" -> "!=", "&&" -> "&&", "||" -> "||" )
 
+  def arith_oprs = Map( "+" -> "arith.addi", "-" -> "arith.subi", "*" -> "arith.muli", "/" -> "arith.divsi", "%" -> "arith.remsi",
+                         "==" -> "arith.cmpi eq", "<" -> "arith.cmpi slt", ">" -> "arith.cmpi sgt", "<=" -> "arith.cmpi sle",
+                         ">=" -> "arith.cmpi sge", "!=" -> "arith.cmpi ne", "&&" -> "arith.andi", "||" -> "arith.ori" )
+
   def tab ( n: Int ): String = "   "*n
 
 
@@ -393,6 +398,104 @@ object CXXCodeGenerator {
         => get_array_indices(x) ++ get_array_indices(y)
       case _ => List()
     }
+  }
+
+  def makeSSA ( e: Expr): String = {
+    var ssa_decls = ""
+    def makeSSAUtil( expr: Expr ): String = {
+      expr match {
+        case Var(v) => "%"+v
+        case IntConst(n) => n.toString
+        case DoubleConst(n) => n.toString
+        case BoolConst(n) => n.toString
+        case Index(Var(v),List(n))
+          => "%"+v+"["+makeSSAUtil(n)+"]"
+        case MethodCall(x,op,List(y))
+          if arith_oprs.contains(op)
+          => val x_v = makeSSAUtil(x)
+            val y_v = makeSSAUtil(y)
+            val new_v = new_var()
+            env = env + ((new_v,exprType(x)))
+            ssa_decls += "%"+new_v+" = "+arith_oprs(op)+" "+x_v+", "+y_v+" : index\n"
+            "%"+new_v
+        case IfE(p,x,y)
+          => val new_v = new_var()
+            env = env + ((new_v,exprType(y)))
+            val np = makeSSAUtil(p)
+            val x_v = makeSSAUtil(x)
+            val y_v = makeSSAUtil(y)
+            ssa_decls += "%"+new_v+" = affine.if "+np+" {\n"+x_v+"\n} else {\n"+y_v+"\n}\n"
+            "%"+new_v
+        case Assign(d,Seq(List(MethodCall(x,m,List(y)))))
+          if x == d && List("+","-","*","/").contains(m)
+          => val nd = makeSSAUtil(d)
+            val ny = makeSSAUtil(y)
+            val new_v = new_var()
+            env = env + ((new_v,exprType(y)))
+            ssa_decls += "%"+new_v+" = "+arith_oprs(m)+" "+nd+", "+ny+" : index\n"
+            "%"+new_v
+        case Assign(d,Seq(List(s)))
+          => makeSSAUtil(d)+" = "+makeSSAUtil(s)
+        case Assign(d,s)
+          => makeSSAUtil(d)+" = "+makeSSAUtil(s)
+        case _ => expr.toString
+      }
+    }
+    val ssa_expr = makeSSAUtil(e)
+    ssa_decls + ssa_expr
+  }
+
+  def makeMLIR( e: Expr, tabs: Int, stmt: Boolean ): String = {
+    e match {
+      case Var(v) => "%"+v
+      case IntConst(n) => n.toString
+      case DoubleConst(n) => n.toString
+      case BoolConst(n) => n.toString
+      case Index(Var(v),List(n))
+        => makeSSA(e)
+      case MethodCall(x,op,List(y))
+        => makeSSA(e)
+      case Call("for",List(VarDecl(i,tp,MethodCall(Range(n1,n2,n3),"par",null)),b))
+        => val m = get_arrays(b)
+        var nb = m.foldLeft[Expr](b){ case (r,(v,u)) => subst(u,Var(v),r) }
+        "affine.for %"+i+" = 0 to "+block_dim_size+"{\n"+tab(tabs+1)+makeMLIR(nb,tabs,false) +"}\n"
+      case Call("for",List(VarDecl(i,tp,Range(n1,n2,n3)),b))
+        => "affine.for %"+i+" = 0 to "+block_dim_size+"{\n"+tab(tabs+1)+makeMLIR(b,tabs,false) +"}\n"
+      case Block(List(x,Seq(List(Block(Nil)))))
+        => makeMLIR(x,tabs,true)
+      case Block(s:+Seq(List(Block(Nil))))
+        => s.map(makeMLIR(_,tabs+1,true)).mkString("{ ","\n"+tab(tabs),"}")
+      case Block(s)
+        if stmt
+        => s.map(makeMLIR(_,tabs+1,true)).mkString("{ ","\n"+tab(tabs),"}")
+      case Block(s:+x)
+        => "({ "+s.map(makeMLIR(_,tabs+1,true)).mkString("\n"+tab(tabs))+
+                (if (s.isEmpty) "" else ("\n"+tab(tabs)))+makeMLIR(x,tabs+1,false)+"})"
+      case Assign(_,_)
+        => makeSSA(e)
+      case _ => e.toString
+    }
+  }
+
+  def writeMLIR( e: Expr, mlir_func_args: List[String] ): String = {
+    val data_type = "f32"
+    val matrix_type = s"memref<${block_dim_size}x${block_dim_size}x${data_type}>"
+    val args = mlir_func_args.map(arg => s"%${arg}: ${matrix_type}").mkString(", ")
+    val matmul_args = mlir_func_args.map(arg => s"%${arg}").mkString(", ")
+    val mlir_func_name = new_var()
+    val mlir_func = s"""func.func @${mlir_func_name}(${args}) -> ${matrix_type} {
+    ${makeMLIR(e,1,false)}\n
+    return %${mlir_func_args.head} : ${matrix_type}\n}
+    """
+    mlir_writer.println(mlir_func)
+    val mlir_func_call = s"""
+    CUmodule cuModule;
+    CUfunction cuFunction;
+    std::string ptx = loadPTX(\"mlir_output.ptx\");
+    cuModuleLoadDataEx(&cuModule, ptx.c_str(), 0, 0, 0);
+    cuModuleGetFunction(&cuFunction, cuModule, \"${mlir_func_name}_kernel\");
+    launchCudaKernel(cuFunction, device_id, ${mlir_func_args.mkString(", ")});\n"""
+    mlir_func_call
   }
 
   def makeC ( e: Expr, tabs: Int, stmt: Boolean ): String = {
@@ -546,107 +649,139 @@ object CXXCodeGenerator {
                          makeC(zero,tabs,false)))
         case Call("for",List(VarDecl(i,tp,MethodCall(Range(n1,n2,n3),"par",null)),b))
           => val m = get_arrays(b)
-             var nb = m.foldLeft[Expr](b){ case (r,(v,u)) => subst(u,Var(v),r) }
-             val n1_m = get_arrays(n1)
-             val n1_b = n1_m.foldLeft[Expr](n1){ case (r,(v,u)) => subst(u,Var(v),r) }
-             val n2_m = get_arrays(n2)
-             val n2_b = n2_m.foldLeft[Expr](n2){ case (r,(v,u)) => subst(u,Var(v),r) }
-             val n3_m = get_arrays(n3)
-             val n3_b = n3_m.foldLeft[Expr](n3){ case (r,(v,u)) => subst(u,Var(v),r) }
-             val all_m = m ++ n1_m ++ n2_m ++ n3_m
-             val data = all_m.flatMap{
+              var nb = m.foldLeft[Expr](b){ case (r,(v,u)) => subst(u,Var(v),r) }
+              val n1_m = get_arrays(n1)
+              val n1_b = n1_m.foldLeft[Expr](n1){ case (r,(v,u)) => subst(u,Var(v),r) }
+              val n2_m = get_arrays(n2)
+              val n2_b = n2_m.foldLeft[Expr](n2){ case (r,(v,u)) => subst(u,Var(v),r) }
+              val n3_m = get_arrays(n3)
+              val n3_b = n3_m.foldLeft[Expr](n3){ case (r,(v,u)) => subst(u,Var(v),r) }
+              val all_m = m ++ n1_m ++ n2_m ++ n3_m
+              var array_set = Set[Expr]()
+              val all_m_1 = all_m.filter{
                 case (v,u) => {
                   val u_tp = exprType(u)
                   u_tp match {
-                    case ArrayType(_,_) => List(v)
-                    case _ => List()
+                    case ArrayType(_,_)
+                      if(!array_set.contains(u)) => {
+                        array_set += u
+                        true
+                      }
+                    case _ => false
                   }
                 }
-                case _ => List()
-              }.mkString(",")
-             val loop_text = tab(tabs-1)+"for ( int "+i+" = "+makeC(n1_b,tabs,false)+"; "+i+
-                 " <= "+makeC(n2_b,tabs,false)+"; "+i+" += "+makeC(n3_b,tabs,false)+" )\n"
-             var device_str = "#pragma acc parallel deviceptr("+data+")\n#pragma acc loop"
-             val loop_count = count_nested_loops(nb)
-
-             val loop_indices = nb match {
-                case Call("for",List(VarDecl(j,tp_1,Range(m1,m2,m3)),blck))
-                  => get_vars(m1)++get_vars(m2)++get_vars(m3)
-                case _ => List()
+                case _ => false
               }
-
-             if(loop_count >= 1 && !loop_indices.contains(i))
-              device_str += " tile(32,32)"
-             else
-              device_str += " tile(1024)"
-
-             if(use_GPU && loop_count > 1 && has_reduction(nb)) {
-              val v = new_var()
-              device_str = tab(tabs)+"float "+v+" = 0.0f;\n"+device_str
-              device_str += " reduction(+:"+v+")"
-
-              def add_reduction ( expr: Expr ): Expr
-                = expr match {
-                  case Call("for",List(p@VarDecl(j,_,_),block))
-                    => block match {
-                        case Block(s)
-                          => var found = false
-                            var new_var_assign: Expr = null
-                            var var_assign: Expr = null
-                            def create_reduction_block(blk: Expr): Expr
-                              = blk match {
-                                case Assign(d,Seq(List(MethodCall(_,m_1,y))))
-                                  => val indices_list = get_array_indices(blk)
-                                    if(indices_list.contains(j))
-                                      blk
-                                    else {
-                                      val new_blk = Assign(Var(v),Seq(List(MethodCall(Var(v),m_1,y))))
-                                      found = true
-                                      if(new_var_assign == null)
-                                        new_var_assign = Assign(Var(v),makeZero(BasicType("Double")))
-                                      if(var_assign == null)
-                                        var_assign = Assign(d,Var(v))
-                                      new_blk
-                                    }
-                                case Block(s)
-                                  => Block(s.map(create_reduction_block(_)))
-                                case IfE(p,x,y)
-                                  => IfE(p,create_reduction_block(x),create_reduction_block(y))
-                                case _ => blk
-                              }
-                            val new_block = create_reduction_block(block)
-                            if(found)
-                              Block(List(new_var_assign, Call("for",List(p,new_block)), var_assign))
-                            else
-                              Call("for",List(p,block))
-                        case _ => Call("for",List(p,add_reduction(block)))
-                      }
-                  case Block(s:+Seq(List(Block(Nil))))
-                    => Block(s.map(add_reduction(_)))
-                  case Block(s)
-                    => Block(s.map(add_reduction(_)))
-                  case IfE(p,x,y)
-                    => IfE(p,add_reduction(x),add_reduction(y))
-                  case _ => expr
-                }
-              nb = add_reduction(nb)
-             }
-             device_str += "\n"
-             val pragma_str = if(use_GPU) tab(tabs)+"int device_id = get_gpu_id();\n"+tab(tabs)+"setDevice(device_id);\n"+device_str
-              else "#pragma omp parallel for\n"
-
-             "{ "+all_m.flatMap{
+              val data = all_m_1.flatMap{
                   case (v,u) => {
                     val u_tp = exprType(u)
                     u_tp match {
-                      case ArrayType(_,_) => List("auto "+v+" = "+makeC(u,tabs,false)+"->buffer(); ")
-                      case _ => List("const auto "+v+" = "+makeC(u,tabs,false)+"; ")
+                      case ArrayType(_,_) => List(v)
+                      case _ => List()
                     }
                   }
                   case _ => List()
-                }.mkString("")+"\n"+
-                pragma_str+
-                loop_text+tab(tabs)+makeC(nb,tabs+1,true)+";\n"+tab(tabs-1)+"}\n"
+                }
+              if(use_GPU && has_gemm(b)) {
+                all_m_1.flatMap{
+                  case (v,u) => {
+                    val u_tp = exprType(u)
+                    u_tp match {
+                      case ArrayType(_,_) => List("auto "+v+" = "+makeC(u,tabs,false)+"->buffer();\n")
+                      case _ => List()
+                    }
+                  }
+                  case _ => List()
+                }.mkString("")+"\n"+tab(tabs-1)+
+                "int device_id = get_gpu_id();\n"+tab(tabs-1)+
+                "setDevice(device_id);\n"+tab(tabs-1)+
+                writeMLIR(e, data.toList)
+              }
+              else {
+                val loop_text = tab(tabs-1)+"for ( int "+i+" = "+makeC(n1_b,tabs,false)+"; "+i+
+                    " <= "+makeC(n2_b,tabs,false)+"; "+i+" += "+makeC(n3_b,tabs,false)+" )\n"
+                var device_str = "#pragma acc parallel deviceptr("+data.mkString(",")+")\n#pragma acc loop"
+                val loop_count = count_nested_loops(nb)
+
+                val loop_indices = nb match {
+                    case Call("for",List(VarDecl(j,tp_1,Range(m1,m2,m3)),blck))
+                      => get_vars(m1)++get_vars(m2)++get_vars(m3)
+                    case _ => List()
+                  }
+
+                if(loop_count >= 1 && !loop_indices.contains(i))
+                  device_str += " tile(32,32)"
+                else
+                  device_str += " tile(1024)"
+
+                if(use_GPU && loop_count > 1 && has_reduction(nb)) {
+                  val v = new_var()
+                  device_str = tab(tabs)+"float "+v+" = 0.0f;\n"+device_str
+                  device_str += " reduction(+:"+v+")"
+
+                  def add_reduction ( expr: Expr ): Expr
+                    = expr match {
+                      case Call("for",List(p@VarDecl(j,_,_),block))
+                        => block match {
+                            case Block(s)
+                              => var found = false
+                                var new_var_assign: Expr = null
+                                var var_assign: Expr = null
+                                def create_reduction_block(blk: Expr): Expr
+                                  = blk match {
+                                    case Assign(d,Seq(List(MethodCall(_,m_1,y))))
+                                      => val indices_list = get_array_indices(blk)
+                                        if(indices_list.contains(j))
+                                          blk
+                                        else {
+                                          val new_blk = Assign(Var(v),Seq(List(MethodCall(Var(v),m_1,y))))
+                                          found = true
+                                          if(new_var_assign == null)
+                                            new_var_assign = Assign(Var(v),makeZero(BasicType("Double")))
+                                          if(var_assign == null)
+                                            var_assign = Assign(d,Var(v))
+                                          new_blk
+                                        }
+                                    case Block(s)
+                                      => Block(s.map(create_reduction_block(_)))
+                                    case IfE(p,x,y)
+                                      => IfE(p,create_reduction_block(x),create_reduction_block(y))
+                                    case _ => blk
+                                  }
+                                val new_block = create_reduction_block(block)
+                                if(found)
+                                  Block(List(new_var_assign, Call("for",List(p,new_block)), var_assign))
+                                else
+                                  Call("for",List(p,block))
+                            case _ => Call("for",List(p,add_reduction(block)))
+                          }
+                      case Block(s:+Seq(List(Block(Nil))))
+                        => Block(s.map(add_reduction(_)))
+                      case Block(s)
+                        => Block(s.map(add_reduction(_)))
+                      case IfE(p,x,y)
+                        => IfE(p,add_reduction(x),add_reduction(y))
+                      case _ => expr
+                    }
+                  nb = add_reduction(nb)
+                }
+                device_str += "\n"
+                val pragma_str = if(use_GPU) tab(tabs)+"int device_id = get_gpu_id();\n"+tab(tabs)+"setDevice(device_id);\n"+device_str
+                  else "#pragma omp parallel for\n"
+
+                "{ "+all_m.flatMap{
+                      case (v,u) => {
+                        val u_tp = exprType(u)
+                        u_tp match {
+                          case ArrayType(_,_) => List("auto "+v+" = "+makeC(u,tabs,false)+"->buffer(); ")
+                          case _ => List("const auto "+v+" = "+makeC(u,tabs,false)+"; ")
+                        }
+                      }
+                      case _ => List()
+                    }.mkString("")+"\n"+
+                    pragma_str+
+                    loop_text+tab(tabs)+makeC(nb,tabs+1,true)+";\n"+tab(tabs-1)+"}\n"
+              }
 
         case Call("for",List(VarDecl(i,tp,Range(n1,n2,n3)),b))
           => "for ( int "+i+" = "+makeC(n1,tabs,false)+"; "+i+
@@ -788,10 +923,15 @@ object CXXCodeGenerator {
 
   def genCxxCode ( e: Expr, functions: List[Expr], print_writer: PrintWriter ) {
     writer = print_writer
+    mlir_writer = new PrintWriter(new File("mlir_output.mlir"))
     writer.println("#include \"runtime.h\"\n")
+    if(use_GPU) {
+      writer.println("#include \"cuda_util.h\"\n#include <cuda.h>\n")
+    }
     val s = makeCxxCode(e)
     val fs = functions.map(f => "functions.push_back((void*(*)(void*))"
                                 +makeC(f,0,false)+");\n").mkString("")
+    mlir_writer.close()
     writer.println(s"int main ( int argc, char* argv[] ) {\nstartup(argc,argv,$block_dim_size);\n$fs${s}mpi_finalize();\nreturn 0;\n}")
   }
 }
