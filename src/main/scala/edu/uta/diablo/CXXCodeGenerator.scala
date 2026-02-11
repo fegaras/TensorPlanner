@@ -477,15 +477,73 @@ object CXXCodeGenerator {
     }
   }
 
+  val gpu_block_x = 512
+  val gpu_block_y = 512
+
+  def writeMLIR_gemm( mlir_func_args: List[String]): String = {
+    val data_type = "f32"
+    val matrix_type = s"memref<${block_dim_size}x${block_dim_size}x${data_type}>"
+    val dimx = block_dim_size/gpu_block_x
+    val dimy = block_dim_size/gpu_block_y
+    val mlir_code = s"""
+    %c1 = arith.constant 1 : index
+    %c2 = arith.constant ${dimx} : index
+    %c${gpu_block_x} = arith.constant ${gpu_block_x} : index
+    gpu.launch blocks(%bx, %by, %bz) in (%grid_x = %c${gpu_block_x}, %grid_y = %c1, %grid_z = %c1)
+                threads(%tx, %ty, %tz) in (%block_x = %c${gpu_block_x}, %block_y = %c1, %block_z = %c1) {
+      %i = arith.muli %c2, %bx : index
+      %j = arith.muli %c2, %tx : index
+      %a_smem = memref.get_global @a_smem_global : memref<${dimx}x128xf32, 3>
+      %b_smem = memref.get_global @b_smem_global : memref<128x${dimy}xf32, 3>
+      affine.for %k = 0 to ${block_dim_size} step 128 {
+        affine.for %copyii = #map0(%i) to #map2(%i) {
+          affine.for %copykk = #map0(%k) to #map1(%k) {
+            %0 = affine.load %arg0[%copyii, %copykk] : ${matrix_type}
+            affine.store %0, %a_smem[%copyii - %i, %copykk - %k] : memref<${dimx}x128xf32, 3>
+          }
+        }
+        affine.for %copykk = #map0(%k) to #map1(%k) {
+          affine.for %copyjj = #map0(%j) to #map2(%j) {
+            %0 = affine.load %arg1[%copykk, %copyjj] : ${matrix_type}
+            affine.store %0, %b_smem[%copykk - %k, %copyjj - %j] : memref<128x${dimy}xf32, 3>
+          }
+        }
+        affine.for %ii = 0 to ${dimx} {
+          affine.for %jj = 0 to ${dimy} {
+            %0 = affine.apply #map3(%i, %ii)
+            %1 = affine.apply #map3(%j, %jj)
+            %2 = affine.load %arg2[%0, %1] : ${matrix_type}
+            %res = affine.for %kk = 0 to 128 iter_args(%accum = %2) -> (f32) {
+              %3 = affine.load %a_smem[%ii, %kk] : memref<${dimx}x128xf32, 3>
+              %4 = affine.load %b_smem[%kk, %jj] : memref<128x${dimy}xf32, 3>
+              %5 = arith.mulf %3, %4 : f32
+              %6 = arith.addf %accum, %5 : f32
+              affine.yield %6 : f32
+            }
+            affine.store %res, %arg2[%0, %1] : ${matrix_type}
+          }
+        }
+      }
+      gpu.terminator
+    }
+    """
+    mlir_code
+  }
+
   def writeMLIR( e: Expr, mlir_func_args: List[String] ): String = {
     val data_type = "f32"
     val matrix_type = s"memref<${block_dim_size}x${block_dim_size}x${data_type}>"
     val args = mlir_func_args.map(arg => s"%${arg}: ${matrix_type}").mkString(", ")
     val matmul_args = mlir_func_args.map(arg => s"%${arg}").mkString(", ")
     val mlir_func_name = new_var()
-    val mlir_func = s"""func.func @${mlir_func_name}(${args}) -> ${matrix_type} {
-    ${makeMLIR(e,1,false)}\n
-    return %${mlir_func_args.head} : ${matrix_type}\n}
+    val dimx = block_dim_size/gpu_block_x
+    val dimy = block_dim_size/gpu_block_y
+    val mlir_func = s"""
+    memref.global "private" @a_smem_global : memref<${dimx}x128xf32, 3>
+    memref.global "private" @b_smem_global : memref<128x${dimy}xf32, 3>
+    func.func @${mlir_func_name}(%arg2 : ${matrix_type}, %arg1 : ${matrix_type}, %arg0 : ${matrix_type}) -> ${matrix_type} {
+    ${writeMLIR_gemm(mlir_func_args)}\n
+    return %arg2 : ${matrix_type}\n}
     """
     mlir_writer.println(mlir_func)
     val mlir_func_call = s"""
@@ -924,6 +982,11 @@ object CXXCodeGenerator {
   def genCxxCode ( e: Expr, functions: List[Expr], print_writer: PrintWriter ) {
     writer = print_writer
     mlir_writer = new PrintWriter(new File("mlir_output.mlir"))
+    mlir_writer.println(s"""#map0 = affine_map<(d0) -> (d0)>
+    #map1 = affine_map<(d0) -> (d0 + 128)>
+    #map2 = affine_map<(d0) -> (d0 + ${block_dim_size/gpu_block_x})>
+    #map3 = affine_map<(d0,d1) -> (d0 + d1)>
+    module {\n""")
     writer.println("#include \"runtime.h\"\n")
     if(use_GPU) {
       writer.println("#include \"cuda_util.h\"\n#include <cuda.h>\n")
@@ -931,6 +994,7 @@ object CXXCodeGenerator {
     val s = makeCxxCode(e)
     val fs = functions.map(f => "functions.push_back((void*(*)(void*))"
                                 +makeC(f,0,false)+");\n").mkString("")
+    mlir_writer.println("}\n")
     mlir_writer.close()
     writer.println(s"int main ( int argc, char* argv[] ) {\nstartup(argc,argv,$block_dim_size);\n$fs${s}mpi_finalize();\nreturn 0;\n}")
   }
