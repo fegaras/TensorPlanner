@@ -16,7 +16,8 @@
 
 #include <omp.h>
 #include <openacc.h>
-//#include <cuda_runtime.h>
+#include <cuda_runtime.h>
+#include <cuda.h>
 #include <stdio.h>
 #include <iostream>
 #include <cstdlib>
@@ -33,17 +34,18 @@ int get_gpu_id() {
     lc = getenv("MV2_COMM_WORLD_LOCAL_RANK");
   if (lc != nullptr)
     local_rank = atoi(lc);
-  acc_set_device_num(local_rank, acc_device_nvidia);
+  cudaSetDevice(local_rank);
   return local_rank;
 }
 
 int getDeviceCount() {
-  int deviceCount = acc_get_num_devices(acc_device_nvidia);
+  int deviceCount;
+  cudaGetDeviceCount(&deviceCount);
   return deviceCount;
 }
 
 void setDevice(int device_id) {
-  acc_set_device_num(device_id, acc_device_nvidia);
+  cudaSetDevice(device_id);
 }
 
 bool is_GPU() {
@@ -75,7 +77,8 @@ int new_block(size_t t, size_t len) {
   int loc = gc_first;
   int device_id = get_gpu_id();
   setDevice(device_id);
-  void *d_block = acc_malloc(len * t);
+  void *d_block;
+  cudaMalloc(&d_block, len * t);
   gc_first = (int)(uintptr_t)blocks[gc_first];
   blocks[loc] = d_block;
   return loc;
@@ -92,7 +95,7 @@ void delete_block(int loc) {
   void *d_block = blocks[loc];
   int device_id = get_gpu_id();
   setDevice(device_id);
-  acc_free(d_block);
+  cuMemFree((CUdeviceptr)d_block);
   // update gc_first
   blocks[loc] = (void *)(uintptr_t)gc_first;
   gc_first = loc;
@@ -101,7 +104,8 @@ void delete_block(int loc) {
 void* allocate_memory(size_t t) {
   int device_id = get_gpu_id();
   setDevice(device_id);
-  void* block = acc_malloc(t);
+  void* block;
+  cuMemAlloc((CUdeviceptr*)&block, t);
   return block;
 }
 
@@ -110,23 +114,23 @@ void copy_block(char *data, const char *buffer, size_t len, int memcpy_kind) {
   setDevice(device_id);
   switch(memcpy_kind) {
     case cudaMemcpyH2D:
-      acc_memcpy_to_device((void*)data, (void*)buffer, len);
+      cuMemcpyHtoD((CUdeviceptr)data, (const void*)buffer, len);
       break;
     case cudaMemcpyD2H:
-      acc_memcpy_from_device((void*)data, (void*)buffer, len);
+      cuMemcpyDtoH((void*)data, (CUdeviceptr)buffer, len);
       break;
     case cudaMemcpyD2D:
-      acc_memcpy_to_device((void*)data, (void*)buffer, len);
+      cuMemcpyDtoD((CUdeviceptr)data, (CUdeviceptr)buffer, len);
       break;
     default:
-      acc_memcpy_to_device((void*)data, (void*)buffer, len);
+      cuMemcpyHtoD((CUdeviceptr)data, (const void*)buffer, len);
   }
 }
 
 void initMatrix(float* A, float a, int N) {
   int device_id = get_gpu_id();
   setDevice(device_id);
-#pragma acc parallel loop gang deviceptr(A)
+#pragma acc parallel loop gang vector_length(1024) deviceptr(A)
   for (int i = 0; i < N; i++) {
     A[i] = a;
   }
@@ -135,7 +139,7 @@ void initMatrix(float* A, float a, int N) {
 void mergeMatrix(float* A, float* B, float* C, int N) {
   int device_id = get_gpu_id();
   setDevice(device_id);
-#pragma acc parallel loop gang deviceptr(A,B,C)
+#pragma acc parallel loop gang vector_length(1024) deviceptr(A,B,C)
   for (int i = 0; i < N; i++) {
     C[i] = A[i] + B[i];
   }

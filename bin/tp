@@ -30,11 +30,30 @@ echo "\"\"\")
 mkdir -p classes
 scalac -d classes -cp ${JARS} cxxgen.sc >cxxgen.log
 
+mlir-opt mlir_output.mlir \
+  --pass-pipeline="builtin.module(
+    lower-affine, \
+    gpu-kernel-outlining, \
+    convert-scf-to-cf, \
+    expand-strided-metadata, \
+    nvvm-attach-target{chip=sm_80 features=+ptx80 O=3}, \
+    gpu.module(convert-scf-to-cf, convert-nvgpu-to-nvvm), \
+    finalize-memref-to-llvm, \
+    gpu.module(convert-gpu-to-nvvm{index-bitwidth=0 use-bare-ptr-memref-call-conv}), \
+    canonicalize, \
+    cse, \
+    gpu-to-llvm, \
+    finalize-memref-to-llvm, \
+    reconcile-unrealized-casts)" \
+    -o lowered.mlir
+
+python3 ${DIABLO_HOME}/utils/extract_gpu_kernel.py lowered.mlir mlir_output.ptx
+
 if [ "$use_GPU" == "true" ]; then
   if [ "$debug" == "y" ]; then
     exec g++ -g cxxgen.cpp -fopenacc -foffload=nvptx-none -fcf-protection=none -fno-stack-protector -no-pie -I${DIABLO_HOME}/include -L${DIABLO_HOME}/lib -ldiablo -I$MPI_HOME/include -Iinclude -L$MPI_HOME/lib -Wl,-rpath -Wl,$MPI_HOME/lib -lmpi
   else
-    exec g++ -O3 -DNDEBUG cxxgen.cpp -fopenacc -foffload=nvptx-none -fcf-protection=none -fno-stack-protector -no-pie -I${DIABLO_HOME}/include -L${DIABLO_HOME}/lib -ldiablo -I$MPI_HOME/include -Iinclude -L$MPI_HOME/lib -Wl,-rpath -Wl,$MPI_HOME/lib -lmpi
+    exec g++ -O3 -DNDEBUG cxxgen.cpp -fopenacc -foffload=nvptx-none -fcf-protection=none -fno-stack-protector -no-pie -I${DIABLO_HOME}/include -L${DIABLO_HOME}/lib -ldiablo -L/usr/local/cuda/lib64 -lcudart -I/usr/local/cuda/include -lcuda -I$MPI_HOME/include -Iinclude -L$MPI_HOME/lib -Wl,-rpath -Wl,$MPI_HOME/lib -lmpi
   fi
 else
   if [ "$debug" == "y" ]; then
