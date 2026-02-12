@@ -539,8 +539,6 @@ object CXXCodeGenerator {
     val dimx = block_dim_size/gpu_block_x
     val dimy = block_dim_size/gpu_block_y
     val mlir_func = s"""
-    memref.global "private" @a_smem_global : memref<${dimx}x128xf32, 3>
-    memref.global "private" @b_smem_global : memref<128x${dimy}xf32, 3>
     func.func @${mlir_func_name}(%arg2 : ${matrix_type}, %arg1 : ${matrix_type}, %arg0 : ${matrix_type}) -> ${matrix_type} {
     ${writeMLIR_gemm(mlir_func_args)}\n
     return %arg2 : ${matrix_type}\n}
@@ -982,11 +980,15 @@ object CXXCodeGenerator {
   def genCxxCode ( e: Expr, functions: List[Expr], print_writer: PrintWriter ) {
     writer = print_writer
     mlir_writer = new PrintWriter(new File("mlir_output.mlir"))
+    val dimx = block_dim_size/gpu_block_x
     mlir_writer.println(s"""#map0 = affine_map<(d0) -> (d0)>
     #map1 = affine_map<(d0) -> (d0 + 128)>
-    #map2 = affine_map<(d0) -> (d0 + ${block_dim_size/gpu_block_x})>
+    #map2 = affine_map<(d0) -> (d0 + ${dimx})>
     #map3 = affine_map<(d0,d1) -> (d0 + d1)>
-    module {\n""")
+    module {
+    memref.global "private" @a_smem_global : memref<${dimx}x128xf32, 3>
+    memref.global "private" @b_smem_global : memref<128x${dimx}xf32, 3>
+    """)
     writer.println("#include \"runtime.h\"\n")
     if(use_GPU) {
       writer.println("#include \"cuda_util.h\"\n#include <cuda.h>\n")
