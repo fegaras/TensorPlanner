@@ -373,6 +373,13 @@ object CXXCodeGenerator {
     get_arrays(e,excl(e))
   }
 
+  def get_array_exprs ( expr: Expr ): List[Expr]
+    = expr match {
+        case Index(x, List(n))
+          => List(x)
+        case _ => List()
+      }
+
   def get_vars ( expr: Expr ): List[String]
     = expr match {
         case Var(v)
@@ -480,7 +487,7 @@ object CXXCodeGenerator {
   val gpu_block_x = 512
   val gpu_block_y = 512
 
-  def writeMLIR_gemm( mlir_func_args: List[String]): String = {
+  def writeMLIR_gemm(): String = {
     val data_type = "f32"
     val matrix_type = s"memref<${block_dim_size}x${block_dim_size}x${data_type}>"
     val dimx = block_dim_size/gpu_block_x
@@ -530,27 +537,68 @@ object CXXCodeGenerator {
     mlir_code
   }
 
-  def writeMLIR( e: Expr, mlir_func_args: List[String] ): String = {
+  def writeMLIR_matvec(): String = {
     val data_type = "f32"
     val matrix_type = s"memref<${block_dim_size}x${block_dim_size}x${data_type}>"
-    val args = mlir_func_args.map(arg => s"%${arg}: ${matrix_type}").mkString(", ")
-    val matmul_args = mlir_func_args.map(arg => s"%${arg}").mkString(", ")
+    val vector_type = s"memref<${block_dim_size}x${data_type}>"
+    val dimx = block_dim_size/gpu_block_x
+    val dimy = block_dim_size/gpu_block_y
+    val mlir_code = s"""
+    %c1 = arith.constant 1 : index
+    %c2 = arith.constant ${gpu_block_x} : index
+    %c3 = arith.constant ${dimx} : index
+    gpu.launch blocks(%arg3, %arg4, %arg5) in (%arg9 = %c3, %arg10 = %c1, %arg11 = %c1) threads(%arg6, %arg7, %arg8) in (%arg12 = %c2, %arg13 = %c1, %arg14 = %c1) {
+      %0 = arith.muli %c2, %arg3 : index
+      %1 = arith.addi %0, %arg6 : index
+      affine.for %arg15 = 0 to 4096 {
+        %8 = affine.load %arg0[%1, %arg15] : ${matrix_type}
+        %9 = affine.load %arg1[%arg15] : ${vector_type}
+        %10 = affine.load %arg2[%1] : ${vector_type}
+        %11 = arith.mulf %8, %9 : f32
+        %12 = arith.addf %10, %11 : f32
+        affine.store %12, %arg2[%1] : ${vector_type}
+      }
+      gpu.terminator
+    }
+    """
+    mlir_code
+  }
+
+  def writeMLIR( e: Expr, mlir_func_args: List[String], op_type: String ): String = {
+    val data_type = "f32"
+    val matrix_type = s"memref<${block_dim_size}x${block_dim_size}x${data_type}>"
     val mlir_func_name = new_var()
     val dimx = block_dim_size/gpu_block_x
     val dimy = block_dim_size/gpu_block_y
-    val mlir_func = s"""
-    func.func @${mlir_func_name}(%arg2 : ${matrix_type}, %arg1 : ${matrix_type}, %arg0 : ${matrix_type}) -> ${matrix_type} {
-    ${writeMLIR_gemm(mlir_func_args)}\n
-    return %arg2 : ${matrix_type}\n}
-    """
-    mlir_writer.println(mlir_func)
+    var offset = dimx
+    var block_dim = gpu_block_x
+    var grid_dim = gpu_block_x
+    var mlir_body = ""
+    if (op_type == "gemm") {
+      mlir_body = s"""
+      func.func @${mlir_func_name}(%arg0 : ${matrix_type}, %arg1 : ${matrix_type}, %arg2 : ${matrix_type}) -> ${matrix_type} {
+      ${writeMLIR_gemm()}\n
+      return %arg2 : ${matrix_type}\n}
+      """
+    }
+    else if(op_type == "matvec") {
+      val vector_type = s"memref<${block_dim_size}x${data_type}>"
+      grid_dim = dimx
+      offset = gpu_block_x
+      mlir_body = s"""
+      func.func @${mlir_func_name}(%arg0 : ${matrix_type}, %arg1 : ${vector_type}, %arg2 : ${vector_type}) -> ${vector_type} {
+      ${writeMLIR_matvec()}\n
+      return %arg2 : ${vector_type}\n}
+      """
+    }
+    mlir_writer.println(mlir_body)
     val mlir_func_call = s"""
     CUmodule cuModule;
     CUfunction cuFunction;
     std::string ptx = loadPTX(\"mlir_output.ptx\");
     cuModuleLoadDataEx(&cuModule, ptx.c_str(), 0, 0, 0);
     cuModuleGetFunction(&cuFunction, cuModule, \"${mlir_func_name}_kernel\");
-    launchCudaKernel(cuFunction, device_id, ${mlir_func_args.mkString(", ")});\n"""
+    launchCudaKernel(cuFunction, device_id, ${mlir_func_args.mkString(", ")}, ${offset}, ${block_dim}, ${grid_dim});\n"""
     mlir_func_call
   }
 
@@ -635,27 +683,35 @@ object CXXCodeGenerator {
         case _ => 0
       }
 
-    def has_gemm( expr : Expr): Boolean
+    def is_reduction_loop ( expr: Expr ): (Boolean, Map[String,Expr])
+      = expr match {
+        case Call("for",List(_,blk))
+            => blk match {
+              case Block(s)
+                => s.map{
+                    case Assign(d,Seq(List(MethodCall(x,m,List(y)))))
+                      => var ret_map = Map[String,Expr]()
+                        ret_map += ("arg2" -> get_array_exprs(d).head)
+                        y match {
+                          case MethodCall(x_1,m_1,List(y_1))
+                            => ret_map += ("arg0" -> get_array_exprs(x_1).head)
+                               ret_map += ("arg1" -> get_array_exprs(y_1).head)
+                            (m_1 == "*" && x == d && m == "+", ret_map)
+                          case _ => (false, Map.empty[String, Expr])
+                      }
+                    case _ => (false, Map.empty[String, Expr]),
+                  }.map{ case (b, m) => (b, m: Map[String,Expr]) }
+                  .reduce( (x:(Boolean,Map[String,Expr]), y:(Boolean,Map[String,Expr])) => (x._1 || y._1, x._2 ++ y._2) )
+              case _ => (false, Map.empty[String, Expr])
+            }
+          case _ => (false, Map.empty[String, Expr])
+        }
+
+    def has_gemm( expr : Expr): (Boolean, Map[String,Expr])
       = expr match {
           case Call("for",List(_,blk))
-            => blk match {
-                case Call("for",List(_,blk_1))
-                  => blk_1 match {
-                      case Block(s)
-                        => s.map{
-                            case Assign(d,Seq(List(MethodCall(x,m,List(y)))))
-                              => y match {
-                                  case MethodCall(_,m_1,List(_))
-                                    => m_1 == "*" && x == d && m == "+" // Checking for multiply-add pattern
-                                  case _ => false
-                              }
-                            case _ => false
-                          }.reduce( (x:Boolean, y:Boolean) => x || y)
-                      case _ => false
-                    }
-                case _ => false
-              }
-          case _ => false
+            => is_reduction_loop(blk)
+          case _ => (false, Map.empty[String, Expr])
         }
 
     e match {
@@ -738,8 +794,7 @@ object CXXCodeGenerator {
                   }
                   case _ => List()
                 }
-              if(use_GPU && has_gemm(b)) {
-                all_m_1.flatMap{
+              val init_vars = all_m_1.flatMap{
                   case (v,u) => {
                     val u_tp = exprType(u)
                     u_tp match {
@@ -750,8 +805,17 @@ object CXXCodeGenerator {
                   case _ => List()
                 }.mkString("")+"\n"+tab(tabs-1)+
                 "int device_id = get_gpu_id();\n"+tab(tabs-1)+
-                "setDevice(device_id);\n"+tab(tabs-1)+
-                writeMLIR(e, data.toList)
+                "setDevice(device_id);\n"+tab(tabs-1)
+              val (hg, arg_map) = has_gemm(b)
+              val (hr, reduction_arg_map) = is_reduction_loop(b)
+              val inverted_map = all_m_1.map{ case (v,u) => (u,v) }.toMap
+              if(use_GPU && data.toList.size == 3 && hg) {
+                val updated_arg_map = arg_map.map{ case (k,expr) => (k,inverted_map.getOrElse(expr,"")) }
+                init_vars+writeMLIR(e, List(updated_arg_map("arg0"),updated_arg_map("arg1"),updated_arg_map("arg2")), "gemm")
+              }
+              else if(use_GPU && data.toList.size == 3 && hr) {
+                val updated_arg_map = reduction_arg_map.map{ case (k,expr) => (k,inverted_map.getOrElse(expr,"")) }
+                init_vars+writeMLIR(e, List(updated_arg_map("arg0"),updated_arg_map("arg1"),updated_arg_map("arg2")), "matvec")
               }
               else {
                 val loop_text = tab(tabs-1)+"for ( int "+i+" = "+makeC(n1_b,tabs,false)+"; "+i+

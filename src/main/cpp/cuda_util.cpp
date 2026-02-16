@@ -10,14 +10,12 @@ std::string loadPTX(const char* filename) {
                         std::istreambuf_iterator<char>());
 }
 
-void launchCudaKernel(CUfunction cuFunction, int device_id, float* d_C, float* d_B, float* d_A) {
-    uint64_t block_size = 4096, block_dim = 512;
-    uint64_t offset0 = block_size / block_dim;
+void launchCudaKernel(CUfunction cuFunction, int device_id, float* d_A, float* d_B, float* d_C, uint64_t offset0, int block_dim, int grid_dim) {
     void* args[] = { &offset0, &d_A, &d_B, &d_C };
 
     int blockDimX = block_dim;
     int blockDimY = 1;
-    int gridDimX = block_dim;
+    int gridDimX = grid_dim;
     int gridDimY = 1;
     // Launch kernel
     CUresult res = cuLaunchKernel(cuFunction,

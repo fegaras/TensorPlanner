@@ -9,6 +9,11 @@ def convert_mlir_to_ptx(mlir_module_str: str, chip_type="sm_80"):
     with Context():
         # Parse the input MLIR module
         module = Module.parse(mlir_module_str)
+        if(module is None or module.operation is None):
+            return None
+        if(len(module.operation.regions) == 0 or len(module.operation.regions[0].blocks) == 0
+           or len(module.operation.regions[0].blocks[0].operations) < 4):
+            return None
         # Extract the GPU operations from the GPU module from the MLIR module
         gpu_operations = extract_gpu_operations(module)
         # Generate PTX from the GPU operations
@@ -18,10 +23,13 @@ def convert_mlir_to_ptx(mlir_module_str: str, chip_type="sm_80"):
 # extract the GPU module operations from input module
 def extract_gpu_operations(module: Module) -> Module:
     try:
-        gpu_module = module.operation.regions[0].blocks[0].operations[3]
+        num_ops = len(module.operation.regions[0].blocks[0].operations)
         gpu_module_ops = ""
-        for op in gpu_module.regions[0].blocks[0].operations:
-            gpu_module_ops += str(op) + "\n"
+        gpu_module_ops += str(module.operation.regions[0].blocks[0].operations[0]) + "\n"
+        gpu_module_ops += str(module.operation.regions[0].blocks[0].operations[1]) + "\n"
+        for i in range(3,num_ops,2):
+            gpu_module = module.operation.regions[0].blocks[0].operations[i]
+            gpu_module_ops += str(gpu_module.regions[0].blocks[0].operations[0]) + "\n"
         # Create a new module from the GPU module operations
         gpu_ops_module = Module.parse(gpu_module_ops)
         return gpu_ops_module
@@ -63,6 +71,7 @@ if(len(sys.argv) != 3):
 input_mlir = sys.argv[1]
 output_ptx = sys.argv[2]
 ptx_code = convert_mlir_to_ptx(open(input_mlir).read())
-with open(output_ptx, "w") as f:
-    f.write(ptx_code)
+if(ptx_code is not None):
+    with open(output_ptx, "w") as f:
+        f.write(ptx_code)
 
