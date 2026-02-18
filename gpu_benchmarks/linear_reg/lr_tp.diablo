@@ -1,0 +1,22 @@
+var n = args(0).toInt;
+var m = args(1).toInt;
+var iterations = args(2).toInt;
+var max_rand = 1000;
+var upper_bound = 1000000.0
+
+var A = tensor*(n,m)[ ((i,j),i*random()%max_rand/upper_bound) | i <- 0..(n-1), j <- 0..(m-1) ];
+var C = tensor*(m)[ (i,i*random()%max_rand) | i <- 0..(m-1) ];
+var B = tensor*(n) (A @ C);
+var theta = tensor*(m)[ (i,0.5-(random()%max_rand)/upper_bound) | i <- 0..(m-1) ];
+
+var lrate = 0.001/n;
+var iter = 0;
+
+while(iter < iterations) {
+    var B1 = tensor*(n) (A @ theta);
+    B1 = B1 - B;
+    var d_th = tensor*(m) (A.t @ B1);
+    theta = theta - (lrate*d_th);
+    iter = iter + 1;
+}
+theta;
