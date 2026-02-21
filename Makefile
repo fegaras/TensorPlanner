@@ -9,7 +9,12 @@ debug-cpu:
 	rm *.o
 
 ptx:
-	g++ -O3 -c src/main/cpp/*.cpp -fopenacc -foffload=nvptx-none -fcf-protection=none -fno-stack-protector -no-pie -I${MPI_HOME}/include -Iinclude -L/usr/local/cuda/lib64 -lcudart -I/usr/local/cuda/include -L${MPI_HOME}/lib -lmpi -lcuda
+	g++ -O3 -c src/main/cpp/*.cpp -fopenacc -foffload=nvptx-none -fcf-protection=none -fno-stack-protector -no-pie -I${MPI_HOME}/include -Iinclude -L${CUDA_HOME}/lib64 -lcudart -I${CUDA_HOME}/include -L${MPI_HOME}/lib -lmpi -lcuda
+	ar rcs lib/libdiablo.a *.o
+	rm *.o
+
+ptx-hpc:
+	mpicxx -O3 -c src/main/cpp/*.cpp -acc -gpu=cc80 -Iinclude -lcuda -lcudart
 	ar rcs lib/libdiablo.a *.o
 	rm *.o
 

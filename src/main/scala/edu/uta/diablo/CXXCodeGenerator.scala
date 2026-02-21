@@ -537,6 +537,105 @@ object CXXCodeGenerator {
     mlir_code
   }
 
+  def writeMLIR_gemm_v2(): String = {
+    val data_type = "f32"
+    val matrix_type = s"memref<${block_dim_size}x${block_dim_size}x${data_type}>"
+    val dimx = block_dim_size/gpu_block_x
+    val dimy = block_dim_size/gpu_block_y
+    val mlir_code = s"""
+    %c1 = arith.constant 1 : index
+    %c8 = arith.constant 8 : index
+    %c64 = arith.constant 64 : index
+    %c16 = arith.constant 16 : index
+    gpu.launch blocks(%bx, %by, %bz) in (%grid_x = %c64, %grid_y = %c64, %grid_z = %c1)
+                threads(%tx, %ty, %tz) in (%block_x = %c8, %block_y = %c8, %block_z = %c1) {
+      // Each block covers a (64 x 64) tile of C
+      %row_start = arith.muli %bx, %c64 : index
+      %col_start = arith.muli %by, %c64 : index
+
+      // Each thread owns an (8 x 8) sub-tile
+      %thread_row = arith.muli %tx, %c8 : index
+      %thread_col = arith.muli %ty, %c8 : index
+
+      %a_smem = memref.get_global @a_smem_global : memref<64x17xf32, 3>
+      %b_smem = memref.get_global @b_smem_global : memref<16x65xf32, 3>
+
+      %c_local = memref.alloca() : memref<8x8xf32>
+
+      // Zero out accumulator
+      affine.for %ii = 0 to 8 {
+        affine.for %jj = 0 to 8 {
+          %zero = arith.constant 0.0 : f32
+          affine.store %zero, %c_local[%ii, %jj] : memref<8x8xf32>
+        }
+      }
+      affine.for %k = 0 to 4096 step 16 {
+        %0 = arith.muli %ty, %c8 : index
+        %tid_linear = arith.addi %tx, %0 : index   // 0..63
+
+        affine.for %load_idx = 0 to 16 {
+          %1 = arith.muli %tid_linear, %c16 : index
+          %elem_idx  = arith.addi %1, %load_idx : index
+          %a_row_loc = arith.divui %elem_idx, %c16 : index   // 0..63
+          %a_col_loc = arith.remui %elem_idx, %c16 : index   // 0..15
+          %a_row_gbl = arith.addi %row_start, %a_row_loc : index
+          %a_col_gbl = arith.addi %k,         %a_col_loc : index
+          %a_val     = memref.load %arg0[%a_row_gbl, %a_col_gbl]
+                           : memref<4096x4096xf32>
+          memref.store %a_val, %a_smem[%a_row_loc, %a_col_loc]
+                           : memref<64x17xf32, 3>
+        }
+        affine.for %load_idx = 0 to 16 {
+          %1 = arith.muli %tid_linear, %c16 : index
+          %elem_idx  = arith.addi %1, %load_idx : index
+          %b_row_loc = arith.divui %elem_idx, %c64 : index   // 0..15
+          %b_col_loc = arith.remui %elem_idx, %c64 : index   // 0..63
+          %b_row_gbl = arith.addi %k,         %b_row_loc : index
+          %b_col_gbl = arith.addi %col_start, %b_col_loc : index
+          %b_val     = memref.load %arg1[%b_row_gbl, %b_col_gbl]
+                           : memref<4096x4096xf32>
+          memref.store %b_val, %b_smem[%b_row_loc, %b_col_loc]
+                           : memref<16x65xf32, 3>
+        }
+        gpu.barrier
+        affine.for %kk = 0 to 16 {
+          affine.for %ii = 0 to 8 {
+            affine.for %jj = 0 to 8 {
+              %a_row = arith.addi %thread_row, %ii : index
+              %b_col = arith.addi %thread_col, %jj : index
+
+              %a_val   = memref.load %a_smem[%a_row, %kk]
+                             : memref<64x17xf32, 3>
+              %b_val   = memref.load %b_smem[%kk, %b_col]
+                             : memref<16x65xf32, 3>
+              %acc_old = memref.load %c_local[%ii, %jj]
+                             : memref<8x8xf32>
+              %prod    = arith.mulf %a_val, %b_val : f32
+              %acc_new = arith.addf %acc_old, %prod : f32
+              memref.store %acc_new, %c_local[%ii, %jj]
+                             : memref<8x8xf32>
+            }
+          }
+        }
+        gpu.barrier
+      }
+      affine.for %ii = 0 to 8 {
+        affine.for %jj = 0 to 8 {
+          %1 = arith.addi %row_start, %thread_row : index
+          %2 = arith.addi %col_start, %thread_col : index
+          %c_row = arith.addi %1, %ii : index
+          %c_col = arith.addi %2, %jj : index
+          %val = memref.load %c_local[%ii, %jj] : memref<8x8xf32>
+          memref.store %val, %arg2[%c_row, %c_col] : memref<4096x4096xf32>
+        }
+      }
+
+      gpu.terminator
+    }
+    """
+    mlir_code
+  }
+
   def writeMLIR_matvec(): String = {
     val data_type = "f32"
     val matrix_type = s"memref<${block_dim_size}x${block_dim_size}x${data_type}>"
@@ -550,7 +649,7 @@ object CXXCodeGenerator {
     gpu.launch blocks(%arg3, %arg4, %arg5) in (%arg9 = %c3, %arg10 = %c1, %arg11 = %c1) threads(%arg6, %arg7, %arg8) in (%arg12 = %c2, %arg13 = %c1, %arg14 = %c1) {
       %0 = arith.muli %c2, %arg3 : index
       %1 = arith.addi %0, %arg6 : index
-      affine.for %arg15 = 0 to 4096 {
+      affine.for %arg15 = 0 to ${block_dim_size} {
         %8 = affine.load %arg0[%1, %arg15] : ${matrix_type}
         %9 = affine.load %arg1[%arg15] : ${vector_type}
         %10 = affine.load %arg2[%1] : ${vector_type}
@@ -574,11 +673,15 @@ object CXXCodeGenerator {
     var block_dim = gpu_block_x
     var grid_dim = gpu_block_x
     var mlir_body = ""
+    var cuda_func_call = ""
     if (op_type == "gemm") {
       mlir_body = s"""
       func.func @${mlir_func_name}(%arg0 : ${matrix_type}, %arg1 : ${matrix_type}, %arg2 : ${matrix_type}) -> ${matrix_type} {
-      ${writeMLIR_gemm()}\n
+      ${writeMLIR_gemm_v2()}\n
       return %arg2 : ${matrix_type}\n}
+      """
+      cuda_func_call = s"""
+      launchMatMulKernel(cuFunction, device_id, ${mlir_func_args.mkString(", ")}, 64, 8, 16, 8, 64);
       """
     }
     else if(op_type == "matvec") {
@@ -590,6 +693,9 @@ object CXXCodeGenerator {
       ${writeMLIR_matvec()}\n
       return %arg2 : ${vector_type}\n}
       """
+      cuda_func_call = s"""
+      launchMatVecMulKernel(cuFunction, device_id, ${mlir_func_args.mkString(", ")}, ${offset}, ${block_dim}, ${grid_dim});
+      """
     }
     mlir_writer.println(mlir_body)
     val mlir_func_call = s"""
@@ -598,7 +704,8 @@ object CXXCodeGenerator {
     std::string ptx = loadPTX(\"mlir_output.ptx\");
     cuModuleLoadDataEx(&cuModule, ptx.c_str(), 0, 0, 0);
     cuModuleGetFunction(&cuFunction, cuModule, \"${mlir_func_name}_kernel\");
-    launchCudaKernel(cuFunction, device_id, ${mlir_func_args.mkString(", ")}, ${offset}, ${block_dim}, ${grid_dim});\n"""
+    ${cuda_func_call}
+    \n"""
     mlir_func_call
   }
 
@@ -1050,8 +1157,8 @@ object CXXCodeGenerator {
     #map2 = affine_map<(d0) -> (d0 + ${dimx})>
     #map3 = affine_map<(d0,d1) -> (d0 + d1)>
     module {
-    memref.global "private" @a_smem_global : memref<${dimx}x128xf32, 3>
-    memref.global "private" @b_smem_global : memref<128x${dimx}xf32, 3>
+    memref.global "private" @a_smem_global : memref<64x17xf32, 3>
+    memref.global "private" @b_smem_global : memref<16x65xf32, 3>
     """)
     writer.println("#include \"runtime.h\"\n")
     if(use_GPU) {

@@ -34,6 +34,7 @@ int get_gpu_id() {
     lc = getenv("MV2_COMM_WORLD_LOCAL_RANK");
   if (lc != nullptr)
     local_rank = atoi(lc);
+  acc_set_device_num(local_rank, acc_device_nvidia);
   cudaSetDevice(local_rank);
   return local_rank;
 }
@@ -45,6 +46,7 @@ int getDeviceCount() {
 }
 
 void setDevice(int device_id) {
+  acc_set_device_num(device_id, acc_device_nvidia);
   cudaSetDevice(device_id);
 }
 
