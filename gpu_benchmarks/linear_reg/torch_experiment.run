@@ -1,0 +1,25 @@
+#!/bin/bash
+#SBATCH --job-name=train
+#SBATCH --nodes=2
+#SBATCH --ntasks-per-node=1      # 1 task per node; torchrun spawns GPU processes
+#SBATCH --gres=gpu:4
+#SBATCH --cpus-per-task=16       # enough CPU cores for data loading workers
+#SBATCH --time=02:00:00
+#SBATCH --output=logs/%j.out
+#SBATCH --error=logs/%j.err
+
+# Get master node address
+MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
+MASTER_PORT=1234
+NNODES=$SLURM_NNODES
+NPROC_PER_NODE=4   # match your --gres=gpu count
+
+echo "Master: $MASTER_ADDR, Nodes: $NNODES"
+
+srun torchrun \
+    --nnodes=$NNODES \
+    --nproc_per_node=$NPROC_PER_NODE \
+    --rdzv_id=$SLURM_JOB_ID \
+    --rdzv_backend=c10d \
+    --rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT \
+    train.py 1000000 128 50

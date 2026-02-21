@@ -1,0 +1,86 @@
+#!/bin/bash
+#SBATCH --job-name=dask_matmul
+#SBATCH --partition=defq
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --gres=gpu:2
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=64G
+#SBATCH --time=00:05:00
+#SBATCH --output=logs/%j_out.log
+#SBATCH --error=logs/%j_err.log
+
+source ~/TP_GPU/setup.sh
+
+MASTER_NODE=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
+SCHEDULER_PORT=8786
+DASHBOARD_PORT=8787
+
+echo "Master node : $MASTER_NODE"
+echo "All nodes   : $SLURM_JOB_NODELIST"
+
+# ── Start Dask scheduler on master node ──────────────────────────────────────
+if [ "$SLURM_NODEID" -eq 0 ]; then
+    echo "Starting Dask scheduler..."
+    dask scheduler \
+        --port $SCHEDULER_PORT \
+        --dashboard-address :$DASHBOARD_PORT &
+    SCHEDULER_PID=$!
+    sleep 10
+fi
+
+# ── Start Dask CUDA workers on every node ────────────────────────────────────
+echo "[Node $SLURM_NODEID] Starting dask-cuda workers..."
+dask-cuda-worker \
+    "$MASTER_NODE:$SCHEDULER_PORT" \
+    --nthreads 2 \
+    --name "worker-node$SLURM_NODEID" &
+WORKER_PID=$!
+
+sleep 20  # wait for all workers to register
+
+# ── Run training only from master node ───────────────────────────────────────
+if [ "$SLURM_NODEID" -eq 0 ]; then
+    echo "Running matmul job..."
+
+    # Override cluster creation to connect to existing scheduler
+    python - <<EOF
+import cupy as cp
+import dask.array as da
+from dask.distributed import Client, wait
+import time
+
+# Connect to the already-running Dask scheduler
+client = Client("$MASTER_NODE:$SCHEDULER_PORT")
+print(client)
+blck_sz = 4096
+N, M, P    = 8*blck_sz, 8*blck_sz, 8*blck_sz
+CHUNK_SIZE = blck_sz
+DTYPE      = cp.float32
+
+A = da.random.random((N, M), chunks=(CHUNK_SIZE, CHUNK_SIZE)).astype(DTYPE)
+B = da.random.random((M, P), chunks=(CHUNK_SIZE, CHUNK_SIZE)).astype(DTYPE)
+A = A.map_blocks(cp.asarray, dtype=DTYPE)
+B = B.map_blocks(cp.asarray, dtype=DTYPE)
+
+A = client.persist(A); B = client.persist(B)
+wait([A, B])
+print("Matrices loaded on GPUs")
+
+C  = da.matmul(A, B)
+t0 = time.time()
+C  = client.persist(C)
+wait(C)
+elapsed = time.time() - t0
+
+flops  = 2 * N * M * P
+tflops = flops / elapsed / 1e12
+print(f"Time: {elapsed:.2f}s | Performance: {tflops:.2f} TFLOPS")
+client.close()
+EOF
+
+    kill $SCHEDULER_PID
+fi
+
+kill $WORKER_PID
+wait

@@ -1,23 +1,22 @@
 import os
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader, DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
 import time
 
-
 class CustomDataset(Dataset):
-    def __init__(self, n, m):
+    def __init__(self, n, m, nb_classes):
         self.X = torch.randn(n, m)
-        self.y = torch.randn(n)
+        self.y = torch.randint(0, nb_classes, (n,))
 
     def __len__(self):
         return len(self.X)
 
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx]
-
 
 class Trainer:
     def __init__(
@@ -30,8 +29,7 @@ class Trainer:
         self.global_rank = dist.get_rank()
         self.model = model.to(device)
         self.train_data = train_data
-        self.optimizer = torch.optim.SGD(model.parameters(), lr=1e-3)
-        self.loss_fn = nn.MSELoss()
+        self.optimizer = torch.optim.SGD(model.parameters(), lr=1e-1)
         self.epochs_run = 0
 
         # Wrap model with DDP
@@ -40,7 +38,7 @@ class Trainer:
     def _run_batch(self, source, targets):
         self.optimizer.zero_grad()
         output = self.model(source).squeeze(-1)
-        loss = self.loss_fn(output, targets)
+        loss = F.nll_loss(output, targets)
         loss.backward()
         self.optimizer.step()
         return loss.item()
@@ -62,10 +60,27 @@ class Trainer:
         for epoch in range(self.epochs_run, max_epochs):
             self._run_epoch(epoch)
 
+class NeuralNetwork(nn.Module):
+    def __init__(self,layer_size,nb_classes):
+        super(NeuralNetwork, self).__init__()
+        hidden_size = 4096
+        self.layer1 = nn.Linear(layer_size,hidden_size)
+        self.batch_norm = nn.BatchNorm1d(hidden_size)
+        self.relu = nn.ReLU()
+        self.layer2 = nn.Linear(hidden_size, nb_classes)
 
-def load_train_objs(n, m):
-    train_set = CustomDataset(n, m)
-    model = nn.Linear(m, 1)  # don't move to device yet; Trainer handles it
+    def forward(self, x):
+        x = torch.flatten(x, 1)
+        x = self.layer1(x)
+        x = self.batch_norm(x)
+        x = self.relu(x)
+        x = self.layer2(x)
+        output = F.log_softmax(x, dim=1)
+        return output
+
+def load_train_objs(n, m, nb_classes):
+    train_set = CustomDataset(n, m, nb_classes)
+    model = NeuralNetwork(m, nb_classes)  # don't move to device yet; Trainer handles it
     return train_set, model
 
 
@@ -86,14 +101,16 @@ def test(dataloader, model, device):
         return
     model.eval()
     test_loss = 0
-    loss_fn = nn.MSELoss()
+    correct = 0
     with torch.no_grad():
         for X, y in dataloader:
             X, y = X.to(device), y.to(device)
             pred = model(X).squeeze(-1)
-            test_loss += loss_fn(pred, y).item()
-    test_loss /= len(dataloader)
-    print(f"Test Loss: {test_loss:.4f}")
+            test_loss += F.nll_loss(pred, y, reduction='sum').item()
+            pred_labels = pred.argmax(dim=1, keepdim=True)
+            correct += pred_labels.eq(y.view_as(pred_labels)).sum().item()
+    test_loss /= len(dataloader.dataset)
+    print(f"Test Loss: {test_loss:.4f}, Test Accuracy: {100. * correct / len(dataloader.dataset):.4f}")
 
 
 def setup_ddp():
@@ -104,11 +121,11 @@ def cleanup_ddp():
     dist.destroy_process_group()
 
 
-def main(total_epochs, n, m, batch_size):
+def main(total_epochs, n, m, nb_classes, batch_size):
     setup_ddp()
     local_rank = int(os.environ["LOCAL_RANK"])
 
-    dataset, model = load_train_objs(n, m)
+    dataset, model = load_train_objs(n, m, nb_classes)
     train_data = prepare_dataloader(dataset, batch_size)
 
     start = time.time()
@@ -116,8 +133,8 @@ def main(total_epochs, n, m, batch_size):
     trainer.train(total_epochs)
 
     if local_rank == 0:
-        print(f"Training done — n: {n}, m: {m}, time: {time.time() - start:.2f}s")
-        test_dataset = CustomDataset(100, m)
+        print(f"Training done — n: {n}, m: {m}, nb_classes: {nb_classes}, time: {time.time() - start:.2f}s")
+        test_dataset = CustomDataset(100, m, nb_classes)
         test_data = DataLoader(test_dataset, batch_size=batch_size)
         test(test_data, trainer.model.module, local_rank)
 
@@ -128,7 +145,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('n', type=int, help='number of samples')
     parser.add_argument('m', type=int, help='number of features')
+    parser.add_argument('nb_classes', type=int, help='number of classes')
     parser.add_argument('total_epochs', type=int)
     parser.add_argument('--batch_size', default=32, type=int)
     args = parser.parse_args()
-    main(args.total_epochs, args.n, args.m, args.batch_size)
+    main(args.total_epochs, args.n, args.m, args.nb_classes, args.batch_size)
