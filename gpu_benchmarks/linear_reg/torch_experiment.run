@@ -1,25 +1,37 @@
 #!/bin/bash
-#SBATCH --job-name=train
-#SBATCH --nodes=2
-#SBATCH --ntasks-per-node=1      # 1 task per node; torchrun spawns GPU processes
+#SBATCH --job-name=torch_exp
+#SBATCH --partition=defq
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:4
-#SBATCH --cpus-per-task=16       # enough CPU cores for data loading workers
-#SBATCH --time=02:00:00
-#SBATCH --output=logs/%j.out
-#SBATCH --error=logs/%j.err
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=92G
+#SBATCH --time=00:05:00
+#SBATCH --output=torch_%j_out.log
+#SBATCH --error=torch_%j_err.log
 
-# Get master node address
-MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
-MASTER_PORT=1234
-NNODES=$SLURM_NNODES
-NPROC_PER_NODE=4   # match your --gres=gpu count
+source $HOME/TP_GPU/setup.sh
+#source $HOME/.venv/bin/activate
 
-echo "Master: $MASTER_ADDR, Nodes: $NNODES"
+node_count=$SLURM_NNODES
+echo "Number of nodes = " $node_count
+nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
+nodes_array=($nodes)
 
-srun torchrun \
-    --nnodes=$NNODES \
-    --nproc_per_node=$NPROC_PER_NODE \
-    --rdzv_id=$SLURM_JOB_ID \
-    --rdzv_backend=c10d \
-    --rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT \
-    train.py 1000000 128 50
+head_node=${nodes_array[0]}
+MASTER_ADDR=$(srun --nodes=1 --ntasks=1 --mpi=pmi2 -w "$head_node" hostname --ip-addr)
+
+MASTER_PORT=29400
+MASTER_IP=$MASTER_ADDR:$MASTER_PORT
+export MASTER_IP
+echo "Node IP: $MASTER_IP"
+
+export LOGLEVEL=ERROR
+
+n=$((128*1024))
+m=$((32*1024))
+iterations=10
+echo "n: $n, m: $m, iterations: $iterations"
+#srun torchrun --nodes $N_NODES --nproc_per_node $N_TASKS_PER_NODE --mpi=pmi2 --rdzv_id=100 --rdzv_backend=c10d --rdzv_endpoint=$MASTER_IP lr_torch_gpu.py $n $m $iterations
+torchrun --rdzv_id=100 --rdzv_backend=c10d --rdzv_endpoint=$MASTER_IP lr_torch_v2.py $n $m $iterations
+#python3 lr_torch_gpu.py $n $m $iterations

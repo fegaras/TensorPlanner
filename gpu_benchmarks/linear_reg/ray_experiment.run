@@ -3,9 +3,9 @@
 #SBATCH --partition=defq
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gres=gpu:2
+#SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=64G
+#SBATCH --mem=128G
 #SBATCH --time=00:05:00
 #SBATCH --output=ray_%j_out.log
 #SBATCH --error=ray_%j_err.log
@@ -14,14 +14,14 @@ source ~/TP_GPU/setup.sh
 
 MASTER_NODE=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
 MASTER_PORT=6379
-NUM_GPUS_PER_NODE=2
+NUM_GPUS_PER_NODE=4
 NUM_CPUS_PER_NODE=16
 export ip_head=$MASTER_NODE:$MASTER_PORT
 
 # This script is run by srun on every node
 cat << 'EOF' > /tmp/start_ray_$SLURM_JOB_ID.sh
 #!/bin/bash
-source ~/venv/bin/activate
+source ~/.venv/bin/activate
 
 MASTER_NODE=$1
 MASTER_PORT=$2
@@ -31,14 +31,14 @@ if [ "$NODE_ID" -eq 0 ]; then
     ray start --head \
         --port=$MASTER_PORT \
         --num-cpus=16 \
-        --num-gpus=2 \
+        --num-gpus=4 \
         --block
 else
     sleep 15  # wait for head to start
     ray start \
         --address="$MASTER_NODE:$MASTER_PORT" \
         --num-cpus=16 \
-        --num-gpus=2 \
+        --num-gpus=4 \
         --block
 fi
 EOF
@@ -51,9 +51,10 @@ SRUN_PID=$!
 # Wait for cluster to form then launch training from head
 sleep 30
 echo "Cluster status:"; ray status --address="$MASTER_NODE:$MASTER_PORT"
-n=$((32*1024))
-m=$((4*1024))
+n=$((128*1024))
+m=$((32*1024))
 iterations=10
+echo "n: ${n}, m: ${m}, epochs: ${iterations}"
 python lr_ray.py $n $m $iterations \
     --num_workers $((SLURM_NNODES * NUM_GPUS_PER_NODE)) \
     --use_gpu

@@ -1,0 +1,57 @@
+#!/bin/bash
+#SBATCH --job-name=dask_fact
+#SBATCH --partition=defq
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --gres=gpu:4
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=128G
+#SBATCH --time=00:05:00
+#SBATCH --output=dask_%j_out.log
+#SBATCH --error=dask_%j_err.log
+
+source ~/TP_GPU/setup.sh
+
+MASTER_NODE=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
+SCHEDULER_PORT=8786
+DASHBOARD_PORT=8787
+
+echo "Master node : $MASTER_NODE"
+echo "All nodes   : $SLURM_JOB_NODELIST"
+
+if [ "$SLURM_NODEID" -eq 0 ]; then
+    echo "Starting Dask scheduler..."
+    dask scheduler \
+        --port $SCHEDULER_PORT \
+        --dashboard-address :$DASHBOARD_PORT &
+    SCHEDULER_PID=$!
+    sleep 10
+fi
+
+export ip_head=$MASTER_NODE:$SCHEDULER_PORT
+
+echo "[Node $SLURM_NODEID] Starting dask-cuda workers..."
+dask-cuda-worker \
+    "$MASTER_NODE:$SCHEDULER_PORT" \
+    --nthreads 1 \
+    --name "worker-node$SLURM_NODEID" &
+WORKER_PID=$!
+
+sleep 20  # wait for all workers to register
+
+n=$((32*1024))
+m=$((32*1024))
+d=10
+iter=10
+echo "dask fact $n, $m, $d, $iter"
+# Run training only from master node
+if [ "$SLURM_NODEID" -eq 0 ]; then
+    echo "Running factorization job..."
+
+    python3 fact_dask_v2.py $n $m $d $iter
+
+    kill $SCHEDULER_PID
+fi
+
+kill $WORKER_PID
+wait

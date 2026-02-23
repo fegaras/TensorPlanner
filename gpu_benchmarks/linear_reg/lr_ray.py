@@ -11,8 +11,7 @@ from ray.train import ScalingConfig, Checkpoint
 from ray.train.torch import TorchTrainer, prepare_model, prepare_data_loader
 
 
-# ── Dataset ──────────────────────────────────────────────────────────────────
-
+# Dataset
 class CustomDataset(Dataset):
     def __init__(self, n, m):
         self.X = torch.randn(n, m)
@@ -25,7 +24,7 @@ class CustomDataset(Dataset):
         return self.X[idx], self.y[idx]
 
 
-# ── Training function (runs on every worker) ─────────────────────────────────
+# Training function (runs on every worker)
 
 def train_func(config: dict):
     # Unpack config
@@ -94,8 +93,7 @@ def train_func(config: dict):
             )
 
 
-# ── Evaluation (runs on the driver, after training) ──────────────────────────
-
+# Evaluation (runs on the driver, after training)
 def evaluate(model, m, batch_size):
     device   = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model    = model.to(device)
@@ -114,13 +112,10 @@ def evaluate(model, m, batch_size):
 
     print(f"Test Loss: {total_loss / len(test_loader):.4f}")
 
-
-# ── Main ──────────────────────────────────────────────────────────────────────
-
 def main(n, m, total_epochs, batch_size, num_workers, use_gpu):
     import tempfile  # needed inside train_func too
 
-    ray.init()  # connects to existing cluster or starts a local one
+    ray.init(address=os.environ["ip_head"])  # connects to existing cluster or starts a local one
 
     config = {
         "n":           n,

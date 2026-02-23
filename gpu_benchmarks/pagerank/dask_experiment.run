@@ -1,0 +1,55 @@
+#!/bin/bash
+#SBATCH --job-name=dask_pr
+#SBATCH --partition=defq
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --gres=gpu:4
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=128G
+#SBATCH --time=00:05:00
+#SBATCH --output=dask_%j_out.log
+#SBATCH --error=dask_%j_err.log
+
+source ~/TP_GPU/setup.sh
+
+MASTER_NODE=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
+SCHEDULER_PORT=8786
+DASHBOARD_PORT=8787
+
+echo "Master node : $MASTER_NODE"
+echo "All nodes   : $SLURM_JOB_NODELIST"
+
+if [ "$SLURM_NODEID" -eq 0 ]; then
+    echo "Starting Dask scheduler..."
+    dask scheduler \
+        --port $SCHEDULER_PORT \
+        --dashboard-address :$DASHBOARD_PORT &
+    SCHEDULER_PID=$!
+    sleep 10
+fi
+
+export ip_head=$MASTER_NODE:$SCHEDULER_PORT
+
+echo "[Node $SLURM_NODEID] Starting dask-cuda workers..."
+dask-cuda-worker \
+    "$MASTER_NODE:$SCHEDULER_PORT" \
+    --nthreads 1 \
+    --name "worker-node$SLURM_NODEID" &
+WORKER_PID=$!
+
+sleep 20  # wait for all workers to register
+
+n=$((1024*1024))
+iter=10
+echo "dask pr $n, $iter"
+# Run training only from master node
+if [ "$SLURM_NODEID" -eq 0 ]; then
+    echo "Running pagerank job..."
+
+    python3 pr_dask.py $n $iter
+
+    kill $SCHEDULER_PID
+fi
+
+kill $WORKER_PID
+wait
