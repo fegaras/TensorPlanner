@@ -1,0 +1,20 @@
+#!/bin/bash
+#SBATCH --job-name=tp_build
+#SBATCH --partition=defq
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --gres=gpu:1
+#SBATCH --time=00:05:00
+#SBATCH --output=build_out.log
+
+# Load your local libraries
+source $HOME/TensorPlanner/setup.sh
+
+$HOME/sbt/bin/sbt package
+
+# Enable CUDA-aware MPI at runtime
+export OMPI_MCA_opal_cuda_support=1
+
+nvc++ -O3 -c src/main/cpp/* -acc -gpu=ccnative -Iinclude -I${MPI_HOME}/include -L${MPI_HOME}/lib -lmpi -lcuda -lcudart
+ar rcs lib/libdiablo.a *.o
+rm *.o

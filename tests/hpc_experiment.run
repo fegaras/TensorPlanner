@@ -1,0 +1,27 @@
+#!/bin/bash
+#SBATCH --job-name=matmul_exp
+#SBATCH --partition=defq
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=4
+#SBATCH --gres=gpu:4
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=128G
+#SBATCH --time=00:05:00
+#SBATCH --output=matmul_%j_out.log
+#SBATCH --error=matmul_%j_err.log
+
+# Load your local libraries
+source $HOME/TensorPlanner/setup.sh
+
+# build code
+tp mult.diablo
+
+# Enable CUDA-aware MPI at runtime
+export OMPI_MCA_opal_cuda_support=1
+
+export collect=false
+export trace=false
+n=$((64*1024))
+iter=1
+echo "dense multiplication ${n}, ${iter}"
+mpirun -np 4 -mca btl ^uct ./a.out $n $iter
